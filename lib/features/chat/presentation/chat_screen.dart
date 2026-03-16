@@ -5,6 +5,7 @@ import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
+import 'package:androidircx/irc/parser/irc_formatter.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:flutter/material.dart';
 
@@ -194,6 +195,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 if ((_controller.activeChannelTopic ?? '').trim().isNotEmpty)
                   _ChannelTopicBar(topic: _controller.activeChannelTopic!.trim()),
+                if (_controller.activeTab.type == ChatTabType.server)
+                  _ServiceQuickActions(
+                    onRun: (service, command) async {
+                      await _controller.sendServiceShortcut(service, command);
+                    },
+                  ),
                 Expanded(
                   child: _MessageList(messages: _controller.activeMessages),
                 ),
@@ -314,11 +321,11 @@ class _ChannelTopicBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
       ),
-      child: Text(
+      child: _IrcFormattedText(
         topic,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: Theme.of(context).textTheme.bodySmall,
+        baseStyle: Theme.of(context).textTheme.bodySmall,
       ),
     );
   }
@@ -352,6 +359,47 @@ class _CommandHistoryBar extends StatelessWidget {
               style: theme.textTheme.labelMedium,
             ),
             onPressed: () => onSelect(entry.command),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ServiceQuickActions extends StatelessWidget {
+  const _ServiceQuickActions({
+    required this.onRun,
+  });
+
+  final Future<void> Function(String service, String command) onRun;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    const actions = <(String, String, String)>[
+      ('NickServ', 'HELP', 'NickServ HELP'),
+      ('ChanServ', 'HELP', 'ChanServ HELP'),
+      ('HostServ', 'HELP', 'HostServ HELP'),
+      ('MemoServ', 'HELP', 'MemoServ HELP'),
+      ('BotServ', 'HELP', 'BotServ HELP'),
+      ('OperServ', 'HELP', 'OperServ HELP'),
+    ];
+
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        scrollDirection: Axis.horizontal,
+        itemCount: actions.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final action = actions[index];
+          return ActionChip(
+            label: Text(
+              action.$3,
+              style: theme.textTheme.labelMedium,
+            ),
+            onPressed: () => onRun(action.$1, action.$2),
           );
         },
       ),
@@ -402,7 +450,10 @@ class _MessageList extends StatelessWidget {
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  child: Text(message.content),
+                  child: _IrcFormattedText(
+                    message.content,
+                    baseStyle: Theme.of(context).textTheme.bodyMedium,
+                  ),
                 ),
               ),
             ],
@@ -410,6 +461,108 @@ class _MessageList extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+class _IrcFormattedText extends StatelessWidget {
+  const _IrcFormattedText(
+    this.text, {
+    this.baseStyle,
+    this.maxLines,
+    this.overflow,
+  });
+
+  final String text;
+  final TextStyle? baseStyle;
+  final int? maxLines;
+  final TextOverflow? overflow;
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = parseIrcTextWithLinks(text);
+    if (segments.isEmpty) {
+      return Text(
+        text,
+        style: baseStyle,
+        maxLines: maxLines,
+        overflow: overflow,
+      );
+    }
+
+    return Text.rich(
+      TextSpan(
+        children: segments
+            .map(
+              (segment) => TextSpan(
+                text: segment.text,
+                style: _resolveTextStyle(baseStyle, segment),
+              ),
+            )
+            .toList(growable: false),
+      ),
+      style: baseStyle,
+      maxLines: maxLines,
+      overflow: overflow,
+    );
+  }
+
+  TextStyle _resolveTextStyle(TextStyle? base, IrcLinkSegment segment) {
+    final style = segment.style;
+    var foreground = style.color;
+    var background = style.background;
+
+    if (style.reverse && foreground != null && background != null) {
+      final swappedForeground = background;
+      background = foreground;
+      foreground = swappedForeground;
+    } else if (style.reverse && foreground != null) {
+      background = foreground;
+      foreground = null;
+    } else if (style.reverse && background != null) {
+      foreground = background;
+      background = null;
+    }
+
+    var textStyle = base ?? const TextStyle();
+    final foregroundHex = foreground == null ? null : getIrcColorHex(foreground);
+    final backgroundHex = background == null ? null : getIrcColorHex(background);
+
+    if (foregroundHex != null) {
+      textStyle = textStyle.copyWith(color: _parseHexColor(foregroundHex));
+    }
+    if (backgroundHex != null) {
+      textStyle = textStyle.copyWith(backgroundColor: _parseHexColor(backgroundHex));
+    }
+    if (style.bold) {
+      textStyle = textStyle.copyWith(fontWeight: FontWeight.bold);
+    }
+    if (style.italic) {
+      textStyle = textStyle.copyWith(fontStyle: FontStyle.italic);
+    }
+
+    final decorations = <TextDecoration>{};
+    if (style.underline || segment.isLink) {
+      decorations.add(TextDecoration.underline);
+    }
+    if (style.strikethrough) {
+      decorations.add(TextDecoration.lineThrough);
+    }
+    if (decorations.isNotEmpty) {
+      textStyle = textStyle.copyWith(
+        decoration: TextDecoration.combine(decorations.toList(growable: false)),
+      );
+    }
+
+    if (segment.isLink && foregroundHex == null) {
+      textStyle = textStyle.copyWith(color: const Color(0xFF1565C0));
+    }
+
+    return textStyle;
+  }
+
+  Color _parseHexColor(String value) {
+    final normalized = value.replaceFirst('#', '');
+    return Color(int.parse('FF$normalized', radix: 16));
   }
 }
 

@@ -47,4 +47,71 @@ void main() {
 
     registry.dispose();
   });
+
+  test('exposes current nick for existing session', () {
+    final registry = SessionRegistry();
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+
+    registry.obtainSession(network);
+
+    expect(registry.currentNickFor(network.id), 'AndroidIRCX');
+
+    registry.dispose();
+  });
+
+  test('closeAllSessions clears all tracked sessions', () async {
+    final registry = SessionRegistry();
+    const dbase = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    const libera = NetworkConfig(
+      id: 'libera',
+      name: 'Libera',
+      host: 'irc.libera.chat',
+      port: 6697,
+      nickname: 'AndroidIRCX2',
+      altNickname: 'AndroidIRCX2_',
+    );
+
+    registry.obtainSession(dbase);
+    registry.obtainSession(libera);
+
+    await registry.closeAllSessions();
+
+    expect(registry.sessions, isEmpty);
+    expect(registry.hasSession(dbase.id), isFalse);
+    expect(registry.hasSession(libera.id), isFalse);
+
+    registry.dispose();
+  });
+
+  test('reports zero activity count for idle session', () {
+    final registry = SessionRegistry();
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+
+    registry.obtainSession(network);
+
+    expect(registry.activityCountFor(network.id), 0);
+
+    registry.dispose();
+  });
 }

@@ -36,6 +36,10 @@ class SessionRegistry extends ChangeNotifier {
     return _sessions[networkId]?.currentNick;
   }
 
+  int activityCountFor(String networkId) {
+    return _sessions[networkId]?.activityCount ?? 0;
+  }
+
   Future<void> closeSession(String networkId) async {
     final controller = _sessions.remove(networkId);
     final listener = _listeners.remove(networkId);
@@ -49,6 +53,13 @@ class SessionRegistry extends ChangeNotifier {
     await controller.disconnect();
     controller.dispose();
     notifyListeners();
+  }
+
+  Future<void> closeAllSessions() async {
+    final networkIds = _sessions.keys.toList(growable: false);
+    for (final networkId in networkIds) {
+      await closeSession(networkId);
+    }
   }
 
   @override

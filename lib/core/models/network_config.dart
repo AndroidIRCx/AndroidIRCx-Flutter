@@ -1,6 +1,7 @@
 enum SaslMechanism {
   plain,
   scramSha256,
+  external,
 }
 
 class NetworkConfig {

@@ -49,6 +49,27 @@ void main() {
       expect(saved.saslMechanism, SaslMechanism.scramSha256);
     });
 
+    test('network repository persists EXTERNAL SASL mechanism', () async {
+      final repository = SharedPrefsNetworkRepository();
+
+      await repository.saveNetwork(
+        const NetworkConfig(
+          id: 'certnet',
+          name: 'CertNet',
+          host: 'irc.cert.net',
+          port: 6697,
+          nickname: 'tester',
+          altNickname: 'tester_',
+          saslMechanism: SaslMechanism.external,
+        ),
+      );
+
+      final saved = (await repository.loadNetworks())
+          .firstWhere((item) => item.id == 'certnet');
+
+      expect(saved.saslMechanism, SaslMechanism.external);
+    });
+
     test('settings repository saves and loads showRawEvents', () async {
       final repository = SharedPrefsSettingsRepository();
 

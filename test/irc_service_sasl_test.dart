@@ -166,6 +166,41 @@ void main() {
     service.dispose();
   });
 
+  test('starts EXTERNAL authentication when configured', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      transportConnector: (_) async => transport,
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        saslMechanism: SaslMechanism.external,
+      ),
+    );
+
+    transport.emit(':server CAP * LS :multi-prefix sasl');
+    await Future<void>.delayed(Duration.zero);
+    transport.emit(':server CAP * ACK :sasl');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(transport.sentLines, contains('AUTHENTICATE EXTERNAL'));
+
+    transport.emit('AUTHENTICATE +');
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.sentLines, contains('AUTHENTICATE +'));
+
+    transport.emit(':server 903 AndroidIRCX :SASL authentication successful');
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.sentLines, contains('CAP END'));
+
+    service.dispose();
+  });
+
   test('tracks CAP NEW and DEL updates after registration', () async {
     final transport = _FakeTransport();
     final service = IrcService(

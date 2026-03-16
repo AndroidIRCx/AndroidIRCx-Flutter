@@ -145,17 +145,22 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _saslAccountController,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'SASL account',
-                    helperText: 'Optional. Enables SASL PLAIN when combined with a password.',
+                    helperText: _saslMechanism == SaslMechanism.external
+                        ? 'Optional. Usually not required for EXTERNAL.'
+                        : 'Required for PLAIN and SCRAM-SHA-256.',
                   ),
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _saslPasswordController,
                   obscureText: true,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'SASL password',
+                    helperText: _saslMechanism == SaslMechanism.external
+                        ? 'Leave empty when client certificate auth is used.'
+                        : 'Required for PLAIN and SCRAM-SHA-256.',
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -172,6 +177,10 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                     DropdownMenuItem<SaslMechanism>(
                       value: SaslMechanism.scramSha256,
                       child: Text('SCRAM-SHA-256'),
+                    ),
+                    DropdownMenuItem<SaslMechanism>(
+                      value: SaslMechanism.external,
+                      child: Text('EXTERNAL'),
                     ),
                   ],
                   onChanged: (value) {
