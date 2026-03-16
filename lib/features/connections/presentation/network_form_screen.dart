@@ -7,14 +7,20 @@ class NetworkFormResult {
     required this.host,
     required this.port,
     required this.nickname,
+    required this.altNickname,
     required this.useTls,
+    this.saslAccount,
+    this.saslPassword,
   });
 
   final String name;
   final String host;
   final int port;
   final String nickname;
+  final String altNickname;
   final bool useTls;
+  final String? saslAccount;
+  final String? saslPassword;
 }
 
 class NetworkFormScreen extends StatefulWidget {
@@ -35,6 +41,9 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
   late final TextEditingController _hostController;
   late final TextEditingController _portController;
   late final TextEditingController _nicknameController;
+  late final TextEditingController _altNicknameController;
+  late final TextEditingController _saslAccountController;
+  late final TextEditingController _saslPasswordController;
   late bool _useTls;
 
   @override
@@ -49,6 +58,11 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _nicknameController = TextEditingController(
       text: initial?.nickname ?? 'AndroidIRCX',
     );
+    _altNicknameController = TextEditingController(
+      text: initial?.altNickname ?? 'AndroidIRCX_',
+    );
+    _saslAccountController = TextEditingController(text: initial?.saslAccount ?? '');
+    _saslPasswordController = TextEditingController(text: initial?.saslPassword ?? '');
     _useTls = initial?.useTls ?? true;
   }
 
@@ -58,6 +72,9 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _hostController.dispose();
     _portController.dispose();
     _nicknameController.dispose();
+    _altNicknameController.dispose();
+    _saslAccountController.dispose();
+    _saslPasswordController.dispose();
     super.dispose();
   }
 
@@ -108,6 +125,31 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                   decoration: const InputDecoration(labelText: 'Nickname'),
                   validator: _requiredValidator,
                 ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _altNicknameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Alt nickname',
+                    helperText: 'Used when the primary nick is already taken.',
+                  ),
+                  validator: _requiredValidator,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _saslAccountController,
+                  decoration: const InputDecoration(
+                    labelText: 'SASL account',
+                    helperText: 'Optional. Enables SASL PLAIN when combined with a password.',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _saslPasswordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'SASL password',
+                  ),
+                ),
                 const SizedBox(height: 12),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
@@ -148,7 +190,10 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
         host: _hostController.text.trim(),
         port: int.parse(_portController.text.trim()),
         nickname: _nicknameController.text.trim(),
+        altNickname: _altNicknameController.text.trim(),
         useTls: _useTls,
+        saslAccount: _saslAccountController.text.trim(),
+        saslPassword: _saslPasswordController.text,
       ),
     );
   }

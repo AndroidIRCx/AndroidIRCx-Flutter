@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/network_config.dart';
@@ -29,6 +30,15 @@ class IrcService {
   StreamSubscription<String>? _linesSubscription;
   ConnectionSnapshot _state;
   String? _currentNick;
+  final Set<String> _capAvailable = <String>{};
+  final Set<String> _capEnabled = <String>{};
+  bool _capNegotiationActive = false;
+  bool _capEnded = false;
+  bool _saslInProgress = false;
+  NetworkConfig? _network;
+  String? _primaryNick;
+  String? _altNickBase;
+  int _altNickAttempt = 0;
 
   ConnectionSnapshot get state => _state;
   String? get currentNick => _currentNick;
@@ -42,7 +52,16 @@ class IrcService {
       return;
     }
 
-    _currentNick = network.nickname;
+    _primaryNick = network.nickname.trim();
+    _altNickBase = _resolveAltNickBase(network);
+    _altNickAttempt = 0;
+    _currentNick = _primaryNick;
+    _network = network;
+    _capAvailable.clear();
+    _capEnabled.clear();
+    _capNegotiationActive = false;
+    _capEnded = false;
+    _saslInProgress = false;
     _updateState(
       ConnectionSnapshot(
         networkId: network.id,
@@ -59,10 +78,14 @@ class IrcService {
         onDone: _handleTransportDone,
       );
 
+      if (_shouldUseSasl(network)) {
+        _capNegotiationActive = true;
+        await sendRaw('CAP LS 302');
+      }
       if ((network.password ?? '').isNotEmpty) {
         await sendRaw('PASS ${network.password}');
       }
-      await sendRaw('NICK ${network.nickname}');
+      await _sendNick(_primaryNick!);
       await sendRaw('USER ${network.username} 0 * :${network.realName}');
     } catch (error) {
       _updateState(
@@ -124,6 +147,62 @@ class IrcService {
     await sendRaw('PRIVMSG $target :$text');
   }
 
+  Future<void> sendNotice({
+    required String target,
+    required String text,
+  }) async {
+    await sendRaw('NOTICE $target :$text');
+  }
+
+  Future<void> sendWhois(String nick) async {
+    await sendRaw('WHOIS $nick $nick');
+  }
+
+  Future<void> sendWho(String mask) async {
+    final value = mask.trim();
+    await sendRaw(value.isEmpty ? 'WHO' : 'WHO $value');
+  }
+
+  Future<void> sendWhowas(String nick) async {
+    await sendRaw('WHOWAS $nick');
+  }
+
+  Future<void> sendNames(String channel) async {
+    await sendRaw('NAMES $channel');
+  }
+
+  Future<void> sendInvite({
+    required String nick,
+    required String channel,
+  }) async {
+    await sendRaw('INVITE $nick $channel');
+  }
+
+  Future<void> sendKick({
+    required String channel,
+    required String nick,
+    String? reason,
+  }) async {
+    final suffix = (reason ?? '').trim().isEmpty ? '' : ' :${reason!.trim()}';
+    await sendRaw('KICK $channel $nick$suffix');
+  }
+
+  Future<void> sendTopic({
+    required String channel,
+    String? topic,
+  }) async {
+    if ((topic ?? '').trim().isEmpty) {
+      await sendRaw('TOPIC $channel');
+      return;
+    }
+
+    await sendRaw('TOPIC $channel :$topic');
+  }
+
+  Future<void> sendMode(String args) async {
+    await sendRaw('MODE $args');
+  }
+
   Future<void> sendAction({
     required String target,
     required String text,
@@ -142,7 +221,35 @@ class IrcService {
       return;
     }
 
+    if (frame.command == 'CAP') {
+      _handleCap(frame);
+      return;
+    }
+
+    if (frame.command == 'AUTHENTICATE') {
+      _handleAuthenticate(frame);
+      return;
+    }
+
+    if (frame.command == '903') {
+      _saslInProgress = false;
+      _rawEventsController.add('** SASL authentication successful');
+      unawaited(_endCapNegotiation());
+      return;
+    }
+
+    if (frame.command == '904' ||
+        frame.command == '905' ||
+        frame.command == '906' ||
+        frame.command == '907') {
+      _saslInProgress = false;
+      _rawEventsController.add('** SASL authentication failed');
+      unawaited(_endCapNegotiation());
+      return;
+    }
+
     if (frame.command == '001') {
+      _altNickAttempt = 0;
       _updateState(
         ConnectionSnapshot(
           networkId: _state.networkId,
@@ -160,6 +267,119 @@ class IrcService {
         _currentNick = nextNick;
       }
     }
+
+    if (frame.command == '433' || frame.command == '436') {
+      _handleNicknameCollision(frame);
+    }
+  }
+
+  void _handleCap(IrcMessageFrame frame) {
+    final params = frame.params;
+    if (params.length < 2) {
+      return;
+    }
+
+    final subcommandIndex = params.first == '*' ? 1 : 0;
+    if (subcommandIndex >= params.length) {
+      return;
+    }
+
+    final subcommand = params[subcommandIndex].toUpperCase();
+    final rest = params.skip(subcommandIndex + 1).toList(growable: false);
+    final trailing = frame.trailing ?? '';
+
+    switch (subcommand) {
+      case 'LS':
+        final capabilities = [
+          ...rest.where((item) => item != '*'),
+          if (trailing.isNotEmpty) trailing,
+        ].join(' ');
+        for (final cap in capabilities.split(RegExp(r'\s+'))) {
+          final name = cap.split('=').first.trim();
+          if (name.isNotEmpty) {
+            _capAvailable.add(name);
+          }
+        }
+        final isLast = !rest.contains('*');
+        if (isLast) {
+          if (_capAvailable.contains('sasl') && _shouldUseSasl(_network)) {
+            unawaited(sendRaw('CAP REQ :sasl'));
+          } else {
+            unawaited(_endCapNegotiation());
+          }
+        }
+      case 'ACK':
+        final ackSource = [...rest, if (trailing.isNotEmpty) trailing].join(' ');
+        for (final cap in ackSource.split(RegExp(r'\s+'))) {
+          final name = cap.split('=').first.trim();
+          if (name.isNotEmpty) {
+            _capEnabled.add(name);
+          }
+        }
+        if (_capEnabled.contains('sasl') && _shouldUseSasl(_network)) {
+          _saslInProgress = true;
+          unawaited(sendRaw('AUTHENTICATE PLAIN'));
+        } else {
+          unawaited(_endCapNegotiation());
+        }
+      case 'NAK':
+        unawaited(_endCapNegotiation());
+      default:
+        break;
+    }
+  }
+
+  void _handleAuthenticate(IrcMessageFrame frame) {
+    if (!_saslInProgress) {
+      return;
+    }
+
+    final payload = frame.params.isNotEmpty ? frame.params.first : frame.trailing;
+    if (payload != '+') {
+      return;
+    }
+
+    final network = _network;
+    if (network == null) {
+      return;
+    }
+
+    final account = network.saslAccount;
+    final password = network.saslPassword;
+    if ((account ?? '').isEmpty || (password ?? '').isEmpty) {
+      return;
+    }
+
+    final auth = base64.encode(utf8.encode('$account\u0000$account\u0000$password'));
+    final chunks = <String>[];
+    for (var i = 0; i < auth.length; i += 400) {
+      chunks.add(auth.substring(i, i + 400 > auth.length ? auth.length : i + 400));
+    }
+
+    for (final chunk in chunks) {
+      unawaited(sendRaw('AUTHENTICATE $chunk'));
+    }
+    if (auth.length % 400 == 0) {
+      unawaited(sendRaw('AUTHENTICATE +'));
+    }
+  }
+
+  Future<void> _endCapNegotiation() async {
+    if (_capEnded || !_capNegotiationActive) {
+      return;
+    }
+
+    _capEnded = true;
+    await sendRaw('CAP END');
+  }
+
+  bool _shouldUseSasl(NetworkConfig? network) {
+    if (network == null) {
+      return false;
+    }
+
+    return (network.saslAccount ?? '').isNotEmpty &&
+        (network.saslPassword ?? '').isNotEmpty;
   }
 
   void _handleTransportDone() {
@@ -202,5 +422,57 @@ class IrcService {
     }
 
     return items.first;
+  }
+
+  Future<void> _sendNick(String nick) async {
+    _currentNick = nick;
+    await sendRaw('NICK $nick');
+  }
+
+  String _resolveAltNickBase(NetworkConfig network) {
+    final explicit = (network.altNickname ?? '').trim();
+    if (explicit.isNotEmpty) {
+      return explicit;
+    }
+
+    final primary = network.nickname.trim();
+    return primary.isEmpty ? 'AndroidIRCX_' : '${primary}_';
+  }
+
+  void _handleNicknameCollision(IrcMessageFrame frame) {
+    final nextNick = _nextNickCandidate();
+    if (nextNick == null) {
+      return;
+    }
+
+    _rawEventsController.add('** Nickname in use, trying $nextNick');
+    _updateState(
+      ConnectionSnapshot(
+        networkId: _state.networkId,
+        phase: ConnectionPhase.connecting,
+        message: 'Nickname in use, trying $nextNick',
+      ),
+    );
+    unawaited(_sendNick(nextNick));
+  }
+
+  String? _nextNickCandidate() {
+    final primary = (_primaryNick ?? '').trim();
+    final altBase = (_altNickBase ?? '').trim();
+    if (primary.isEmpty || altBase.isEmpty) {
+      return null;
+    }
+
+    if (_currentNick == primary) {
+      return altBase;
+    }
+
+    if (_currentNick == altBase) {
+      _altNickAttempt = 1;
+      return '$altBase$_altNickAttempt';
+    }
+
+    _altNickAttempt += 1;
+    return '$altBase$_altNickAttempt';
   }
 }

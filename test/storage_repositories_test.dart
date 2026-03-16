@@ -83,5 +83,48 @@ void main() {
       expect(snapshot.activeTabId, tab.id);
       expect(snapshot.messagesByTab[tab.id]!.single.content, 'hello');
     });
+
+    test('chat session persistence restores growable message lists', () async {
+      final persistence = ChatSessionPersistence();
+      const tab = ChatTab(
+        id: 'server::dbase',
+        name: 'DBase',
+        type: ChatTabType.server,
+        networkId: 'dbase',
+      );
+      final message = IrcMessage(
+        id: '1',
+        tabId: tab.id,
+        sender: '*',
+        content: 'connected',
+        timestamp: DateTime(2026, 3, 16, 12, 0),
+        kind: IrcMessageKind.system,
+      );
+
+      await persistence.save(
+        networkId: 'dbase',
+        tabs: const [tab],
+        messagesByTab: {
+          tab.id: [message],
+        },
+        activeTabId: tab.id,
+      );
+
+      final snapshot = await persistence.load('dbase');
+      final restored = snapshot!.messagesByTab[tab.id]!;
+
+      restored.add(
+        IrcMessage(
+          id: '2',
+          tabId: tab.id,
+          sender: '*',
+          content: 'raw line',
+          timestamp: DateTime(2026, 3, 16, 12, 1),
+          kind: IrcMessageKind.raw,
+        ),
+      );
+
+      expect(restored, hasLength(2));
+    });
   });
 }

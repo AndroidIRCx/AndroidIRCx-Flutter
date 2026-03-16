@@ -78,7 +78,10 @@ class NetworkListScreen extends StatelessWidget {
       host: result.host,
       port: result.port,
       nickname: result.nickname,
+      altNickname: result.altNickname,
       useTls: result.useTls,
+      saslAccount: result.saslAccount,
+      saslPassword: result.saslPassword,
       networkId: initialValue?.id,
     );
   }
@@ -157,7 +160,7 @@ class _NetworkCard extends StatelessWidget {
             Text('${network.host}:${network.port}'),
             const SizedBox(height: 4),
             Text(
-              'Nick: ${network.nickname} • ${network.useTls ? 'TLS' : 'Plain TCP'}',
+              'Nick: ${network.nickname} / ${network.altNickname ?? '${network.nickname}_'} • ${network.useTls ? 'TLS' : 'Plain TCP'}',
               style: theme.textTheme.bodySmall,
             ),
             const SizedBox(height: 16),

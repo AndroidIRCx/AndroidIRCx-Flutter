@@ -30,7 +30,10 @@ class NetworkListController extends ChangeNotifier {
     required String host,
     required int port,
     required String nickname,
+    required String altNickname,
     required bool useTls,
+    String? saslAccount,
+    String? saslPassword,
     String? networkId,
   }) async {
     final network = NetworkConfig(
@@ -39,7 +42,10 @@ class NetworkListController extends ChangeNotifier {
       host: host,
       port: port,
       nickname: nickname,
+      altNickname: altNickname.trim(),
       useTls: useTls,
+      saslAccount: (saslAccount ?? '').trim().isEmpty ? null : saslAccount?.trim(),
+      saslPassword: (saslPassword ?? '').trim().isEmpty ? null : saslPassword,
     );
 
     await _repository.saveNetwork(network);

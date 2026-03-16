@@ -9,9 +9,21 @@ on:
     - cron: '0 3 * * 1'
 
 jobs:
+  codeql-disabled:
+    name: CodeQL Disabled
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.private && vars.ENABLE_PRIVATE_CODEQL != 'true' }}
+
+    steps:
+      - name: Explain why CodeQL is skipped
+        run: |
+          echo "Skipping CodeQL because this repository is private and GitHub Advanced Security is not enabled."
+          echo "Enable GitHub Advanced Security, then set the ENABLE_PRIVATE_CODEQL repository variable to true."
+
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    if: ${{ github.event.repository.private == false || vars.ENABLE_PRIVATE_CODEQL == 'true' }}
 
     permissions:
       actions: read
