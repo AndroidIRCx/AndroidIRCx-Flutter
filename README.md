@@ -11,7 +11,6 @@ existing React Native application.
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11929/badge)](https://www.bestpractices.dev/projects/11929)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/AndroidIRCx/AndroidIRCx-Flutter/codeql.yml?label=CodeQL&branch=main)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/security/code-scanning)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-brightgreen)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/security/dependabot)
-[![Coverage](https://codecov.io/gh/AndroidIRCx/AndroidIRCx-Flutter/branch/main/graph/badge.svg)](https://app.codecov.io/gh/AndroidIRCx/AndroidIRCx-Flutter/)
 
 [![GitHub Stars](https://img.shields.io/github/stars/AndroidIRCx/AndroidIRCx-Flutter?style=flat)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/stargazers)
 [![Contributors](https://img.shields.io/github/contributors/AndroidIRCx/AndroidIRCx-Flutter)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/graphs/contributors)
