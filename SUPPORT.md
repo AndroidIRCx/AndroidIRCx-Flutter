@@ -5,5 +5,5 @@ For bug reports and feature requests, use GitHub Issues.
 
 Links:
 
-- https://github.com/androidircx/androidircx/issues
-- https://github.com/androidircx/androidircx/discussions
+- https://github.com/AndroidIRCx/AndroidIRCx-Flutter/issues
+- https://github.com/AndroidIRCx/AndroidIRCx-Flutter/discussions

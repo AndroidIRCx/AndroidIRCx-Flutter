@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in AndroidIRCX
+description: Report a bug in AndroidIRCX Flutter
 title: "[Bug]: "
 labels: [ "bug" ]
 body:
