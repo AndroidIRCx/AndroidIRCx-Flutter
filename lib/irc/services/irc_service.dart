@@ -183,6 +183,30 @@ class IrcService {
     await sendRaw('NAMES $channel');
   }
 
+  Future<void> sendList([String? filter]) async {
+    final value = (filter ?? '').trim();
+    await sendRaw(value.isEmpty ? 'LIST' : 'LIST $value');
+  }
+
+  Future<void> sendMotd() async {
+    await sendRaw('MOTD');
+  }
+
+  Future<void> sendTime([String? server]) async {
+    final value = (server ?? '').trim();
+    await sendRaw(value.isEmpty ? 'TIME' : 'TIME $value');
+  }
+
+  Future<void> sendVersion([String? server]) async {
+    final value = (server ?? '').trim();
+    await sendRaw(value.isEmpty ? 'VERSION' : 'VERSION $value');
+  }
+
+  Future<void> sendLinks([String? mask]) async {
+    final value = (mask ?? '').trim();
+    await sendRaw(value.isEmpty ? 'LINKS' : 'LINKS $value');
+  }
+
   Future<void> sendInvite({
     required String nick,
     required String channel,
@@ -199,6 +223,18 @@ class IrcService {
     await sendRaw('KICK $channel $nick$suffix');
   }
 
+  Future<void> sendChannelMode({
+    required String channel,
+    required String mode,
+    required String target,
+  }) async {
+    await sendRaw('MODE $channel $mode $target');
+  }
+
+  Future<void> sendBanList(String channel) async {
+    await sendRaw('MODE $channel +b');
+  }
+
   Future<void> sendTopic({
     required String channel,
     String? topic,
@@ -213,6 +249,32 @@ class IrcService {
 
   Future<void> sendMode(String args) async {
     await sendRaw('MODE $args');
+  }
+
+  Future<void> sendCapLs() async {
+    await sendRaw('CAP LS 302');
+  }
+
+  Future<void> sendCapList() async {
+    await sendRaw('CAP LIST');
+  }
+
+  Future<void> sendCapReq(String capabilities) async {
+    await sendRaw('CAP REQ :$capabilities');
+  }
+
+  Future<void> sendCapEnd() async {
+    await sendRaw('CAP END');
+  }
+
+  Future<void> sendAway([String? message]) async {
+    final value = (message ?? '').trim();
+    if (value.isEmpty) {
+      await sendRaw('AWAY');
+      return;
+    }
+
+    await sendRaw('AWAY :$value');
   }
 
   Future<void> sendAction({
@@ -328,18 +390,24 @@ class IrcService {
           _saslInProgress = true;
           final mechanism = _network?.saslMechanism ?? SaslMechanism.plain;
           _activeSaslMechanism = mechanism;
-          if (mechanism == SaslMechanism.scramSha256) {
-            final network = _network;
-            if (network != null) {
-              _scramSession = ScramSha256Session(
-                username: network.saslAccount!,
-                password: network.saslPassword!,
-                nonceGenerator: _scramNonceGenerator,
-              );
-            }
-            unawaited(sendRaw('AUTHENTICATE SCRAM-SHA-256'));
-          } else {
-            unawaited(sendRaw('AUTHENTICATE PLAIN'));
+          switch (mechanism) {
+            case SaslMechanism.scramSha256:
+              final network = _network;
+              if (network != null) {
+                _scramSession = ScramSha256Session(
+                  username: network.saslAccount!,
+                  password: network.saslPassword!,
+                  nonceGenerator: _scramNonceGenerator,
+                );
+              }
+              unawaited(sendRaw('AUTHENTICATE SCRAM-SHA-256'));
+              break;
+            case SaslMechanism.external:
+              unawaited(sendRaw('AUTHENTICATE EXTERNAL'));
+              break;
+            case SaslMechanism.plain:
+              unawaited(sendRaw('AUTHENTICATE PLAIN'));
+              break;
           }
         } else {
           unawaited(_endCapNegotiation());
@@ -386,6 +454,13 @@ class IrcService {
     final mechanism = _activeSaslMechanism ?? network.saslMechanism;
     if (mechanism == SaslMechanism.scramSha256) {
       _handleScramAuthenticate(payload);
+      return;
+    }
+
+    if (mechanism == SaslMechanism.external) {
+      if (payload == '+') {
+        unawaited(sendRaw('AUTHENTICATE +'));
+      }
       return;
     }
 
@@ -490,8 +565,14 @@ class IrcService {
       return false;
     }
 
-    return (network.saslAccount ?? '').isNotEmpty &&
-        (network.saslPassword ?? '').isNotEmpty;
+    switch (network.saslMechanism) {
+      case SaslMechanism.external:
+        return true;
+      case SaslMechanism.plain:
+      case SaslMechanism.scramSha256:
+        return (network.saslAccount ?? '').isNotEmpty &&
+            (network.saslPassword ?? '').isNotEmpty;
+    }
   }
 
   void _handleTransportDone() {

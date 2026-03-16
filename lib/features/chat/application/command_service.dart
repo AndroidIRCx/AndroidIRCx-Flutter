@@ -51,6 +51,12 @@ class CommandService {
     'w': const CommandAlias(alias: 'w', command: '/whois'),
     'n': const CommandAlias(alias: 'n', command: '/nick'),
     'm': const CommandAlias(alias: 'm', command: '/msg'),
+    'ns': const CommandAlias(alias: 'ns', command: '/nickserv'),
+    'cs': const CommandAlias(alias: 'cs', command: '/chanserv'),
+    'hs': const CommandAlias(alias: 'hs', command: '/hostserv'),
+    'os': const CommandAlias(alias: 'os', command: '/operserv'),
+    'ms': const CommandAlias(alias: 'ms', command: '/memoserv'),
+    'bs': const CommandAlias(alias: 'bs', command: '/botserv'),
   };
 
   List<CommandHistoryEntry> _history = const [];

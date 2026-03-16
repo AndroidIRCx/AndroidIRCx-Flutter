@@ -12,6 +12,10 @@ void main() {
 
     expect(service.normalizeCommand('/j #flutter'), '/join #flutter');
     expect(service.normalizeCommand('/w nick'), '/whois nick');
+    expect(service.normalizeCommand('/ns identify secret'), '/nickserv identify secret');
+    expect(service.normalizeCommand('/cs op #flutter nick'), '/chanserv op #flutter nick');
+    expect(service.normalizeCommand('/ms send nick hello'), '/memoserv send nick hello');
+    expect(service.normalizeCommand('/bs botlist'), '/botserv botlist');
     expect(service.normalizeCommand('hello'), 'hello');
   });
 

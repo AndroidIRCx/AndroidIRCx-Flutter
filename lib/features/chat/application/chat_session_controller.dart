@@ -70,6 +70,8 @@ class ChatSessionController extends ChangeNotifier {
   Duration? get pendingReconnectDelay => _pendingReconnectDelay;
   ChatTab get activeTab => _tabs.firstWhere((tab) => tab.id == _activeTabId);
   String get currentNick => _ircService.currentNick ?? network.nickname;
+  int get activityCount => _tabs.where((tab) => tab.hasActivity).length;
+  bool get hasActivity => activityCount > 0;
   String? get activeChannelTopic => _channelTopics[activeTabId];
   String? get activeChannelModes => _channelModes[activeTabId];
   String get activeChannelSummary {
@@ -313,9 +315,51 @@ class ChatSessionController extends ChangeNotifier {
           final target = rest.substring(0, space);
           final text = rest.substring(space + 1).trim();
           if (text.isNotEmpty) {
+            final tabId = _resolveOutgoingMessageTabId(target);
+            if (!target.startsWith('#')) {
+              _activeTabId = tabId;
+            }
             await _ircService.sendNotice(target: target, text: text);
+            _appendMessage(
+              tabId: tabId,
+              sender: currentNick,
+              content: text,
+              isOwn: true,
+            );
+            unawaited(_persistState());
+            notifyListeners();
             return;
           }
+        }
+      case 'nickserv':
+        if (rest.isNotEmpty) {
+          await _sendServiceCommand('NickServ', rest);
+          return;
+        }
+      case 'chanserv':
+        if (rest.isNotEmpty) {
+          await _sendServiceCommand('ChanServ', rest);
+          return;
+        }
+      case 'hostserv':
+        if (rest.isNotEmpty) {
+          await _sendServiceCommand('HostServ', rest);
+          return;
+        }
+      case 'operserv':
+        if (rest.isNotEmpty) {
+          await _sendServiceCommand('OperServ', rest);
+          return;
+        }
+      case 'memoserv':
+        if (rest.isNotEmpty) {
+          await _sendServiceCommand('MemoServ', rest);
+          return;
+        }
+      case 'botserv':
+        if (rest.isNotEmpty) {
+          await _sendServiceCommand('BotServ', rest);
+          return;
         }
       case 'me':
         if (rest.isNotEmpty && activeTab.type != ChatTabType.server) {
@@ -357,12 +401,134 @@ class ChatSessionController extends ChangeNotifier {
           await _ircService.sendNames(rest.split(' ').first);
           return;
         }
+      case 'list':
+        await _ircService.sendList(rest.isEmpty ? null : rest);
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: rest.isEmpty ? 'Requested channel list.' : 'Requested channel list for: $rest',
+          kind: IrcMessageKind.system,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+        return;
+      case 'motd':
+        await _ircService.sendMotd();
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: 'Requested MOTD.',
+          kind: IrcMessageKind.system,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+        return;
+      case 'time':
+        await _ircService.sendTime(rest.isEmpty ? null : rest);
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: rest.isEmpty ? 'Requested server time.' : 'Requested time for: $rest',
+          kind: IrcMessageKind.system,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+        return;
+      case 'version':
+        await _ircService.sendVersion(rest.isEmpty ? null : rest);
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: rest.isEmpty ? 'Requested server version.' : 'Requested version for: $rest',
+          kind: IrcMessageKind.system,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+        return;
+      case 'links':
+        await _ircService.sendLinks(rest.isEmpty ? null : rest);
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: rest.isEmpty ? 'Requested server links.' : 'Requested links for: $rest',
+          kind: IrcMessageKind.system,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+        return;
       case 'invite':
         if (rest.isNotEmpty && activeTab.type == ChatTabType.channel) {
           await _ircService.sendInvite(
             nick: rest.split(' ').first,
             channel: activeTab.name,
           );
+          return;
+        }
+      case 'ban':
+        if (rest.isNotEmpty && activeTab.type == ChatTabType.channel) {
+          await _ircService.sendChannelMode(
+            channel: activeTab.name,
+            mode: '+b',
+            target: rest.split(' ').first,
+          );
+          return;
+        }
+      case 'unban':
+        if (rest.isNotEmpty && activeTab.type == ChatTabType.channel) {
+          await _ircService.sendChannelMode(
+            channel: activeTab.name,
+            mode: '-b',
+            target: rest.split(' ').first,
+          );
+          return;
+        }
+      case 'op':
+        if (rest.isNotEmpty && activeTab.type == ChatTabType.channel) {
+          await _ircService.sendChannelMode(
+            channel: activeTab.name,
+            mode: '+o',
+            target: rest.split(' ').first,
+          );
+          return;
+        }
+      case 'deop':
+        if (rest.isNotEmpty && activeTab.type == ChatTabType.channel) {
+          await _ircService.sendChannelMode(
+            channel: activeTab.name,
+            mode: '-o',
+            target: rest.split(' ').first,
+          );
+          return;
+        }
+      case 'voice':
+        if (rest.isNotEmpty && activeTab.type == ChatTabType.channel) {
+          await _ircService.sendChannelMode(
+            channel: activeTab.name,
+            mode: '+v',
+            target: rest.split(' ').first,
+          );
+          return;
+        }
+      case 'devoice':
+        if (rest.isNotEmpty && activeTab.type == ChatTabType.channel) {
+          await _ircService.sendChannelMode(
+            channel: activeTab.name,
+            mode: '-v',
+            target: rest.split(' ').first,
+          );
+          return;
+        }
+      case 'banlist':
+        if (activeTab.type == ChatTabType.channel) {
+          await _ircService.sendBanList(activeTab.name);
+          _appendMessage(
+            tabId: activeTab.id,
+            sender: '*',
+            content: 'Requested ban list for ${activeTab.name}.',
+            kind: IrcMessageKind.system,
+          );
+          unawaited(_persistState());
+          notifyListeners();
           return;
         }
       case 'kick':
@@ -388,6 +554,31 @@ class ChatSessionController extends ChangeNotifier {
           await _ircService.sendMode(args);
           return;
         }
+      case 'cap':
+        await _handleCapCommand(rest);
+        return;
+      case 'away':
+        await _ircService.sendAway(rest.isEmpty ? null : rest);
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: rest.isEmpty ? 'Away status cleared.' : 'Away: $rest',
+          kind: IrcMessageKind.system,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+        return;
+      case 'back':
+        await _ircService.sendAway();
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: 'Away status cleared.',
+          kind: IrcMessageKind.system,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+        return;
       case 'quote':
       case 'raw':
         if (rest.isNotEmpty) {
@@ -416,13 +607,46 @@ class ChatSessionController extends ChangeNotifier {
       case '002':
       case '003':
       case '004':
+      case '371':
       case '372':
+      case '374':
       case '375':
       case '376':
+      case '391':
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',
           content: frame.trailing ?? frame.params.join(' '),
+          kind: IrcMessageKind.system,
+        );
+      case '351':
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: frame.trailing == null
+              ? 'Server version: ${frame.params.skip(1).join(' ')}'.trim()
+              : 'Server version: ${'${frame.params.skip(1).join(' ')} ${frame.trailing!}'.trim()}',
+          kind: IrcMessageKind.system,
+        );
+      case '364':
+        if (frame.params.length >= 3) {
+          final server = frame.params[1];
+          final hopCount = frame.params[2];
+          final info = frame.trailing ?? '';
+          _appendMessage(
+            tabId: _serverTabId(network.id),
+            sender: '*',
+            content: info.isEmpty
+                ? 'Link: $server ($hopCount)'
+                : 'Link: $server ($hopCount) - $info',
+            kind: IrcMessageKind.system,
+          );
+        }
+      case '365':
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: frame.trailing ?? 'End of LINKS.',
           kind: IrcMessageKind.system,
         );
       case '332':
@@ -474,6 +698,35 @@ class ChatSessionController extends ChangeNotifier {
             kind: IrcMessageKind.system,
           );
         }
+      case '321':
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: 'Channel list started.',
+          kind: IrcMessageKind.system,
+        );
+      case '322':
+        if (frame.params.length >= 3) {
+          final channel = frame.params[1];
+          final visibleCount = frame.params[2];
+          final topic = frame.trailing ?? '';
+          final details = topic.isEmpty
+              ? '$channel ($visibleCount users)'
+              : '$channel ($visibleCount users) - $topic';
+          _appendMessage(
+            tabId: _serverTabId(network.id),
+            sender: '*',
+            content: details,
+            kind: IrcMessageKind.system,
+          );
+        }
+      case '323':
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: frame.trailing ?? 'End of channel list.',
+          kind: IrcMessageKind.system,
+        );
       case '311':
         _appendWhoisMessage(
           frame,
@@ -502,6 +755,14 @@ class ChatSessionController extends ChangeNotifier {
         _appendWhoisMessage(
           frame,
           'WHOIS idle: ${frame.params.length > 2 ? '${frame.params[1]} idle ${frame.params[2]}s' : frame.raw}',
+        );
+      case '305':
+      case '306':
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: frame.trailing ?? frame.raw,
+          kind: IrcMessageKind.system,
         );
       case '319':
         _appendWhoisMessage(
@@ -570,6 +831,31 @@ class ChatSessionController extends ChangeNotifier {
             kind: IrcMessageKind.system,
           );
         }
+      case '367':
+        if (frame.params.length >= 3) {
+          final channel = frame.params[1];
+          final mask = frame.params[2];
+          final setBy = frame.params.length > 3 ? frame.params[3] : null;
+          final tab = _ensureChannelTab(channel);
+          final details = setBy == null ? 'Ban: $mask' : 'Ban: $mask set by $setBy';
+          _appendMessage(
+            tabId: tab.id,
+            sender: '*',
+            content: details,
+            kind: IrcMessageKind.system,
+          );
+        }
+      case '368':
+        if (frame.params.length >= 2) {
+          final channel = frame.params[1];
+          final tab = _ensureChannelTab(channel);
+          _appendMessage(
+            tabId: tab.id,
+            sender: '*',
+            content: frame.trailing ?? 'End of ban list.',
+            kind: IrcMessageKind.system,
+          );
+        }
       case 'JOIN':
         final channel = frame.trailing ?? _firstOrNull(frame.params);
         if (channel != null) {
@@ -620,6 +906,8 @@ class ChatSessionController extends ChangeNotifier {
               '${frame.senderNick ?? '*'} is now known as ${frame.trailing ?? _firstOrNull(frame.params) ?? '?'}',
           kind: IrcMessageKind.system,
         );
+      case 'CAP':
+        _handleCapabilityFrame(frame);
       case 'NOTICE':
         _handleNotice(frame);
       case 'TOPIC':
@@ -661,9 +949,11 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    final tabId = target.startsWith('#')
-        ? _ensureChannelTab(target).id
-        : _serverTabId(network.id);
+    final tabId = _resolveMessageTabId(
+      target: target,
+      senderNick: frame.senderNick,
+      preferServerForDirectMessages: false,
+    );
 
     _appendMessage(
       tabId: tabId,
@@ -680,17 +970,18 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    final isChannel = target.startsWith('#');
-    final tab = isChannel
-        ? _ensureChannelTab(target)
-        : _ensureQueryTab(frame.senderNick ?? target);
+    final tabId = _resolveMessageTabId(
+      target: target,
+      senderNick: frame.senderNick,
+      preferServerForDirectMessages: false,
+    );
 
     _appendMessage(
-      tabId: tab.id,
+      tabId: tabId,
       sender: frame.senderNick ?? target,
       content: _normalizeContent(content),
     );
-    _markActivityIfInactive(tab.id);
+    _markActivityIfInactive(tabId);
   }
 
   void _handleTopic(IrcMessageFrame frame) {
@@ -773,6 +1064,35 @@ class ChatSessionController extends ChangeNotifier {
     _tabs = [..._tabs, tab];
     _messages.putIfAbsent(tab.id, () => []);
     return tab;
+  }
+
+  String _resolveMessageTabId({
+    required String target,
+    required String? senderNick,
+    required bool preferServerForDirectMessages,
+  }) {
+    if (target.startsWith('#')) {
+      return _ensureChannelTab(target).id;
+    }
+
+    final normalizedSender = _normalizeServiceNick(senderNick);
+    if (normalizedSender != null && _isServiceNick(normalizedSender)) {
+      return _ensureQueryTab(normalizedSender).id;
+    }
+
+    if (preferServerForDirectMessages) {
+      return _serverTabId(network.id);
+    }
+
+    return _ensureQueryTab(senderNick ?? target).id;
+  }
+
+  String _resolveOutgoingMessageTabId(String target) {
+    if (target.startsWith('#')) {
+      return _ensureChannelTab(target).id;
+    }
+
+    return _ensureQueryTab(target).id;
   }
 
   ChatTab? _findTab(String id) {
@@ -864,8 +1184,188 @@ class ChatSessionController extends ChangeNotifier {
     _markActivityIfInactive(targetTabId);
   }
 
+  Future<void> _sendServiceCommand(String service, String command) async {
+    final tab = _ensureQueryTab(service);
+    _activeTabId = tab.id;
+    await _ircService.sendPrivmsg(target: service, text: command);
+    _appendMessage(
+      tabId: tab.id,
+      sender: currentNick,
+      content: command,
+      isOwn: true,
+    );
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  Future<void> sendServiceShortcut(String service, String command) {
+    return _sendServiceCommand(service, command);
+  }
+
+  void _handleCapabilityFrame(IrcMessageFrame frame) {
+    if (frame.params.length < 2) {
+      return;
+    }
+
+    final subcommandIndex = frame.params.first == '*' ? 1 : 0;
+    if (subcommandIndex >= frame.params.length) {
+      return;
+    }
+
+    final subcommand = frame.params[subcommandIndex].toUpperCase();
+    final details = [
+      ...frame.params.skip(subcommandIndex + 1).where((item) => item != '*'),
+      if ((frame.trailing ?? '').trim().isNotEmpty) frame.trailing!.trim(),
+    ].join(' ').trim();
+
+    final message = switch (subcommand) {
+      'LS' => 'CAP LS: ${details.isEmpty ? 'no capabilities reported' : details}',
+      'ACK' => 'CAP ACK: ${details.isEmpty ? 'no capabilities acknowledged' : details}',
+      'NAK' => 'CAP NAK: ${details.isEmpty ? 'request rejected' : details}',
+      'NEW' => 'CAP NEW: ${details.isEmpty ? 'no new capabilities reported' : details}',
+      'DEL' => 'CAP DEL: ${details.isEmpty ? 'no removed capabilities reported' : details}',
+      'LIST' => 'CAP LIST: ${details.isEmpty ? 'no enabled capabilities reported' : details}',
+      _ => 'CAP $subcommand${details.isEmpty ? '' : ': $details'}',
+    };
+
+    _appendMessage(
+      tabId: _serverTabId(network.id),
+      sender: '*',
+      content: message,
+      kind: IrcMessageKind.system,
+    );
+  }
+
+  Future<void> _handleCapCommand(String rest) async {
+    final trimmed = rest.trim();
+    if (trimmed.isEmpty) {
+      await _ircService.sendCapList();
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: '*',
+        content: 'Requested CAP LIST.',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return;
+    }
+
+    final parts = trimmed.split(RegExp(r'\s+'));
+    final subcommand = parts.first.toLowerCase();
+    final args = parts.skip(1).join(' ').trim();
+
+    switch (subcommand) {
+      case 'status':
+        final available = _sortedCapabilities(_ircService.availableCapabilities);
+        final enabled = _sortedCapabilities(_ircService.enabledCapabilities);
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: 'Available capabilities: ${available.isEmpty ? 'none' : available.join(', ')}',
+          kind: IrcMessageKind.system,
+        );
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: 'Enabled capabilities: ${enabled.isEmpty ? 'none' : enabled.join(', ')}',
+          kind: IrcMessageKind.system,
+        );
+        break;
+      case 'ls':
+        await _ircService.sendCapLs();
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: 'Requested CAP LS 302.',
+          kind: IrcMessageKind.system,
+        );
+        break;
+      case 'list':
+        await _ircService.sendCapList();
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: 'Requested CAP LIST.',
+          kind: IrcMessageKind.system,
+        );
+        break;
+      case 'req':
+        if (args.isEmpty) {
+          _appendMessage(
+            tabId: _serverTabId(network.id),
+            sender: 'error',
+            content: 'Usage: /cap req <capabilities>',
+            kind: IrcMessageKind.system,
+          );
+        } else {
+          await _ircService.sendCapReq(args);
+          _appendMessage(
+            tabId: _serverTabId(network.id),
+            sender: '*',
+            content: 'Requested capabilities: $args',
+            kind: IrcMessageKind.system,
+          );
+        }
+        break;
+      case 'end':
+        await _ircService.sendCapEnd();
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: 'Ended capability negotiation.',
+          kind: IrcMessageKind.system,
+        );
+        break;
+      default:
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: 'error',
+          content: 'Usage: /cap <status|ls|list|req|end>',
+          kind: IrcMessageKind.system,
+        );
+        break;
+    }
+
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
   String _normalizeNickPrefix(String value) {
     return value.replaceFirst(RegExp(r'^[~&@%+]'), '');
+  }
+
+  List<String> _sortedCapabilities(Set<String> values) {
+    final list = values.toList(growable: false);
+    list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return list;
+  }
+
+  String? _normalizeServiceNick(String? value) {
+    if (value == null) {
+      return null;
+    }
+
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+
+    return trimmed;
+  }
+
+  bool _isServiceNick(String nick) {
+    switch (nick.toLowerCase()) {
+      case 'nickserv':
+      case 'chanserv':
+      case 'hostserv':
+      case 'memoserv':
+      case 'botserv':
+      case 'operserv':
+        return true;
+      default:
+        return false;
+    }
   }
 
   void _removeUserFromAllChannels(String? nick) {

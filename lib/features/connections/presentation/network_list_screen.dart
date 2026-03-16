@@ -53,6 +53,7 @@ class NetworkListScreen extends StatelessWidget {
                               registry: sessionRegistry,
                               onOpen: (network) => _openChat(context, network),
                               onClose: sessionRegistry.closeSession,
+                              onCloseAll: sessionRegistry.closeAllSessions,
                             );
                           }
 
@@ -61,16 +62,27 @@ class NetworkListScreen extends StatelessWidget {
                               sessionRegistry.connectionFor(network.id);
                           final currentNick =
                               sessionRegistry.currentNickFor(network.id);
+                          final activityCount =
+                              sessionRegistry.activityCountFor(network.id);
+                          final hasSession = sessionRegistry.hasSession(network.id);
                           return _NetworkCard(
                             network: network,
                             connection: snapshot,
-                            hasSession: sessionRegistry.hasSession(network.id),
+                            hasSession: hasSession,
                             currentNick: currentNick,
+                            activityCount: activityCount,
+                            statusMessage: snapshot.message,
                             onEdit: () => _openForm(context, initialValue: network),
                             onDelete: () async {
                               await sessionRegistry.closeSession(network.id);
                               await controller.deleteNetwork(network.id);
                             },
+                            onQuickAction: () => _handleQuickAction(
+                              context,
+                              network: network,
+                              hasSession: hasSession,
+                              phase: snapshot.phase,
+                            ),
                             onConnect: () => _openChat(context, network),
                           );
                         },
@@ -126,6 +138,27 @@ class NetworkListScreen extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _handleQuickAction(
+    BuildContext context, {
+    required NetworkConfig network,
+    required bool hasSession,
+    required ConnectionPhase phase,
+  }) async {
+    if (!hasSession) {
+      final session = sessionRegistry.obtainSession(network);
+      await session.start();
+      return;
+    }
+
+    if (phase == ConnectionPhase.connected || phase == ConnectionPhase.connecting) {
+      await sessionRegistry.closeSession(network.id);
+      return;
+    }
+
+    final session = sessionRegistry.obtainSession(network);
+    await session.start();
+  }
 }
 
 class _NetworkCard extends StatelessWidget {
@@ -134,8 +167,11 @@ class _NetworkCard extends StatelessWidget {
     required this.connection,
     required this.hasSession,
     required this.currentNick,
+    required this.activityCount,
+    required this.statusMessage,
     required this.onEdit,
     required this.onDelete,
+    required this.onQuickAction,
     required this.onConnect,
   });
 
@@ -143,8 +179,11 @@ class _NetworkCard extends StatelessWidget {
   final ConnectionSnapshot connection;
   final bool hasSession;
   final String? currentNick;
+  final int activityCount;
+  final String? statusMessage;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final Future<void> Function() onQuickAction;
   final VoidCallback onConnect;
 
   @override
@@ -211,6 +250,15 @@ class _NetworkCard extends StatelessWidget {
                   color: theme.colorScheme.primary,
                 ),
               ),
+              if (activityCount > 0) ...[
+                const SizedBox(height: 2),
+                Text(
+                  'Activity: $activityCount tabs',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.tertiary,
+                  ),
+                ),
+              ],
               if ((currentNick ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text(
@@ -218,17 +266,62 @@ class _NetworkCard extends StatelessWidget {
                   style: theme.textTheme.bodySmall,
                 ),
               ],
+              const SizedBox(height: 2),
+              Text(
+                'Status: ${_statusPreview(connection.phase, statusMessage)}',
+                style: theme.textTheme.bodySmall,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
             const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: onConnect,
-              icon: Icon(hasSession ? Icons.forum_outlined : Icons.wifi_tethering),
-              label: Text(hasSession ? 'Open session' : 'Connect'),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: onConnect,
+                    icon: Icon(hasSession ? Icons.forum_outlined : Icons.chat_bubble_outline),
+                    label: Text(hasSession ? 'Open session' : 'Open chat'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onQuickAction,
+                    icon: Icon(_quickActionIcon(connection.phase, hasSession)),
+                    label: Text(_quickActionLabel(connection.phase, hasSession)),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
+  }
+
+  String _quickActionLabel(ConnectionPhase phase, bool hasSession) {
+    if (!hasSession) {
+      return 'Connect';
+    }
+
+    if (phase == ConnectionPhase.connected || phase == ConnectionPhase.connecting) {
+      return 'Disconnect';
+    }
+
+    return 'Reconnect';
+  }
+
+  IconData _quickActionIcon(ConnectionPhase phase, bool hasSession) {
+    if (!hasSession) {
+      return Icons.wifi_tethering;
+    }
+
+    if (phase == ConnectionPhase.connected || phase == ConnectionPhase.connecting) {
+      return Icons.link_off;
+    }
+
+    return Icons.refresh;
   }
 
   String _statusLabel(ConnectionPhase phase) {
@@ -247,6 +340,15 @@ class _NetworkCard extends StatelessWidget {
         return 'Error';
     }
   }
+
+  String _statusPreview(ConnectionPhase phase, String? message) {
+    final value = (message ?? '').trim();
+    if (value.isNotEmpty) {
+      return value;
+    }
+
+    return _statusLabel(phase);
+  }
 }
 
 class _ActiveSessionsCard extends StatelessWidget {
@@ -254,11 +356,13 @@ class _ActiveSessionsCard extends StatelessWidget {
     required this.registry,
     required this.onOpen,
     required this.onClose,
+    required this.onCloseAll,
   });
 
   final SessionRegistry registry;
   final ValueChanged<NetworkConfig> onOpen;
   final Future<void> Function(String networkId) onClose;
+  final Future<void> Function() onCloseAll;
 
   @override
   Widget build(BuildContext context) {
@@ -274,9 +378,26 @@ class _ActiveSessionsCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Active sessions',
-              style: theme.textTheme.titleMedium,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Active sessions',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ),
+                Text(
+                  '${sessions.length} live',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: onCloseAll,
+                  child: const Text('Disconnect all'),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             for (final session in sessions) ...[
@@ -288,7 +409,7 @@ class _ActiveSessionsCard extends StatelessWidget {
                 ),
                 title: Text(session.network.name),
                 subtitle: Text(
-                  '${session.network.host}:${session.network.port} • ${_labelFor(session.connection.phase)}',
+                  '${session.network.host}:${session.network.port} • ${_labelFor(session.connection.phase)} • ${session.tabs.length} tabs • ${session.currentNick}${session.activityCount > 0 ? ' • ${session.activityCount} active' : ''}',
                 ),
                 trailing: IconButton(
                   onPressed: () => onClose(session.network.id),
