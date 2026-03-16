@@ -1,0 +1,155 @@
+import 'package:androidircx/core/models/network_config.dart';
+import 'package:flutter/material.dart';
+
+class NetworkFormResult {
+  const NetworkFormResult({
+    required this.name,
+    required this.host,
+    required this.port,
+    required this.nickname,
+    required this.useTls,
+  });
+
+  final String name;
+  final String host;
+  final int port;
+  final String nickname;
+  final bool useTls;
+}
+
+class NetworkFormScreen extends StatefulWidget {
+  const NetworkFormScreen({
+    super.key,
+    this.initialValue,
+  });
+
+  final NetworkConfig? initialValue;
+
+  @override
+  State<NetworkFormScreen> createState() => _NetworkFormScreenState();
+}
+
+class _NetworkFormScreenState extends State<NetworkFormScreen> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _nameController;
+  late final TextEditingController _hostController;
+  late final TextEditingController _portController;
+  late final TextEditingController _nicknameController;
+  late bool _useTls;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialValue;
+    _nameController = TextEditingController(text: initial?.name ?? '');
+    _hostController = TextEditingController(text: initial?.host ?? '');
+    _portController = TextEditingController(
+      text: (initial?.port ?? 6697).toString(),
+    );
+    _nicknameController = TextEditingController(
+      text: initial?.nickname ?? 'AndroidIRCX',
+    );
+    _useTls = initial?.useTls ?? true;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _hostController.dispose();
+    _portController.dispose();
+    _nicknameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.initialValue == null ? 'Add network' : 'Edit network'),
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Form(
+            key: _formKey,
+            child: ListView(
+              children: [
+                TextFormField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(labelText: 'Display name'),
+                  validator: _requiredValidator,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _hostController,
+                  decoration: const InputDecoration(labelText: 'Host'),
+                  validator: _requiredValidator,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _portController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Port'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Port is required.';
+                    }
+
+                    if (int.tryParse(value!.trim()) == null) {
+                      return 'Enter a valid port.';
+                    }
+
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _nicknameController,
+                  decoration: const InputDecoration(labelText: 'Nickname'),
+                  validator: _requiredValidator,
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Use TLS'),
+                  subtitle: const Text('Enabled by default for modern IRC servers.'),
+                  value: _useTls,
+                  onChanged: (value) => setState(() => _useTls = value),
+                ),
+                const SizedBox(height: 24),
+                FilledButton(
+                  onPressed: _submit,
+                  child: const Text('Save network'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String? _requiredValidator(String? value) {
+    if ((value ?? '').trim().isEmpty) {
+      return 'This field is required.';
+    }
+
+    return null;
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    Navigator.of(context).pop(
+      NetworkFormResult(
+        name: _nameController.text.trim(),
+        host: _hostController.text.trim(),
+        port: int.parse(_portController.text.trim()),
+        nickname: _nicknameController.text.trim(),
+        useTls: _useTls,
+      ),
+    );
+  }
+}

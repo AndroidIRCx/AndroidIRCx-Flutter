@@ -1,11 +1,11 @@
 {
-    "name": "androidircx",
-    "short_name": "androidircx",
+    "name": "AndroidIRCx Flutter",
+    "short_name": "AndroidIRCx",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Flutter rewrite of AndroidIRCx.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
