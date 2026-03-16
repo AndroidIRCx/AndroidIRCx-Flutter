@@ -3,6 +3,23 @@
 Flutter rewrite of AndroidIRCx, focused on preserving behavior, features, and UX parity with the
 existing React Native application.
 
+[![Build](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/AndroidIRCx/AndroidIRCx-Flutter)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases)
+[![Downloads](https://img.shields.io/github/downloads/AndroidIRCx/AndroidIRCx-Flutter/total)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases)
+[![GitHub License](https://img.shields.io/github/license/AndroidIRCx/AndroidIRCx-Flutter)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/blob/main/LICENSE)
+
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11929/badge)](https://www.bestpractices.dev/projects/11929)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/AndroidIRCx/AndroidIRCx-Flutter/codeql.yml?label=CodeQL&branch=main)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/security/code-scanning)
+[![Dependabot](https://img.shields.io/badge/dependabot-enabled-brightgreen)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/security/dependabot)
+[![Coverage](https://codecov.io/gh/AndroidIRCx/AndroidIRCx-Flutter/branch/main/graph/badge.svg)](https://app.codecov.io/gh/AndroidIRCx/AndroidIRCx-Flutter/)
+
+[![GitHub Stars](https://img.shields.io/github/stars/AndroidIRCx/AndroidIRCx-Flutter?style=flat)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/stargazers)
+[![Contributors](https://img.shields.io/github/contributors/AndroidIRCx/AndroidIRCx-Flutter)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/graphs/contributors)
+[![GitHub Issues](https://img.shields.io/github/issues/AndroidIRCx/AndroidIRCx-Flutter)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/AndroidIRCx/AndroidIRCx-Flutter/main)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/commits/main)
+
+[![Google Play](https://img.shields.io/badge/Google%20Play-Download-green)](https://play.google.com/store/apps/details?id=com.androidircx)
+
 ## Current Status
 
 This repository is an active rewrite in progress.
