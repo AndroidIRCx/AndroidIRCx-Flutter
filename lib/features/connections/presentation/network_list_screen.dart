@@ -107,13 +107,15 @@ class NetworkListScreen extends StatelessWidget {
       return;
     }
 
-    await controller.saveNetwork(
+      await controller.saveNetwork(
       name: result.name,
       host: result.host,
       port: result.port,
       nickname: result.nickname,
       altNickname: result.altNickname,
       useTls: result.useTls,
+      webSocketPort: result.webSocketPort,
+      webSocketPath: result.webSocketPath,
       autoConnect: result.autoConnect,
       saslMechanism: result.saslMechanism,
       saslAccount: result.saslAccount,
@@ -230,7 +232,7 @@ class _NetworkCard extends StatelessWidget {
             Text('${network.host}:${network.port}'),
             const SizedBox(height: 4),
             Text(
-              'Nick: ${network.nickname} / ${network.altNickname ?? '${network.nickname}_'} • ${network.useTls ? 'TLS' : 'Plain TCP'}',
+              'Nick: ${network.nickname} / ${network.altNickname ?? '${network.nickname}_'} • ${network.useTls ? 'TLS' : 'Plain TCP'}${network.webSocketPort == null ? '' : ' • WS ${network.webSocketPort}${(network.webSocketPath ?? '').isEmpty ? '' : network.webSocketPath}'}',
               style: theme.textTheme.bodySmall,
             ),
             if (network.autoConnect) ...[

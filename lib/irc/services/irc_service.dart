@@ -14,7 +14,7 @@ class IrcService {
   IrcService({
     IrcTransportConnector? transportConnector,
     String Function()? scramNonceGenerator,
-  })  : _transportConnector = transportConnector ?? SocketIrcTransport.connect,
+  })  : _transportConnector = transportConnector ?? defaultIrcTransportConnector,
         _scramNonceGenerator = scramNonceGenerator,
         _state = const ConnectionSnapshot(
           networkId: '',

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/irc_message.dart';
@@ -35,6 +37,8 @@ void main() {
           nickname: 'tester',
           altNickname: 'tester_',
           useTls: false,
+          webSocketPort: 16667,
+          webSocketPath: '/irc',
           saslMechanism: SaslMechanism.scramSha256,
           autoConnect: true,
         ),
@@ -46,6 +50,8 @@ void main() {
       final saved = networks.firstWhere((item) => item.id == 'testnet');
       expect(saved.autoConnect, isTrue);
       expect(saved.altNickname, 'tester_');
+      expect(saved.webSocketPort, 16667);
+      expect(saved.webSocketPath, '/irc');
       expect(saved.saslMechanism, SaslMechanism.scramSha256);
     });
 
@@ -68,6 +74,31 @@ void main() {
           .firstWhere((item) => item.id == 'certnet');
 
       expect(saved.saslMechanism, SaslMechanism.external);
+    });
+
+    test('network repository backfills DBase websocket port', () async {
+      SharedPreferences.setMockInitialValues({
+        'androidircx.networks': jsonEncode([
+          {
+            'id': 'dbase',
+            'name': 'DBase',
+            'host': 'irc.dbase.in.rs',
+            'port': 6697,
+            'nickname': 'AndroidIRCX',
+            'altNickname': 'AndroidIRCX_',
+            'username': 'androidircx',
+            'realName': 'AndroidIRCX',
+            'useTls': true,
+            'saslMechanism': 'plain',
+            'autoConnect': false,
+          },
+        ]),
+      });
+      final repository = SharedPrefsNetworkRepository();
+
+      final saved = (await repository.loadNetworks()).single;
+
+      expect(saved.webSocketPort, 16697);
     });
 
     test('settings repository saves and loads showRawEvents', () async {

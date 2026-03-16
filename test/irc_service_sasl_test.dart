@@ -30,6 +30,21 @@ class _FakeTransport implements IrcTransport {
 }
 
 void main() {
+  test('buildWebSocketUri uses root slash when websocket path is empty', () {
+    final uri = buildWebSocketUri(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.dbase.in.rs',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        webSocketPort: 16697,
+      ),
+    );
+
+    expect(uri.toString(), 'wss://irc.dbase.in.rs:16697/');
+  });
+
   test('starts CAP negotiation and SASL PLAIN when configured', () async {
     final transport = _FakeTransport();
     final service = IrcService(

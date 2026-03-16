@@ -15,6 +15,8 @@ class NetworkConfig {
     this.username = 'androidircx',
     this.realName = 'AndroidIRCX',
     this.useTls = true,
+    this.webSocketPort,
+    this.webSocketPath,
     this.password,
     this.saslAccount,
     this.saslPassword,
@@ -31,6 +33,8 @@ class NetworkConfig {
   final String username;
   final String realName;
   final bool useTls;
+  final int? webSocketPort;
+  final String? webSocketPath;
   final String? password;
   final String? saslAccount;
   final String? saslPassword;
@@ -47,6 +51,8 @@ class NetworkConfig {
     String? username,
     String? realName,
     bool? useTls,
+    int? webSocketPort,
+    String? webSocketPath,
     String? password,
     String? saslAccount,
     String? saslPassword,
@@ -63,6 +69,8 @@ class NetworkConfig {
       username: username ?? this.username,
       realName: realName ?? this.realName,
       useTls: useTls ?? this.useTls,
+      webSocketPort: webSocketPort ?? this.webSocketPort,
+      webSocketPath: webSocketPath ?? this.webSocketPath,
       password: password ?? this.password,
       saslAccount: saslAccount ?? this.saslAccount,
       saslPassword: saslPassword ?? this.saslPassword,
@@ -82,6 +90,8 @@ class NetworkConfig {
       'username': username,
       'realName': realName,
       'useTls': useTls,
+      'webSocketPort': webSocketPort,
+      'webSocketPath': webSocketPath,
       'password': password,
       'saslAccount': saslAccount,
       'saslPassword': saslPassword,
@@ -101,6 +111,8 @@ class NetworkConfig {
       username: (json['username'] as String?) ?? 'androidircx',
       realName: (json['realName'] as String?) ?? 'AndroidIRCX',
       useTls: (json['useTls'] as bool?) ?? true,
+      webSocketPort: (json['webSocketPort'] as num?)?.toInt(),
+      webSocketPath: json['webSocketPath'] as String?,
       password: json['password'] as String?,
       saslAccount: json['saslAccount'] as String?,
       saslPassword: json['saslPassword'] as String?,

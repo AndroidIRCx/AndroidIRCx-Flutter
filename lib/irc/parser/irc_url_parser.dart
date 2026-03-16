@@ -190,6 +190,7 @@ NetworkConfig toTemporaryNetworkConfig(
     realName: parsedUrl.realName ?? defaultRealName,
     username: parsedUrl.ident ?? defaultUsername,
     useTls: parsedUrl.ssl,
+    webSocketPort: parsedUrl.ssl ? parsedUrl.port : null,
     password: parsedUrl.password,
   );
 }

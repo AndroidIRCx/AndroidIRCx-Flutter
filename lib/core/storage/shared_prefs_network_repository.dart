@@ -26,6 +26,7 @@ class SharedPrefsNetworkRepository implements NetworkRepository {
     final decoded = jsonDecode(raw) as List<dynamic>;
     return decoded
         .map((item) => NetworkConfig.fromJson(item as Map<String, Object?>))
+        .map(_normalizeNetwork)
         .toList(growable: false);
   }
 
@@ -48,12 +49,21 @@ class SharedPrefsNetworkRepository implements NetworkRepository {
     );
   }
 
+  NetworkConfig _normalizeNetwork(NetworkConfig network) {
+    if (network.host == 'irc.dbase.in.rs' && network.webSocketPort == null) {
+      return network.copyWith(webSocketPort: 16697);
+    }
+
+    return network;
+  }
+
   static const List<NetworkConfig> _defaultSeed = [
     NetworkConfig(
       id: 'dbase',
       name: 'DBase',
       host: 'irc.dbase.in.rs',
       port: 6697,
+      webSocketPort: 16697,
       nickname: 'AndroidIRCX',
       altNickname: 'AndroidIRCX_',
       useTls: true,

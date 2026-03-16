@@ -9,6 +9,8 @@ class NetworkFormResult {
     required this.nickname,
     required this.altNickname,
     required this.useTls,
+    this.webSocketPort,
+    this.webSocketPath,
     required this.autoConnect,
     required this.saslMechanism,
     this.saslAccount,
@@ -21,6 +23,8 @@ class NetworkFormResult {
   final String nickname;
   final String altNickname;
   final bool useTls;
+  final int? webSocketPort;
+  final String? webSocketPath;
   final bool autoConnect;
   final SaslMechanism saslMechanism;
   final String? saslAccount;
@@ -44,6 +48,8 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
   late final TextEditingController _nameController;
   late final TextEditingController _hostController;
   late final TextEditingController _portController;
+  late final TextEditingController _webSocketPortController;
+  late final TextEditingController _webSocketPathController;
   late final TextEditingController _nicknameController;
   late final TextEditingController _altNicknameController;
   late final TextEditingController _saslAccountController;
@@ -60,6 +66,12 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _hostController = TextEditingController(text: initial?.host ?? '');
     _portController = TextEditingController(
       text: (initial?.port ?? 6697).toString(),
+    );
+    _webSocketPortController = TextEditingController(
+      text: initial?.webSocketPort?.toString() ?? '',
+    );
+    _webSocketPathController = TextEditingController(
+      text: initial?.webSocketPath ?? '',
     );
     _nicknameController = TextEditingController(
       text: initial?.nickname ?? 'AndroidIRCX',
@@ -79,6 +91,8 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _nameController.dispose();
     _hostController.dispose();
     _portController.dispose();
+    _webSocketPortController.dispose();
+    _webSocketPathController.dispose();
     _nicknameController.dispose();
     _altNicknameController.dispose();
     _saslAccountController.dispose();
@@ -124,6 +138,42 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                       return 'Enter a valid port.';
                     }
 
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _webSocketPortController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'WebSocket port',
+                    helperText: 'Optional. Used by Flutter Web instead of raw IRC port.',
+                  ),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return null;
+                    }
+                    if (int.tryParse(value!.trim()) == null) {
+                      return 'Enter a valid WebSocket port.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _webSocketPathController,
+                  decoration: const InputDecoration(
+                    labelText: 'WebSocket path',
+                    helperText: 'Optional. Example: /irc or /websocket. Leave empty for root path.',
+                  ),
+                  validator: (value) {
+                    final trimmed = (value ?? '').trim();
+                    if (trimmed.isEmpty) {
+                      return null;
+                    }
+                    if (!trimmed.startsWith('/')) {
+                      return 'WebSocket path must start with /.';
+                    }
                     return null;
                   },
                 ),
@@ -239,6 +289,10 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
         nickname: _nicknameController.text.trim(),
         altNickname: _altNicknameController.text.trim(),
         useTls: _useTls,
+        webSocketPort: (_webSocketPortController.text.trim().isEmpty)
+            ? null
+            : int.parse(_webSocketPortController.text.trim()),
+        webSocketPath: _webSocketPathController.text.trim(),
         autoConnect: _autoConnect,
         saslMechanism: _saslMechanism,
         saslAccount: _saslAccountController.text.trim(),
