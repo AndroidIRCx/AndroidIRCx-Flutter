@@ -69,6 +69,7 @@ class ChatSessionController extends ChangeNotifier {
   bool get isReconnectScheduled => _reconnectTimer?.isActive ?? false;
   Duration? get pendingReconnectDelay => _pendingReconnectDelay;
   ChatTab get activeTab => _tabs.firstWhere((tab) => tab.id == _activeTabId);
+  String get currentNick => _ircService.currentNick ?? network.nickname;
   String? get activeChannelTopic => _channelTopics[activeTabId];
   String? get activeChannelModes => _channelModes[activeTabId];
   String get activeChannelSummary {
@@ -477,6 +478,20 @@ class ChatSessionController extends ChangeNotifier {
         _appendWhoisMessage(
           frame,
           'WHOIS: ${frame.params.length > 3 ? '${frame.params[1]} is ${frame.params[2]}@${frame.params[3]}' : frame.raw}',
+        );
+      case '900':
+      case '901':
+      case '902':
+      case '903':
+      case '904':
+      case '905':
+      case '906':
+      case '907':
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: 'auth',
+          content: frame.trailing ?? frame.raw,
+          kind: IrcMessageKind.system,
         );
       case '312':
         _appendWhoisMessage(

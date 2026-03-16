@@ -33,13 +33,20 @@ void main() {
           host: 'irc.test.net',
           port: 6667,
           nickname: 'tester',
+          altNickname: 'tester_',
           useTls: false,
+          saslMechanism: SaslMechanism.scramSha256,
+          autoConnect: true,
         ),
       );
 
       final networks = await repository.loadNetworks();
 
       expect(networks.any((item) => item.id == 'testnet'), isTrue);
+      final saved = networks.firstWhere((item) => item.id == 'testnet');
+      expect(saved.autoConnect, isTrue);
+      expect(saved.altNickname, 'tester_');
+      expect(saved.saslMechanism, SaslMechanism.scramSha256);
     });
 
     test('settings repository saves and loads showRawEvents', () async {

@@ -11,30 +11,29 @@ import 'package:flutter/material.dart';
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
     super.key,
-    required this.network,
+    required this.controller,
   });
 
-  final NetworkConfig network;
+  final ChatSessionController controller;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  late final ChatSessionController _controller;
   final TextEditingController _composerController = TextEditingController();
+
+  ChatSessionController get _controller => widget.controller;
 
   @override
   void initState() {
     super.initState();
-    _controller = ChatSessionController(network: widget.network);
     _controller.start();
   }
 
   @override
   void dispose() {
     _composerController.dispose();
-    _controller.dispose();
     super.dispose();
   }
 
@@ -99,8 +98,9 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Column(
                 children: [
                   ListTile(
-                    title: Text(widget.network.name),
-                    subtitle: Text('${widget.network.host}:${widget.network.port}'),
+                    title: Text(_controller.network.name),
+                    subtitle:
+                        Text('${_controller.network.host}:${_controller.network.port}'),
                   ),
                   const Divider(height: 1),
                   Expanded(
@@ -188,7 +188,10 @@ class _ChatScreenState extends State<ChatScreen> {
           body: SafeArea(
             child: Column(
               children: [
-                _ConnectionBanner(controller: _controller, network: widget.network),
+                _ConnectionBanner(
+                  controller: _controller,
+                  network: _controller.network,
+                ),
                 if ((_controller.activeChannelTopic ?? '').trim().isNotEmpty)
                   _ChannelTopicBar(topic: _controller.activeChannelTopic!.trim()),
                 Expanded(
@@ -462,6 +465,11 @@ class _ConnectionBanner extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             '${network.host}:${network.port} • ${network.useTls ? 'TLS' : 'Plain TCP'}',
+            style: theme.textTheme.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Current nick: ${controller.currentNick}',
             style: theme.textTheme.bodySmall,
           ),
           if ((snapshot.message ?? '').isNotEmpty) ...[

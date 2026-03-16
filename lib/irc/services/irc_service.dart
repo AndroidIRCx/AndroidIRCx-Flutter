@@ -5,6 +5,7 @@ import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
 import 'package:androidircx/irc/parser/irc_message_parser.dart';
+import 'package:androidircx/irc/sasl/scram_sha256_session.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
 
 typedef IrcTransportConnector = Future<IrcTransport> Function(NetworkConfig network);
@@ -12,13 +13,16 @@ typedef IrcTransportConnector = Future<IrcTransport> Function(NetworkConfig netw
 class IrcService {
   IrcService({
     IrcTransportConnector? transportConnector,
+    String Function()? scramNonceGenerator,
   })  : _transportConnector = transportConnector ?? SocketIrcTransport.connect,
+        _scramNonceGenerator = scramNonceGenerator,
         _state = const ConnectionSnapshot(
           networkId: '',
           phase: ConnectionPhase.idle,
         );
 
   final IrcTransportConnector _transportConnector;
+  final String Function()? _scramNonceGenerator;
   final StreamController<String> _rawEventsController =
       StreamController<String>.broadcast();
   final StreamController<IrcMessageFrame> _framesController =
@@ -35,13 +39,18 @@ class IrcService {
   bool _capNegotiationActive = false;
   bool _capEnded = false;
   bool _saslInProgress = false;
+  SaslMechanism? _activeSaslMechanism;
   NetworkConfig? _network;
   String? _primaryNick;
   String? _altNickBase;
   int _altNickAttempt = 0;
+  ScramSha256Session? _scramSession;
+  bool _scramAwaitingServerFinal = false;
 
   ConnectionSnapshot get state => _state;
   String? get currentNick => _currentNick;
+  Set<String> get enabledCapabilities => Set<String>.unmodifiable(_capEnabled);
+  Set<String> get availableCapabilities => Set<String>.unmodifiable(_capAvailable);
   Stream<String> get rawEvents => _rawEventsController.stream;
   Stream<IrcMessageFrame> get frames => _framesController.stream;
   Stream<ConnectionSnapshot> get stateStream => _stateController.stream;
@@ -62,6 +71,9 @@ class IrcService {
     _capNegotiationActive = false;
     _capEnded = false;
     _saslInProgress = false;
+    _activeSaslMechanism = null;
+    _scramSession = null;
+    _scramAwaitingServerFinal = false;
     _updateState(
       ConnectionSnapshot(
         networkId: network.id,
@@ -233,6 +245,9 @@ class IrcService {
 
     if (frame.command == '903') {
       _saslInProgress = false;
+      _activeSaslMechanism = null;
+      _scramSession = null;
+      _scramAwaitingServerFinal = false;
       _rawEventsController.add('** SASL authentication successful');
       unawaited(_endCapNegotiation());
       return;
@@ -243,6 +258,9 @@ class IrcService {
         frame.command == '906' ||
         frame.command == '907') {
       _saslInProgress = false;
+      _activeSaslMechanism = null;
+      _scramSession = null;
+      _scramAwaitingServerFinal = false;
       _rawEventsController.add('** SASL authentication failed');
       unawaited(_endCapNegotiation());
       return;
@@ -294,12 +312,7 @@ class IrcService {
           ...rest.where((item) => item != '*'),
           if (trailing.isNotEmpty) trailing,
         ].join(' ');
-        for (final cap in capabilities.split(RegExp(r'\s+'))) {
-          final name = cap.split('=').first.trim();
-          if (name.isNotEmpty) {
-            _capAvailable.add(name);
-          }
-        }
+        _capAvailable.addAll(_parseCapabilityNames(capabilities));
         final isLast = !rest.contains('*');
         if (isLast) {
           if (_capAvailable.contains('sasl') && _shouldUseSasl(_network)) {
@@ -310,17 +323,47 @@ class IrcService {
         }
       case 'ACK':
         final ackSource = [...rest, if (trailing.isNotEmpty) trailing].join(' ');
-        for (final cap in ackSource.split(RegExp(r'\s+'))) {
-          final name = cap.split('=').first.trim();
-          if (name.isNotEmpty) {
-            _capEnabled.add(name);
-          }
-        }
+        _capEnabled.addAll(_parseCapabilityNames(ackSource));
         if (_capEnabled.contains('sasl') && _shouldUseSasl(_network)) {
           _saslInProgress = true;
-          unawaited(sendRaw('AUTHENTICATE PLAIN'));
+          final mechanism = _network?.saslMechanism ?? SaslMechanism.plain;
+          _activeSaslMechanism = mechanism;
+          if (mechanism == SaslMechanism.scramSha256) {
+            final network = _network;
+            if (network != null) {
+              _scramSession = ScramSha256Session(
+                username: network.saslAccount!,
+                password: network.saslPassword!,
+                nonceGenerator: _scramNonceGenerator,
+              );
+            }
+            unawaited(sendRaw('AUTHENTICATE SCRAM-SHA-256'));
+          } else {
+            unawaited(sendRaw('AUTHENTICATE PLAIN'));
+          }
         } else {
           unawaited(_endCapNegotiation());
+        }
+      case 'NEW':
+        final newCaps = [...rest, if (trailing.isNotEmpty) trailing].join(' ');
+        final names = _parseCapabilityNames(newCaps);
+        _capAvailable.addAll(names);
+        if (names.isNotEmpty) {
+          _rawEventsController.add(
+            '** CAP NEW: ${names.toList(growable: false)..sort()}',
+          );
+        }
+      case 'DEL':
+        final removedCaps = [...rest, if (trailing.isNotEmpty) trailing].join(' ');
+        final names = _parseCapabilityNames(removedCaps);
+        for (final name in names) {
+          _capAvailable.remove(name);
+          _capEnabled.remove(name);
+        }
+        if (names.isNotEmpty) {
+          _rawEventsController.add(
+            '** CAP DEL: ${names.toList(growable: false)..sort()}',
+          );
         }
       case 'NAK':
         unawaited(_endCapNegotiation());
@@ -335,12 +378,18 @@ class IrcService {
     }
 
     final payload = frame.params.isNotEmpty ? frame.params.first : frame.trailing;
-    if (payload != '+') {
+    final network = _network;
+    if (network == null) {
       return;
     }
 
-    final network = _network;
-    if (network == null) {
+    final mechanism = _activeSaslMechanism ?? network.saslMechanism;
+    if (mechanism == SaslMechanism.scramSha256) {
+      _handleScramAuthenticate(payload);
+      return;
+    }
+
+    if (payload != '+') {
       return;
     }
 
@@ -364,12 +413,75 @@ class IrcService {
     }
   }
 
+  void _handleScramAuthenticate(String? payload) {
+    final session = _scramSession;
+    if (session == null || payload == null) {
+      return;
+    }
+
+    try {
+      if (payload == '+') {
+        final clientFirst = session.createClientFirstMessage();
+        _sendAuthenticatePayload(clientFirst);
+        return;
+      }
+
+      final decoded = utf8.decode(base64.decode(payload));
+      if (!_scramAwaitingServerFinal) {
+        final clientFinal = session.createClientFinalMessage(decoded);
+        _scramAwaitingServerFinal = true;
+        _sendAuthenticatePayload(clientFinal);
+        return;
+      }
+
+      if (!session.validateServerFinalMessage(decoded)) {
+        _rawEventsController.add('** SASL SCRAM verification failed');
+        unawaited(_abortSasl());
+        return;
+      }
+
+      _rawEventsController.add('** SASL SCRAM server signature verified');
+    } on FormatException catch (error) {
+      _rawEventsController.add('** SASL SCRAM error: ${error.message}');
+      unawaited(_abortSasl());
+    }
+  }
+
+  void _sendAuthenticatePayload(String message) {
+    final encoded = base64.encode(utf8.encode(message));
+    final chunks = <String>[];
+    for (var i = 0; i < encoded.length; i += 400) {
+      chunks.add(
+        encoded.substring(i, i + 400 > encoded.length ? encoded.length : i + 400),
+      );
+    }
+
+    for (final chunk in chunks) {
+      unawaited(sendRaw('AUTHENTICATE $chunk'));
+    }
+    if (encoded.length % 400 == 0) {
+      unawaited(sendRaw('AUTHENTICATE +'));
+    }
+  }
+
+  Future<void> _abortSasl() async {
+    _saslInProgress = false;
+    _activeSaslMechanism = null;
+    _scramSession = null;
+    _scramAwaitingServerFinal = false;
+    await sendRaw('AUTHENTICATE *');
+    await _endCapNegotiation();
+  }
+
   Future<void> _endCapNegotiation() async {
     if (_capEnded || !_capNegotiationActive) {
       return;
     }
 
     _capEnded = true;
+    _activeSaslMechanism = null;
+    _scramSession = null;
+    _scramAwaitingServerFinal = false;
     await sendRaw('CAP END');
   }
 
@@ -474,5 +586,16 @@ class IrcService {
 
     _altNickAttempt += 1;
     return '$altBase$_altNickAttempt';
+  }
+
+  Set<String> _parseCapabilityNames(String source) {
+    final names = <String>{};
+    for (final cap in source.split(RegExp(r'\s+'))) {
+      final name = cap.split('=').first.trim();
+      if (name.isNotEmpty) {
+        names.add(name);
+      }
+    }
+    return names;
   }
 }

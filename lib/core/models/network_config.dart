@@ -1,3 +1,8 @@
+enum SaslMechanism {
+  plain,
+  scramSha256,
+}
+
 class NetworkConfig {
   const NetworkConfig({
     required this.id,
@@ -12,6 +17,7 @@ class NetworkConfig {
     this.password,
     this.saslAccount,
     this.saslPassword,
+    this.saslMechanism = SaslMechanism.plain,
     this.autoConnect = false,
   });
 
@@ -27,6 +33,7 @@ class NetworkConfig {
   final String? password;
   final String? saslAccount;
   final String? saslPassword;
+  final SaslMechanism saslMechanism;
   final bool autoConnect;
 
   NetworkConfig copyWith({
@@ -42,6 +49,7 @@ class NetworkConfig {
     String? password,
     String? saslAccount,
     String? saslPassword,
+    SaslMechanism? saslMechanism,
     bool? autoConnect,
   }) {
     return NetworkConfig(
@@ -57,6 +65,7 @@ class NetworkConfig {
       password: password ?? this.password,
       saslAccount: saslAccount ?? this.saslAccount,
       saslPassword: saslPassword ?? this.saslPassword,
+      saslMechanism: saslMechanism ?? this.saslMechanism,
       autoConnect: autoConnect ?? this.autoConnect,
     );
   }
@@ -75,6 +84,7 @@ class NetworkConfig {
       'password': password,
       'saslAccount': saslAccount,
       'saslPassword': saslPassword,
+      'saslMechanism': saslMechanism.name,
       'autoConnect': autoConnect,
     };
   }
@@ -93,6 +103,9 @@ class NetworkConfig {
       password: json['password'] as String?,
       saslAccount: json['saslAccount'] as String?,
       saslPassword: json['saslPassword'] as String?,
+      saslMechanism: json['saslMechanism'] == null
+          ? SaslMechanism.plain
+          : SaslMechanism.values.byName(json['saslMechanism']! as String),
       autoConnect: (json['autoConnect'] as bool?) ?? false,
     );
   }

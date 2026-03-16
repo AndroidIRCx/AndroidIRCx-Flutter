@@ -32,6 +32,8 @@ class NetworkListController extends ChangeNotifier {
     required String nickname,
     required String altNickname,
     required bool useTls,
+    required bool autoConnect,
+    required SaslMechanism saslMechanism,
     String? saslAccount,
     String? saslPassword,
     String? networkId,
@@ -44,6 +46,8 @@ class NetworkListController extends ChangeNotifier {
       nickname: nickname,
       altNickname: altNickname.trim(),
       useTls: useTls,
+      autoConnect: autoConnect,
+      saslMechanism: saslMechanism,
       saslAccount: (saslAccount ?? '').trim().isEmpty ? null : saslAccount?.trim(),
       saslPassword: (saslPassword ?? '').trim().isEmpty ? null : saslPassword,
     );

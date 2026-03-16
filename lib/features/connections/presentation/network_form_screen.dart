@@ -9,6 +9,8 @@ class NetworkFormResult {
     required this.nickname,
     required this.altNickname,
     required this.useTls,
+    required this.autoConnect,
+    required this.saslMechanism,
     this.saslAccount,
     this.saslPassword,
   });
@@ -19,6 +21,8 @@ class NetworkFormResult {
   final String nickname;
   final String altNickname;
   final bool useTls;
+  final bool autoConnect;
+  final SaslMechanism saslMechanism;
   final String? saslAccount;
   final String? saslPassword;
 }
@@ -45,6 +49,8 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
   late final TextEditingController _saslAccountController;
   late final TextEditingController _saslPasswordController;
   late bool _useTls;
+  late bool _autoConnect;
+  late SaslMechanism _saslMechanism;
 
   @override
   void initState() {
@@ -64,6 +70,8 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _saslAccountController = TextEditingController(text: initial?.saslAccount ?? '');
     _saslPasswordController = TextEditingController(text: initial?.saslPassword ?? '');
     _useTls = initial?.useTls ?? true;
+    _autoConnect = initial?.autoConnect ?? false;
+    _saslMechanism = initial?.saslMechanism ?? SaslMechanism.plain;
   }
 
   @override
@@ -150,6 +158,29 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                     labelText: 'SASL password',
                   ),
                 ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<SaslMechanism>(
+                  initialValue: _saslMechanism,
+                  decoration: const InputDecoration(
+                    labelText: 'SASL mechanism',
+                  ),
+                  items: const [
+                    DropdownMenuItem<SaslMechanism>(
+                      value: SaslMechanism.plain,
+                      child: Text('PLAIN'),
+                    ),
+                    DropdownMenuItem<SaslMechanism>(
+                      value: SaslMechanism.scramSha256,
+                      child: Text('SCRAM-SHA-256'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() => _saslMechanism = value);
+                  },
+                ),
                 const SizedBox(height: 12),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
@@ -157,6 +188,13 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                   subtitle: const Text('Enabled by default for modern IRC servers.'),
                   value: _useTls,
                   onChanged: (value) => setState(() => _useTls = value),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Auto connect'),
+                  subtitle: const Text('Start this network automatically on app launch.'),
+                  value: _autoConnect,
+                  onChanged: (value) => setState(() => _autoConnect = value),
                 ),
                 const SizedBox(height: 24),
                 FilledButton(
@@ -192,6 +230,8 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
         nickname: _nicknameController.text.trim(),
         altNickname: _altNicknameController.text.trim(),
         useTls: _useTls,
+        autoConnect: _autoConnect,
+        saslMechanism: _saslMechanism,
         saslAccount: _saslAccountController.text.trim(),
         saslPassword: _saslPasswordController.text,
       ),
