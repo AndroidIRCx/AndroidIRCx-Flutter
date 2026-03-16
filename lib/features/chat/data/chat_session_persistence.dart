@@ -27,13 +27,13 @@ class ChatSessionPersistence {
     final decoded = jsonDecode(raw) as Map<String, Object?>;
     final tabs = ((decoded['tabs'] as List<dynamic>?) ?? const [])
         .map((item) => ChatTab.fromJson(item as Map<String, Object?>))
-        .toList(growable: false);
+        .toList();
     final messagesMap = <String, List<IrcMessage>>{};
     final rawMessages = (decoded['messagesByTab'] as Map<String, dynamic>?) ?? const {};
     for (final entry in rawMessages.entries) {
       messagesMap[entry.key] = (entry.value as List<dynamic>)
           .map((item) => IrcMessage.fromJson(item as Map<String, Object?>))
-          .toList(growable: false);
+          .toList();
     }
 
     return ChatSessionSnapshot(

@@ -55,6 +55,7 @@ class SharedPrefsNetworkRepository implements NetworkRepository {
       host: 'irc.dbase.in.rs',
       port: 6697,
       nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
       useTls: true,
     ),
   ];

@@ -17,6 +17,24 @@ class ChatTab {
   final bool hasActivity;
   final bool isEncrypted;
 
+  ChatTab copyWith({
+    String? id,
+    String? name,
+    ChatTabType? type,
+    String? networkId,
+    bool? hasActivity,
+    bool? isEncrypted,
+  }) {
+    return ChatTab(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      type: type ?? this.type,
+      networkId: networkId ?? this.networkId,
+      hasActivity: hasActivity ?? this.hasActivity,
+      isEncrypted: isEncrypted ?? this.isEncrypted,
+    );
+  }
+
   Map<String, Object?> toJson() {
     return {
       'id': id,
