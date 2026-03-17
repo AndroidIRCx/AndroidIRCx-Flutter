@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/irc/models/irc_message_frame.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/sasl/scram_sha256_session.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
@@ -65,11 +66,14 @@ void main() {
 
     expect(transport.sentLines, containsAllInOrder(['CAP LS 302', 'NICK AndroidIRCX']));
 
-    transport.emit(':server CAP * LS :multi-prefix sasl');
+    transport.emit(':server CAP * LS :multi-prefix sasl message-tags server-time echo-message');
     await Future<void>.delayed(Duration.zero);
-    expect(transport.sentLines, contains('CAP REQ :sasl'));
+    expect(
+      transport.sentLines,
+      contains('CAP REQ :sasl echo-message message-tags multi-prefix server-time'),
+    );
 
-    transport.emit(':server CAP * ACK :sasl');
+    transport.emit(':server CAP * ACK :sasl echo-message message-tags server-time');
     await Future<void>.delayed(Duration.zero);
     expect(transport.sentLines, contains('AUTHENTICATE PLAIN'));
 
@@ -252,6 +256,207 @@ void main() {
     );
 
     await subscription.cancel();
+    service.dispose();
+  });
+
+  test('sendRawLabeled prefixes label when capability is enabled', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      transportConnector: (_) async => transport,
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    transport.emit(':server CAP * ACK :labeled-response');
+    await Future<void>.delayed(Duration.zero);
+    final label = await service.sendRawLabeled('WHOIS alice alice');
+
+    expect(label, isNotEmpty);
+    expect(
+      transport.sentLines.any((line) => line.startsWith('@label=$label WHOIS alice alice')),
+      isTrue,
+    );
+
+    service.dispose();
+  });
+
+  test('resolves labeled response when matching label returns', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      transportConnector: (_) async => transport,
+    );
+    final matches = <({String label, String command, IrcMessageFrame frame})>[];
+    final subscription = service.labeledResponses.listen(matches.add);
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    transport.emit(':server CAP * ACK :labeled-response');
+    await Future<void>.delayed(Duration.zero);
+    final label = await service.sendRawLabeled('WHOIS alice alice');
+    transport.emit('@label=$label :server 318 AndroidIRCX alice :End of /WHOIS list.');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(matches, hasLength(1));
+    expect(matches.single.label, label);
+    expect(matches.single.command, 'WHOIS alice alice');
+    expect(matches.single.frame.command, '318');
+
+    await subscription.cancel();
+    service.dispose();
+  });
+
+  test('sendChatHistory requires chathistory capability', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      transportConnector: (_) async => transport,
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    expect(
+      await service.sendChatHistory(target: '#room', limit: 25),
+      isFalse,
+    );
+
+    transport.emit(':server CAP * ACK :draft/chathistory labeled-response');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      await service.sendChatHistory(
+        target: '#room',
+        subcommand: 'BEFORE',
+        reference: 'msgid-1',
+        limit: 25,
+      ),
+      isTrue,
+    );
+    expect(
+      transport.sentLines.any((line) => line.contains('CHATHISTORY BEFORE #room msgid-1 25')),
+      isTrue,
+    );
+
+    service.dispose();
+  });
+
+  test('sendPrivmsg uses draft multiline when capability is enabled', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      transportConnector: (_) async => transport,
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    transport.emit(':server CAP * ACK :draft/multiline');
+    await Future<void>.delayed(Duration.zero);
+
+    await service.sendPrivmsg(target: '#room', text: 'one\ntwo');
+
+    expect(
+      transport.sentLines.where((line) => line.contains('PRIVMSG #room :one')).length,
+      1,
+    );
+    expect(
+      transport.sentLines.where((line) => line.contains('PRIVMSG #room :two')).length,
+      1,
+    );
+    expect(
+      transport.sentLines.any((line) => line.startsWith('@draft/multiline-concat=')),
+      isTrue,
+    );
+
+    service.dispose();
+  });
+
+  test('sendTyping and sendReaction use tagmsg commands', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      transportConnector: (_) async => transport,
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    transport.emit(':server CAP * ACK :typing draft/typing');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(await service.sendTyping(target: '#room', status: 'active'), isTrue);
+    await service.sendReaction(target: '#room', msgid: 'abc123', emoji: ':thumbsup:');
+
+    expect(
+      transport.sentLines.any((line) => line == '@+typing=active TAGMSG #room'),
+      isTrue,
+    );
+    expect(
+      transport.sentLines.any((line) => line == '@+draft/react=abc123\\::thumbsup: TAGMSG #room'),
+      isTrue,
+    );
+
+    service.dispose();
+  });
+
+  test('sendSetName requires setname capability', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      transportConnector: (_) async => transport,
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    expect(await service.sendSetName('New Realname'), isFalse);
+
+    transport.emit(':server CAP * ACK :setname');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(await service.sendSetName('New Realname'), isTrue);
+    expect(transport.sentLines, contains('SETNAME :New Realname'));
+
     service.dispose();
   });
 }

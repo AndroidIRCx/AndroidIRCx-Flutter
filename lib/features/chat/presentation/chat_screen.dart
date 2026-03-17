@@ -1,13 +1,18 @@
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
+import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
+import 'package:androidircx/irc/parser/message_content_parser.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -23,6 +28,10 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _composerController = TextEditingController();
+  final TextEditingController _messageSearchController = TextEditingController();
+  bool _messageSearchVisible = false;
+  _HistoryKindFilter _messageSearchFilter = _HistoryKindFilter.all;
+  IrcMessage? _pendingReplyMessage;
 
   ChatSessionController get _controller => widget.controller;
 
@@ -35,6 +44,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _composerController.dispose();
+    _messageSearchController.dispose();
     super.dispose();
   }
 
@@ -43,6 +53,13 @@ class _ChatScreenState extends State<ChatScreen> {
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, _) {
+        final visibleMessages = _messageSearchVisible
+            ? _controller.messagesForTab(
+                _controller.activeTabId,
+                query: _messageSearchController.text,
+                kinds: _messageSearchFilter.kinds,
+              )
+            : _controller.activeMessages;
         return Scaffold(
           appBar: AppBar(
             title: Column(
@@ -53,7 +70,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   _controller.activeTab.type == ChatTabType.channel &&
                           _controller.activeChannelSummary.isNotEmpty
                       ? _controller.activeChannelSummary
-                      : _statusText(_controller.connection),
+                      : _controller.activeTab.type == ChatTabType.dcc &&
+                              _controller.activeDccSession != null
+                          ? _dccSummary(_controller.activeDccSession!)
+                          : _statusText(_controller.connection),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -69,6 +89,17 @@ class _ChatScreenState extends State<ChatScreen> {
                     );
                   },
                 ),
+              if (_controller.settings.showHeaderSearchButton)
+                IconButton(
+                  onPressed: _toggleMessageSearch,
+                  icon: Icon(_messageSearchVisible ? Icons.search_off : Icons.search),
+                  tooltip: _messageSearchVisible ? 'Close search' : 'Search messages',
+                ),
+              IconButton(
+                onPressed: _openHistoryTools,
+                icon: const Icon(Icons.history),
+                tooltip: 'History tools',
+              ),
               IconButton(
                 onPressed: _showJoinDialog,
                 icon: const Icon(Icons.tag),
@@ -193,8 +224,25 @@ class _ChatScreenState extends State<ChatScreen> {
                   controller: _controller,
                   network: _controller.network,
                 ),
+                if (_messageSearchVisible)
+                  _InlineMessageSearchBar(
+                    controller: _messageSearchController,
+                    filter: _messageSearchFilter,
+                    resultCount: visibleMessages.length,
+                    onFilterChanged: (filter) => setState(() => _messageSearchFilter = filter),
+                    onChanged: (_) => setState(() {}),
+                    onClose: _toggleMessageSearch,
+                  ),
                 if ((_controller.activeChannelTopic ?? '').trim().isNotEmpty)
                   _ChannelTopicBar(topic: _controller.activeChannelTopic!.trim()),
+                if (_controller.activeTab.type == ChatTabType.dcc &&
+                    _controller.activeDccSession != null)
+                  _DccSessionBanner(
+                    session: _controller.activeDccSession!,
+                    onAccept: _controller.acceptActiveDccSession,
+                    onDecline: _controller.declineActiveDccSession,
+                    onClose: _controller.closeActiveDccSession,
+                  ),
                 if (_controller.activeTab.type == ChatTabType.server)
                   _ServiceQuickActions(
                     onRun: (service, command) async {
@@ -202,12 +250,34 @@ class _ChatScreenState extends State<ChatScreen> {
                     },
                   ),
                 Expanded(
-                  child: _MessageList(messages: _controller.activeMessages),
+                  child: _MessageList(
+                    messages: visibleMessages,
+                    showAttachmentPreviews: _controller.settings.showAttachmentPreviews,
+                    resolveReplyTarget: (replyId) =>
+                        _controller.messageByMsgId(_controller.activeTabId, replyId),
+                    resolveReactions: _controller.reactionsForMessage,
+                    onRedactMessage: _controller.redactMessage,
+                    onQuoteMessage: (message) =>
+                        _insertIntoComposer('> ${stripIrcFormatting(message.content)}'),
+                    onReplyWithNick: (message) {
+                      final prefix =
+                          message.sender == _controller.currentNick ? '' : '${message.sender}: ';
+                      _insertIntoComposer(prefix);
+                    },
+                    onReplyToMessage: _setPendingReply,
+                  ),
                 ),
                 if (_controller.commandHistory.isNotEmpty)
                   _CommandHistoryBar(
                     entries: _controller.commandHistory,
                     onSelect: (value) => setState(() => _composerController.text = value),
+                  ),
+                if (_controller.activeTypingUsers.isNotEmpty)
+                  _TypingIndicator(users: _controller.activeTypingUsers),
+                if (_pendingReplyMessage != null)
+                  _PendingReplyBar(
+                    message: _pendingReplyMessage!,
+                    onCancel: () => setState(() => _pendingReplyMessage = null),
                   ),
                 const Divider(height: 1),
                 Padding(
@@ -220,10 +290,15 @@ class _ChatScreenState extends State<ChatScreen> {
                           minLines: 1,
                           maxLines: 4,
                           textInputAction: TextInputAction.send,
+                          onChanged: _controller.updateTypingState,
                           onSubmitted: (_) => _submit(),
                           decoration: InputDecoration(
                             hintText: _controller.activeTab.type == ChatTabType.server
                                 ? 'Type raw IRC or /join #channel'
+                                : _controller.activeTab.type == ChatTabType.dcc
+                                    ? (_controller.activeDccSession?.type == DccSessionType.chat
+                                        ? 'Type DCC chat message'
+                                        : 'DCC SEND tabs do not accept messages')
                                 : 'Message ${_controller.activeTab.name}',
                           ),
                         ),
@@ -260,7 +335,9 @@ class _ChatScreenState extends State<ChatScreen> {
   void _submit() {
     final text = _composerController.text;
     _composerController.clear();
-    _controller.handleComposerSubmit(text);
+    final replyTo = _pendingReplyMessage?.tags['msgid'];
+    setState(() => _pendingReplyMessage = null);
+    _controller.handleComposerSubmit(text, replyTo: replyTo);
   }
 
   Future<void> _openSettings() async {
@@ -270,6 +347,41 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
     await _controller.reloadSettings();
+  }
+
+  Future<void> _openHistoryTools() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _HistoryToolsSheet(controller: _controller),
+    );
+  }
+
+  void _toggleMessageSearch() {
+    setState(() {
+      if (_messageSearchVisible) {
+        _messageSearchVisible = false;
+        _messageSearchController.clear();
+        _messageSearchFilter = _HistoryKindFilter.all;
+      } else {
+        _messageSearchVisible = true;
+      }
+    });
+  }
+
+  void _insertIntoComposer(String text) {
+    final existing = _composerController.text;
+    final next = existing.isEmpty ? text : '$existing $text';
+    setState(() {
+      _composerController.text = next;
+      _composerController.selection = TextSelection.collapsed(offset: next.length);
+    });
+  }
+
+  void _setPendingReply(IrcMessage message) {
+    setState(() {
+      _pendingReplyMessage = message.tags['msgid'] == null ? null : message;
+    });
   }
 
   String _statusText(ConnectionSnapshot snapshot) {
@@ -299,8 +411,540 @@ class _ChatScreenState extends State<ChatScreen> {
         return Icons.alternate_email;
       case ChatTabType.notice:
         return Icons.info_outline;
+      case ChatTabType.dcc:
+        return Icons.swap_horiz;
     }
   }
+
+  String _dccSummary(DccSession session) {
+    final status = session.status.name;
+    return switch (session.type) {
+      DccSessionType.chat =>
+        '${session.direction} chat • ${session.host ?? '?'}:${session.port ?? 0} • $status',
+      DccSessionType.send =>
+        '${session.direction} file • ${session.filename ?? 'file'} • ${session.size ?? 0} B • $status',
+      DccSessionType.unknown => '${session.direction} DCC • $status',
+    };
+  }
+}
+
+class _InlineMessageSearchBar extends StatelessWidget {
+  const _InlineMessageSearchBar({
+    required this.controller,
+    required this.filter,
+    required this.resultCount,
+    required this.onFilterChanged,
+    required this.onChanged,
+    required this.onClose,
+  });
+
+  final TextEditingController controller;
+  final _HistoryKindFilter filter;
+  final int resultCount;
+  final ValueChanged<_HistoryKindFilter> onFilterChanged;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    onChanged: onChanged,
+                    decoration: const InputDecoration(
+                      labelText: 'Search current tab',
+                      prefixIcon: Icon(Icons.search),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: onClose,
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Close message search',
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _HistoryKindFilter.values
+                        .map(
+                          (item) => ChoiceChip(
+                            label: Text(item.label),
+                            selected: filter == item,
+                            onSelected: (_) => onFilterChanged(item),
+                          ),
+                        )
+                        .toList(growable: false),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  '$resultCount matches',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PendingReplyBar extends StatelessWidget {
+  const _PendingReplyBar({
+    required this.message,
+    required this.onCancel,
+  });
+
+  final IrcMessage message;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Row(
+        children: [
+          const Icon(Icons.reply, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Replying to ${message.sender}',
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                Text(
+                  stripIrcFormatting(message.content),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: onCancel,
+            icon: const Icon(Icons.close),
+            tooltip: 'Cancel reply',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TypingIndicator extends StatelessWidget {
+  const _TypingIndicator({required this.users});
+
+  final List<String> users;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final label = switch (users.length) {
+      0 => '',
+      1 => '${users.first} is typing…',
+      2 => '${users.first} and ${users.last} are typing…',
+      _ => '${users.first}, ${users[1]} and ${users.length - 2} more are typing…',
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: Text(
+        label,
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+          fontStyle: FontStyle.italic,
+        ),
+      ),
+    );
+  }
+}
+
+class _DccSessionBanner extends StatelessWidget {
+  const _DccSessionBanner({
+    required this.session,
+    required this.onAccept,
+    required this.onDecline,
+    required this.onClose,
+  });
+
+  final DccSession session;
+  final Future<void> Function() onAccept;
+  final Future<void> Function() onDecline;
+  final Future<void> Function() onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final subtitle = switch (session.type) {
+      DccSessionType.chat =>
+        'Peer: ${session.peerNick} • ${session.host ?? '?'}:${session.port ?? 0} • ${session.status.name}',
+      DccSessionType.send =>
+        'File: ${session.filename ?? 'file'} • ${session.size ?? 0} B • ${session.status.name}',
+      DccSessionType.unknown => 'Peer: ${session.peerNick} • ${session.status.name}',
+    };
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            session.type == DccSessionType.chat ? 'DCC CHAT session' : 'DCC transfer session',
+            style: theme.textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(subtitle, style: theme.textTheme.bodySmall),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (session.status == DccSessionStatus.pending)
+                FilledButton.tonal(onPressed: onAccept, child: const Text('Accept')),
+              if (session.status == DccSessionStatus.pending)
+                FilledButton.tonal(onPressed: onDecline, child: const Text('Decline')),
+              if (session.status != DccSessionStatus.closed)
+                FilledButton.tonal(onPressed: onClose, child: const Text('Close')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReplyPreview extends StatelessWidget {
+  const _ReplyPreview({
+    required this.referenced,
+    required this.replyId,
+  });
+
+  final IrcMessage? referenced;
+  final String replyId;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = referenced == null ? 'Reply' : 'Reply to ${referenced!.sender}';
+    final body = referenced == null
+        ? 'Referenced message: $replyId'
+        : stripIrcFormatting(referenced!.content);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            body,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryToolsSheet extends StatefulWidget {
+  const _HistoryToolsSheet({
+    required this.controller,
+  });
+
+  final ChatSessionController controller;
+
+  @override
+  State<_HistoryToolsSheet> createState() => _HistoryToolsSheetState();
+}
+
+class _HistoryToolsSheetState extends State<_HistoryToolsSheet> {
+  final TextEditingController _searchController = TextEditingController();
+  _HistoryKindFilter _filter = _HistoryKindFilter.all;
+
+  ChatSessionController get _controller => widget.controller;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final messages = _controller.messagesForTab(
+      _controller.activeTabId,
+      query: _searchController.text,
+      kinds: _filter.kinds,
+    );
+    final exportText = _controller.exportTabHistory(
+      _controller.activeTabId,
+      query: _searchController.text,
+      kinds: _filter.kinds,
+    );
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'History tools',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                labelText: 'Search current tab history',
+                prefixIcon: Icon(Icons.search),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _HistoryKindFilter.values
+                  .map(
+                    (filter) => ChoiceChip(
+                      label: Text(filter.label),
+                      selected: _filter == filter,
+                      onSelected: (_) => setState(() => _filter = filter),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+            const SizedBox(height: 12),
+            if (_controller.activeTab.type != ChatTabType.server) ...[
+              Text(
+                'Server playback',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton.tonal(
+                    onPressed: _controller.canRequestServerHistory
+                        ? () => _requestRecentHistory(context, 25)
+                        : null,
+                    child: const Text('Recent 25'),
+                  ),
+                  FilledButton.tonal(
+                    onPressed: _controller.canRequestServerHistory
+                        ? () => _requestRecentHistory(context, 100)
+                        : null,
+                    child: const Text('Recent 100'),
+                  ),
+                  OutlinedButton(
+                    onPressed: _controller.canRequestOlderServerHistory
+                        ? () => _requestOlderHistory(context, 50)
+                        : null,
+                    child: const Text('Older 50'),
+                  ),
+                  OutlinedButton(
+                    onPressed: _controller.canRequestNewerServerHistory
+                        ? () => _requestNewerHistory(context, 50)
+                        : null,
+                    child: const Text('Newer 50'),
+                  ),
+                  OutlinedButton(
+                    onPressed: _controller.canRequestNewerServerHistory
+                        ? () => _requestAroundHistory(context, 50)
+                        : null,
+                    child: const Text('Around latest'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
+            Text(
+              '${messages.length} matching messages',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 240),
+                child: messages.isEmpty
+                    ? const Center(child: Text('No history matches this filter.'))
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: messages.length,
+                        itemBuilder: (context, index) {
+                          final message = messages[messages.length - 1 - index];
+                          return ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(message.sender),
+                            subtitle: Text(
+                              message.content,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: exportText.isEmpty
+                        ? null
+                        : () async {
+                            await Clipboard.setData(ClipboardData(text: exportText));
+                            if (!context.mounted) {
+                              return;
+                            }
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('History copied to clipboard.')),
+                            );
+                          },
+                    icon: const Icon(Icons.copy_all),
+                    label: const Text('Copy export'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _requestRecentHistory(BuildContext context, int limit) async {
+    final success = await _controller.requestRecentHistory(limit: limit);
+    if (!mounted || !context.mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Requested recent history ($limit messages).'
+              : 'Unable to request server history.',
+        ),
+      ),
+    );
+    setState(() {});
+  }
+
+  Future<void> _requestOlderHistory(BuildContext context, int limit) async {
+    final success = await _controller.requestOlderHistory(limit: limit);
+    if (!mounted || !context.mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Requested older history ($limit messages).'
+              : 'Unable to request older history.',
+        ),
+      ),
+    );
+    setState(() {});
+  }
+
+  Future<void> _requestNewerHistory(BuildContext context, int limit) async {
+    final success = await _controller.requestNewerHistory(limit: limit);
+    if (!mounted || !context.mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Requested newer history ($limit messages).'
+              : 'Unable to request newer history.',
+        ),
+      ),
+    );
+    setState(() {});
+  }
+
+  Future<void> _requestAroundHistory(BuildContext context, int limit) async {
+    final success = await _controller.requestAroundLatestHistory(limit: limit);
+    if (!mounted || !context.mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Requested surrounding history ($limit messages).'
+              : 'Unable to request surrounding history.',
+        ),
+      ),
+    );
+    setState(() {});
+  }
+}
+
+enum _HistoryKindFilter {
+  all('All', <IrcMessageKind>{}),
+  chat('Chat', <IrcMessageKind>{IrcMessageKind.chat}),
+  system('System', <IrcMessageKind>{IrcMessageKind.system}),
+  raw('Raw', <IrcMessageKind>{IrcMessageKind.raw});
+
+  const _HistoryKindFilter(this.label, this.kinds);
+
+  final String label;
+  final Set<IrcMessageKind> kinds;
 }
 
 class _ChannelTopicBar extends StatelessWidget {
@@ -410,9 +1054,23 @@ class _ServiceQuickActions extends StatelessWidget {
 class _MessageList extends StatelessWidget {
   const _MessageList({
     required this.messages,
+    required this.showAttachmentPreviews,
+    required this.resolveReplyTarget,
+    required this.resolveReactions,
+    required this.onRedactMessage,
+    required this.onQuoteMessage,
+    required this.onReplyWithNick,
+    required this.onReplyToMessage,
   });
 
   final List<IrcMessage> messages;
+  final bool showAttachmentPreviews;
+  final IrcMessage? Function(String replyId) resolveReplyTarget;
+  final Map<String, int> Function(IrcMessage message) resolveReactions;
+  final Future<bool> Function(IrcMessage message) onRedactMessage;
+  final ValueChanged<IrcMessage> onQuoteMessage;
+  final ValueChanged<IrcMessage> onReplyWithNick;
+  final ValueChanged<IrcMessage> onReplyToMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -429,34 +1087,222 @@ class _MessageList extends StatelessWidget {
       itemBuilder: (context, index) {
         final message = messages[messages.length - 1 - index];
         final align = message.isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start;
-        final bubbleColor = message.isOwn
-            ? Theme.of(context).colorScheme.primaryContainer
-            : Colors.white;
+        final isRedacted = message.tags['redacted'] == 'true';
+        final reactions = resolveReactions(message);
+        final bubbleColor = switch (message.kind) {
+          IrcMessageKind.system => const Color(0xFFF6F8F1),
+          IrcMessageKind.raw => const Color(0xFFF7F7FA),
+          IrcMessageKind.chat => message.isOwn
+              ? Theme.of(context).colorScheme.primaryContainer
+              : Colors.white,
+        };
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Column(
             crossAxisAlignment: align,
             children: [
-              Text(
-                message.sender,
-                style: Theme.of(context).textTheme.labelMedium,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    message.sender,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  if (message.isPlayback) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'History',
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ),
+                  ],
+                ],
               ),
               const SizedBox(height: 3),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: bubbleColor,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  child: _IrcFormattedText(
-                    message.content,
-                    baseStyle: Theme.of(context).textTheme.bodyMedium,
+              GestureDetector(
+                onLongPress: () => _showMessageActions(context, message),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: message.isPlayback
+                        ? bubbleColor.withValues(alpha: 0.88)
+                        : bubbleColor,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if ((message.tags['draft/reply'] ?? '').trim().isNotEmpty)
+                          _ReplyPreview(
+                            referenced: resolveReplyTarget(message.tags['draft/reply']!.trim()),
+                            replyId: message.tags['draft/reply']!.trim(),
+                          ),
+                        _IrcFormattedText(
+                          message.content,
+                          baseStyle: isRedacted
+                              ? Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  fontStyle: FontStyle.italic,
+                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                )
+                              : Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        if (showAttachmentPreviews && !isRedacted)
+                          _MessageAttachments(content: message.content),
+                        if (reactions.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: reactions.entries
+                                .map(
+                                  (entry) => Chip(
+                                    label: Text('${entry.key} ${entry.value}'),
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                )
+                                .toList(growable: false),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ),
               ),
             ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showMessageActions(BuildContext context, IrcMessage message) async {
+    final urls = extractUrls(stripIrcFormatting(message.content));
+    final canRedact = (message.tags['msgid'] ?? '').trim().isNotEmpty;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.7,
+            ),
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.copy),
+                  title: const Text('Copy clean text'),
+                  onTap: () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: stripIrcFormatting(message.content)),
+                    );
+                    if (!context.mounted) {
+                      return;
+                    }
+                    Navigator.of(context).pop();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.code),
+                  title: const Text('Copy raw text'),
+                  onTap: () async {
+                    await Clipboard.setData(ClipboardData(text: message.content));
+                    if (!context.mounted) {
+                      return;
+                    }
+                    Navigator.of(context).pop();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.badge_outlined),
+                  title: const Text('Copy sender'),
+                  onTap: () async {
+                    await Clipboard.setData(ClipboardData(text: message.sender));
+                    if (!context.mounted) {
+                      return;
+                    }
+                    Navigator.of(context).pop();
+                  },
+                ),
+                if (urls.isNotEmpty)
+                  ListTile(
+                    leading: const Icon(Icons.link),
+                    title: const Text('Copy first link'),
+                    onTap: () async {
+                      await Clipboard.setData(ClipboardData(text: urls.first));
+                      if (!context.mounted) {
+                        return;
+                      }
+                      Navigator.of(context).pop();
+                    },
+                  ),
+                if (urls.isNotEmpty)
+                  ListTile(
+                    leading: const Icon(Icons.open_in_new),
+                    title: const Text('Open first link'),
+                    onTap: () async {
+                      await _openExternalUrl(urls.first);
+                      if (!context.mounted) {
+                        return;
+                      }
+                      Navigator.of(context).pop();
+                    },
+                  ),
+                ListTile(
+                  leading: const Icon(Icons.subdirectory_arrow_right),
+                  title: const Text('Reply to message'),
+                  onTap: () {
+                    onReplyToMessage(message);
+                    if (!context.mounted) {
+                      return;
+                    }
+                    Navigator.of(context).pop();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.format_quote),
+                  title: const Text('Quote in composer'),
+                  onTap: () {
+                    onQuoteMessage(message);
+                    if (!context.mounted) {
+                      return;
+                    }
+                    Navigator.of(context).pop();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.reply),
+                  title: const Text('Reply with nick'),
+                  onTap: () {
+                    onReplyWithNick(message);
+                    if (!context.mounted) {
+                      return;
+                    }
+                    Navigator.of(context).pop();
+                  },
+                ),
+                if (canRedact)
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline),
+                    title: const Text('Delete message'),
+                    onTap: () async {
+                      await onRedactMessage(message);
+                      if (!context.mounted) {
+                        return;
+                      }
+                      Navigator.of(context).pop();
+                    },
+                  ),
+              ],
+            ),
           ),
         );
       },
@@ -496,6 +1342,9 @@ class _IrcFormattedText extends StatelessWidget {
               (segment) => TextSpan(
                 text: segment.text,
                 style: _resolveTextStyle(baseStyle, segment),
+                recognizer: segment.isLink
+                    ? (TapGestureRecognizer()..onTap = () => _openExternalUrl(segment.url!))
+                    : null,
               ),
             )
             .toList(growable: false),
@@ -563,6 +1412,153 @@ class _IrcFormattedText extends StatelessWidget {
   Color _parseHexColor(String value) {
     final normalized = value.replaceFirst('#', '');
     return Color(int.parse('FF$normalized', radix: 16));
+  }
+}
+
+class _MessageAttachments extends StatelessWidget {
+  const _MessageAttachments({
+    required this.content,
+  });
+
+  final String content;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = parseMessageContent(stripIrcFormatting(content));
+    final previews = parts
+        .where((part) => part.type != ParsedMessagePartType.text)
+        .toList(growable: false);
+    if (previews.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: previews
+            .map((part) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _AttachmentCard(part: part),
+                ))
+            .toList(growable: false),
+      ),
+    );
+  }
+}
+
+class _AttachmentCard extends StatelessWidget {
+  const _AttachmentCard({
+    required this.part,
+  });
+
+  final ParsedMessagePart part;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final url = part.url;
+    final isImage = part.type == ParsedMessagePartType.image && url != null;
+    final title = switch (part.type) {
+      ParsedMessagePartType.image => 'Image',
+      ParsedMessagePartType.media => 'Encrypted media',
+      ParsedMessagePartType.url => 'Link',
+      ParsedMessagePartType.text => 'Text',
+    };
+    final icon = switch (part.type) {
+      ParsedMessagePartType.image => Icons.image_outlined,
+      ParsedMessagePartType.media => Icons.lock_outline,
+      ParsedMessagePartType.url when url != null && isVideoUrl(url) => Icons.movie_outlined,
+      ParsedMessagePartType.url when url != null && isAudioUrl(url) => Icons.audiotrack_outlined,
+      ParsedMessagePartType.url when url != null && isDownloadableFileUrl(url) => Icons.download_outlined,
+      ParsedMessagePartType.url => Icons.link,
+      ParsedMessagePartType.text => Icons.notes,
+    };
+
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: url == null
+            ? null
+            : () => isImage ? _showImagePreview(context, url) : _openExternalUrl(url),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (isImage) ...[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.network(
+                    url,
+                    height: 160,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => Container(
+                      height: 120,
+                      alignment: Alignment.center,
+                      color: theme.colorScheme.surfaceContainer,
+                      child: const Icon(Icons.broken_image_outlined),
+                    ),
+                    loadingBuilder: (context, child, progress) {
+                      if (progress == null) {
+                        return child;
+                      }
+                      return Container(
+                        height: 120,
+                        alignment: Alignment.center,
+                        color: theme.colorScheme.surfaceContainer,
+                        child: const CircularProgressIndicator(strokeWidth: 2),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(icon, color: theme.colorScheme.primary),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: theme.textTheme.labelLarge,
+                        ),
+                        Text(
+                          part.mediaId ?? part.content,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (url != null)
+                    IconButton(
+                      onPressed: () => _copyToClipboard(context, url),
+                      icon: const Icon(Icons.copy_outlined),
+                      tooltip: 'Copy link',
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -686,4 +1682,64 @@ class _ConnectionBanner extends StatelessWidget {
         return Icons.error_outline;
     }
   }
+}
+
+Future<void> _openExternalUrl(String rawUrl) async {
+  final normalized = rawUrl.contains('://') ? rawUrl : 'https://$rawUrl';
+  final uri = Uri.tryParse(normalized);
+  if (uri == null) {
+    return;
+  }
+
+  await launchUrl(uri, mode: LaunchMode.platformDefault);
+}
+
+Future<void> _copyToClipboard(BuildContext context, String text) async {
+  await Clipboard.setData(ClipboardData(text: text));
+  if (!context.mounted) {
+    return;
+  }
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('Copied to clipboard.')),
+  );
+}
+
+Future<void> _showImagePreview(BuildContext context, String url) async {
+  await showDialog<void>(
+    context: context,
+    builder: (context) {
+      return Dialog.fullscreen(
+        backgroundColor: Colors.black,
+        child: Stack(
+          children: [
+            Center(
+              child: InteractiveViewer(
+                minScale: 1,
+                maxScale: 4,
+                child: Image.network(
+                  url,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => const Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white,
+                    size: 48,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 16,
+              right: 16,
+              child: IconButton(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close, color: Colors.white),
+                tooltip: 'Close image preview',
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }

@@ -19,4 +19,15 @@ void main() {
     expect(frame.params, isEmpty);
     expect(frame.trailing, 'server.example');
   });
+
+  test('parses IRCv3 message tags and server-time', () {
+    final frame = parseIrcMessage(
+      '@time=2026-03-17T10:11:12.000Z;+draft/example=hello\\sworld :nick!user@host PRIVMSG #flutter :hi',
+    );
+
+    expect(frame.tags['time'], '2026-03-17T10:11:12.000Z');
+    expect(frame.tags['+draft/example'], 'hello world');
+    expect(frame.command, 'PRIVMSG');
+    expect(frame.trailing, 'hi');
+  });
 }

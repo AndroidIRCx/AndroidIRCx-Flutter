@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
+import 'package:androidircx/irc/parser/ctcp.dart';
 import 'package:androidircx/irc/parser/irc_message_parser.dart';
 import 'package:androidircx/irc/sasl/scram_sha256_session.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
@@ -11,6 +12,38 @@ import 'package:androidircx/irc/services/irc_transport.dart';
 typedef IrcTransportConnector = Future<IrcTransport> Function(NetworkConfig network);
 
 class IrcService {
+  static const Set<String> _preferredCapabilities = <String>{
+    'account-notify',
+    'account-tag',
+    'away-notify',
+    'batch',
+    'bot',
+    'cap-notify',
+    'chghost',
+    'draft/account-registration',
+    'draft/channel-rename',
+    'draft/multiline',
+    'draft/read-marker',
+    'draft/typing',
+    'draft/message-redaction',
+    'echo-message',
+    'event-playback',
+    'extended-join',
+    'extended-monitor',
+    'invite-notify',
+    'labeled-response',
+    'message-tags',
+    'monitor',
+    'multi-prefix',
+    'server-time',
+    'setname',
+    'standard-replies',
+    'sts',
+    'typing',
+    'userhost-in-names',
+    'utf8only',
+  };
+
   IrcService({
     IrcTransportConnector? transportConnector,
     String Function()? scramNonceGenerator,
@@ -29,6 +62,9 @@ class IrcService {
       StreamController<IrcMessageFrame>.broadcast();
   final StreamController<ConnectionSnapshot> _stateController =
       StreamController<ConnectionSnapshot>.broadcast();
+  final StreamController<({String label, String command, IrcMessageFrame frame})>
+      _labeledResponsesController =
+      StreamController<({String label, String command, IrcMessageFrame frame})>.broadcast();
 
   IrcTransport? _transport;
   StreamSubscription<String>? _linesSubscription;
@@ -46,6 +82,8 @@ class IrcService {
   int _altNickAttempt = 0;
   ScramSha256Session? _scramSession;
   bool _scramAwaitingServerFinal = false;
+  int _labelCounter = 0;
+  final Map<String, String> _pendingLabels = <String, String>{};
 
   ConnectionSnapshot get state => _state;
   String? get currentNick => _currentNick;
@@ -54,6 +92,16 @@ class IrcService {
   Stream<String> get rawEvents => _rawEventsController.stream;
   Stream<IrcMessageFrame> get frames => _framesController.stream;
   Stream<ConnectionSnapshot> get stateStream => _stateController.stream;
+  Stream<({String label, String command, IrcMessageFrame frame})> get labeledResponses =>
+      _labeledResponsesController.stream;
+  bool get supportsChatHistory =>
+      _capEnabled.contains('chathistory') || _capEnabled.contains('draft/chathistory');
+  bool get supportsReadMarker => _capEnabled.contains('draft/read-marker');
+  bool get supportsMessageRedaction => _capEnabled.contains('draft/message-redaction');
+  bool get supportsMultiline => _capEnabled.contains('draft/multiline');
+  bool get supportsTyping =>
+      _capEnabled.contains('typing') || _capEnabled.contains('draft/typing');
+  bool get supportsSetName => _capEnabled.contains('setname');
 
   Future<void> connect(NetworkConfig network) async {
     if (_state.phase == ConnectionPhase.connecting ||
@@ -148,6 +196,20 @@ class IrcService {
     await transport.sendLine(line);
   }
 
+  Future<String> sendRawLabeled(String line) async {
+    if (_capEnabled.contains('labeled-response') ||
+        _capEnabled.contains('draft/labeled-response')) {
+      _labelCounter += 1;
+      final label = 'androidircx-${DateTime.now().millisecondsSinceEpoch}-$_labelCounter';
+      _pendingLabels[label] = line;
+      await sendRaw('@label=$label $line');
+      return label;
+    }
+
+    await sendRaw(line);
+    return '';
+  }
+
   Future<void> joinChannel(String channel) async {
     await sendRaw('JOIN $channel');
   }
@@ -155,8 +217,50 @@ class IrcService {
   Future<void> sendPrivmsg({
     required String target,
     required String text,
+    String? replyTo,
   }) async {
-    await sendRaw('PRIVMSG $target :$text');
+    if (text.contains('\n')) {
+      await _sendMultilinePrivmsg(
+        target: target,
+        text: text,
+        replyTo: replyTo,
+      );
+      return;
+    }
+
+    final normalizedReply = (replyTo ?? '').trim();
+    if (normalizedReply.isEmpty) {
+      await sendRaw('PRIVMSG $target :$text');
+      return;
+    }
+
+    await sendRaw('@+draft/reply=$normalizedReply PRIVMSG $target :$text');
+  }
+
+  Future<void> _sendMultilinePrivmsg({
+    required String target,
+    required String text,
+    String? replyTo,
+  }) async {
+    final lines = text.split('\n');
+    if (!supportsMultiline || lines.length <= 1) {
+      for (final line in lines) {
+        await sendPrivmsg(target: target, text: line, replyTo: replyTo);
+      }
+      return;
+    }
+
+    final concatTag = 'androidircx-multiline-${DateTime.now().millisecondsSinceEpoch}';
+    final normalizedReply = (replyTo ?? '').trim();
+    for (var index = 0; index < lines.length; index += 1) {
+      final line = lines[index];
+      final isLast = index == lines.length - 1;
+      final tags = <String>[
+        'draft/multiline-concat=${isLast ? '' : concatTag}',
+        if (normalizedReply.isNotEmpty && isLast) '+draft/reply=$normalizedReply',
+      ];
+      await sendRaw('@${tags.join(';')} PRIVMSG $target :$line');
+    }
   }
 
   Future<void> sendNotice({
@@ -168,6 +272,15 @@ class IrcService {
 
   Future<void> sendWhois(String nick) async {
     await sendRaw('WHOIS $nick $nick');
+  }
+
+  Future<bool> sendSetName(String realName) async {
+    if (!supportsSetName) {
+      return false;
+    }
+
+    await sendRaw('SETNAME :$realName');
+    return true;
   }
 
   Future<void> sendWho(String mask) async {
@@ -188,6 +301,47 @@ class IrcService {
     await sendRaw(value.isEmpty ? 'LIST' : 'LIST $value');
   }
 
+  Future<bool> sendChatHistory({
+    required String target,
+    String subcommand = 'LATEST',
+    String reference = '*',
+    int limit = 50,
+  }) async {
+    if (!supportsChatHistory) {
+      return false;
+    }
+
+    await sendRawLabeled(
+      'CHATHISTORY ${subcommand.toUpperCase()} $target $reference $limit',
+    );
+    return true;
+  }
+
+  Future<bool> sendReadMarker({
+    required String target,
+    int? timestampMillis,
+  }) async {
+    if (!supportsReadMarker) {
+      return false;
+    }
+
+    final effectiveTimestamp = timestampMillis ?? DateTime.now().millisecondsSinceEpoch;
+    await sendRaw('MARKREAD $target timestamp=$effectiveTimestamp');
+    return true;
+  }
+
+  Future<bool> redactMessage({
+    required String target,
+    required String msgid,
+  }) async {
+    if (!supportsMessageRedaction) {
+      return false;
+    }
+
+    await sendRaw('REDACT $target $msgid');
+    return true;
+  }
+
   Future<void> sendMotd() async {
     await sendRaw('MOTD');
   }
@@ -205,6 +359,40 @@ class IrcService {
   Future<void> sendLinks([String? mask]) async {
     final value = (mask ?? '').trim();
     await sendRaw(value.isEmpty ? 'LINKS' : 'LINKS $value');
+  }
+
+  Future<void> sendIson(List<String> nicknames) async {
+    final filtered = nicknames.map((nick) => nick.trim()).where((nick) => nick.isNotEmpty).toList(growable: false);
+    if (filtered.isEmpty) {
+      return;
+    }
+    await sendRaw('ISON ${filtered.join(' ')}');
+  }
+
+  Future<void> sendUserhost(List<String> nicknames) async {
+    final filtered = nicknames.map((nick) => nick.trim()).where((nick) => nick.isNotEmpty).toList(growable: false);
+    if (filtered.isEmpty) {
+      return;
+    }
+    await sendRaw('USERHOST ${filtered.join(' ')}');
+  }
+
+  Future<void> sendMonitor({
+    required String subcommand,
+    List<String> nicknames = const <String>[],
+  }) async {
+    final normalizedSubcommand = subcommand.trim().toUpperCase();
+    if (normalizedSubcommand.isEmpty) {
+      return;
+    }
+
+    final filtered = nicknames.map((nick) => nick.trim()).where((nick) => nick.isNotEmpty).toList(growable: false);
+    if (filtered.isEmpty) {
+      await sendRaw('MONITOR $normalizedSubcommand');
+      return;
+    }
+
+    await sendRaw('MONITOR $normalizedSubcommand ${filtered.join(',')}');
   }
 
   Future<void> sendInvite({
@@ -281,12 +469,50 @@ class IrcService {
     required String target,
     required String text,
   }) async {
-    await sendRaw('PRIVMSG $target :\u0001ACTION $text\u0001');
+    await sendCtcpRequest(target: target, command: 'ACTION', args: text);
+  }
+
+  Future<void> sendCtcpRequest({
+    required String target,
+    required String command,
+    String? args,
+  }) async {
+    await sendRaw('PRIVMSG $target :${encodeCtcp(command, args)}');
+  }
+
+  Future<void> sendCtcpReply({
+    required String target,
+    required String command,
+    String? args,
+  }) async {
+    await sendRaw('NOTICE $target :${encodeCtcp(command, args)}');
+  }
+
+  Future<bool> sendTyping({
+    required String target,
+    required String status,
+  }) async {
+    if (!supportsTyping) {
+      return false;
+    }
+
+    final tagName = _capEnabled.contains('typing') ? '+typing' : '+draft/typing';
+    await sendRaw('@$tagName=$status TAGMSG $target');
+    return true;
+  }
+
+  Future<void> sendReaction({
+    required String target,
+    required String msgid,
+    required String emoji,
+  }) async {
+    await sendRaw('@+draft/react=$msgid\\:$emoji TAGMSG $target');
   }
 
   void _handleIncomingLine(String line) {
     _rawEventsController.add('<< $line');
     final frame = parseIrcMessage(line);
+    _handleLabeledResponse(frame);
     _framesController.add(frame);
 
     if (frame.command == 'PING') {
@@ -377,8 +603,12 @@ class IrcService {
         _capAvailable.addAll(_parseCapabilityNames(capabilities));
         final isLast = !rest.contains('*');
         if (isLast) {
-          if (_capAvailable.contains('sasl') && _shouldUseSasl(_network)) {
-            unawaited(sendRaw('CAP REQ :sasl'));
+          final requested = <String>{
+            if (_capAvailable.contains('sasl') && _shouldUseSasl(_network)) 'sasl',
+            ..._preferredCapabilities.where(_capAvailable.contains),
+          }.toList(growable: false);
+          if (requested.isNotEmpty) {
+            unawaited(sendRaw('CAP REQ :${requested.join(' ')}'));
           } else {
             unawaited(_endCapNegotiation());
           }
@@ -577,6 +807,7 @@ class IrcService {
 
   void _handleTransportDone() {
     _transport = null;
+    _pendingLabels.clear();
     _updateState(
       ConnectionSnapshot(
         networkId: _state.networkId,
@@ -587,6 +818,7 @@ class IrcService {
   }
 
   void _handleTransportError(Object error, StackTrace stackTrace) {
+    _pendingLabels.clear();
     _updateState(
       ConnectionSnapshot(
         networkId: _state.networkId,
@@ -604,6 +836,7 @@ class IrcService {
   void dispose() {
     _linesSubscription?.cancel();
     _transport?.close();
+    _labeledResponsesController.close();
     _rawEventsController.close();
     _framesController.close();
     _stateController.close();
@@ -678,5 +911,21 @@ class IrcService {
       }
     }
     return names;
+  }
+
+  void _handleLabeledResponse(IrcMessageFrame frame) {
+    final label = frame.tags['label'];
+    if (label == null || label.isEmpty) {
+      return;
+    }
+
+    final command = _pendingLabels.remove(label);
+    if (command == null) {
+      _rawEventsController.add('** Labeled response for unknown label: $label');
+      return;
+    }
+
+    _rawEventsController.add('** Labeled response matched: $label ($command)');
+    _labeledResponsesController.add((label: label, command: command, frame: frame));
   }
 }

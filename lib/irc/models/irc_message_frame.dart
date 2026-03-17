@@ -3,11 +3,13 @@ class IrcMessageFrame {
     required this.raw,
     required this.command,
     required this.params,
+    this.tags = const <String, String?>{},
     this.prefix,
     this.trailing,
   });
 
   final String raw;
+  final Map<String, String?> tags;
   final String? prefix;
   final String command;
   final List<String> params;

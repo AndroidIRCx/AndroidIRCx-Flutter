@@ -7,6 +7,8 @@ class IrcMessage {
     required this.sender,
     required this.content,
     required this.timestamp,
+    this.tags = const <String, String?>{},
+    this.isPlayback = false,
     this.isOwn = false,
     this.kind = IrcMessageKind.chat,
   });
@@ -16,6 +18,8 @@ class IrcMessage {
   final String sender;
   final String content;
   final DateTime timestamp;
+  final Map<String, String?> tags;
+  final bool isPlayback;
   final bool isOwn;
   final IrcMessageKind kind;
 
@@ -26,6 +30,8 @@ class IrcMessage {
       'sender': sender,
       'content': content,
       'timestamp': timestamp.toIso8601String(),
+      'tags': tags,
+      'isPlayback': isPlayback,
       'isOwn': isOwn,
       'kind': kind.name,
     };
@@ -38,6 +44,8 @@ class IrcMessage {
       sender: json['sender']! as String,
       content: json['content']! as String,
       timestamp: DateTime.parse(json['timestamp']! as String),
+      tags: Map<String, String?>.from((json['tags'] as Map?) ?? const <String, String?>{}),
+      isPlayback: (json['isPlayback'] as bool?) ?? false,
       isOwn: (json['isOwn'] as bool?) ?? false,
       kind: IrcMessageKind.values.byName(
         (json['kind'] as String?) ?? IrcMessageKind.chat.name,
