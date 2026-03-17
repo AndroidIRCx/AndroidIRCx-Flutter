@@ -11,10 +11,18 @@ import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
+import 'package:androidircx/irc/parser/ctcp.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:flutter/foundation.dart';
 
 class ChatSessionController extends ChangeNotifier {
+  static const _ctcpVersionReply = 'AndroidIRCx Flutter 1.0.0';
+  static const _ctcpClientInfoReply =
+      'ACTION CLIENTINFO DCC FINGER PING SOURCE TIME USERINFO VERSION';
+  static const _ctcpUserInfoReply = 'AndroidIRCx Flutter user';
+  static const _ctcpSourceReply = 'https://github.com/AndroidIRCx/AndroidIRCx-Flutter';
+  static const _ctcpFingerReply = 'AndroidIRCx Flutter';
+
   ChatSessionController({
     required this.network,
     IrcService? ircService,
@@ -46,6 +54,7 @@ class ChatSessionController extends ChangeNotifier {
   final Map<String, Set<String>> _channelUsers = {};
   final Map<String, String> _channelTopics = {};
   final Map<String, String> _channelModes = {};
+  final Map<String, ({String type, int messageCount})> _activeBatches = {};
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   Timer? _reconnectTimer;
 
@@ -70,6 +79,12 @@ class ChatSessionController extends ChangeNotifier {
   Duration? get pendingReconnectDelay => _pendingReconnectDelay;
   ChatTab get activeTab => _tabs.firstWhere((tab) => tab.id == _activeTabId);
   String get currentNick => _ircService.currentNick ?? network.nickname;
+  bool get canRequestServerHistory =>
+      activeTab.type != ChatTabType.server && _ircService.supportsChatHistory;
+  bool get canRequestOlderServerHistory =>
+      canRequestServerHistory && _oldestMsgIdForTab(_activeTabId) != null;
+  bool get canRequestNewerServerHistory =>
+      canRequestServerHistory && _latestMsgIdForTab(_activeTabId) != null;
   int get activityCount => _tabs.where((tab) => tab.hasActivity).length;
   bool get hasActivity => activityCount > 0;
   String? get activeChannelTopic => _channelTopics[activeTabId];
@@ -97,14 +112,7 @@ class ChatSessionController extends ChangeNotifier {
     return List<String>.unmodifiable(sorted);
   }
   List<IrcMessage> get activeMessages {
-    final source = _messages[_activeTabId] ?? const <IrcMessage>[];
-    if (_settings.showRawEvents) {
-      return List<IrcMessage>.unmodifiable(source);
-    }
-
-    return List<IrcMessage>.unmodifiable(
-      source.where((message) => message.kind != IrcMessageKind.raw),
-    );
+    return messagesForTab(_activeTabId);
   }
 
   Future<void> start() async {
@@ -128,6 +136,17 @@ class ChatSessionController extends ChangeNotifier {
           sender: '*',
           content: line,
           kind: IrcMessageKind.raw,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+      }));
+      _subscriptions.add(_ircService.labeledResponses.listen((event) {
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content:
+              'Labeled response matched: ${event.command} [${event.label}]',
+          kind: IrcMessageKind.system,
         );
         unawaited(_persistState());
         notifyListeners();
@@ -185,14 +204,230 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     await _ircService.sendPrivmsg(target: activeTab.name, text: text);
+    if (!_ircService.enabledCapabilities.contains('echo-message')) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: _ircService.currentNick ?? network.nickname,
+        content: text,
+        isOwn: true,
+      );
+    }
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  List<IrcMessage> messagesForTab(
+    String tabId, {
+    String query = '',
+    Set<IrcMessageKind>? kinds,
+  }) {
+    final source = _messages[tabId] ?? const <IrcMessage>[];
+    final normalizedQuery = query.trim().toLowerCase();
+    final effectiveKinds = kinds ?? <IrcMessageKind>{};
+    return List<IrcMessage>.unmodifiable(
+      source.where((message) {
+        if (!_settings.showRawEvents && message.kind == IrcMessageKind.raw) {
+          return false;
+        }
+        if (effectiveKinds.isNotEmpty && !effectiveKinds.contains(message.kind)) {
+          return false;
+        }
+        if (normalizedQuery.isEmpty) {
+          return true;
+        }
+
+        return message.sender.toLowerCase().contains(normalizedQuery) ||
+            message.content.toLowerCase().contains(normalizedQuery);
+      }),
+    );
+  }
+
+  String exportTabHistory(
+    String tabId, {
+    String query = '',
+    Set<IrcMessageKind>? kinds,
+  }) {
+    final messages = messagesForTab(tabId, query: query, kinds: kinds);
+    return messages
+        .map((message) {
+          final stamp = message.timestamp.toIso8601String();
+          final tags = message.tags.isEmpty
+              ? ''
+              : ' [tags: ${message.tags.entries.map((e) => e.value == null ? e.key : '${e.key}=${e.value}').join(', ')}]';
+          return '[$stamp] <${message.sender}> ${message.content}$tags';
+        })
+        .join('\n');
+  }
+
+  Future<bool> requestRecentHistory({int limit = 50}) async {
+    if (activeTab.type == ChatTabType.server) {
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: 'error',
+        content: 'Open a channel or query tab to request CHATHISTORY.',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return false;
+    }
+
+    final normalizedLimit = limit.clamp(1, 200);
+    final success = await _ircService.sendChatHistory(
+      target: activeTab.name,
+      subcommand: 'LATEST',
+      reference: '*',
+      limit: normalizedLimit,
+    );
     _appendMessage(
-      tabId: activeTab.id,
-      sender: _ircService.currentNick ?? network.nickname,
-      content: text,
-      isOwn: true,
+      tabId: _serverTabId(network.id),
+      sender: success ? '*' : 'error',
+      content: success
+          ? 'Requested recent history for ${activeTab.name} ($normalizedLimit messages).'
+          : 'CHATHISTORY is not supported by this server.',
+      kind: IrcMessageKind.system,
     );
     unawaited(_persistState());
     notifyListeners();
+    return success;
+  }
+
+  Future<bool> requestOlderHistory({int limit = 50}) async {
+    if (activeTab.type == ChatTabType.server) {
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: 'error',
+        content: 'Open a channel or query tab to request CHATHISTORY.',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return false;
+    }
+
+    final reference = _oldestMsgIdForTab(_activeTabId);
+    if (reference == null) {
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: 'error',
+        content: 'No history anchor is available yet for ${activeTab.name}.',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return false;
+    }
+
+    final normalizedLimit = limit.clamp(1, 200);
+    final success = await _ircService.sendChatHistory(
+      target: activeTab.name,
+      subcommand: 'BEFORE',
+      reference: reference,
+      limit: normalizedLimit,
+    );
+    _appendMessage(
+      tabId: _serverTabId(network.id),
+      sender: success ? '*' : 'error',
+      content: success
+          ? 'Requested older history for ${activeTab.name} before $reference ($normalizedLimit messages).'
+          : 'CHATHISTORY is not supported by this server.',
+      kind: IrcMessageKind.system,
+    );
+    unawaited(_persistState());
+    notifyListeners();
+    return success;
+  }
+
+  Future<bool> requestNewerHistory({int limit = 50}) async {
+    if (activeTab.type == ChatTabType.server) {
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: 'error',
+        content: 'Open a channel or query tab to request CHATHISTORY.',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return false;
+    }
+
+    final reference = _latestMsgIdForTab(_activeTabId);
+    if (reference == null) {
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: 'error',
+        content: 'No recent history anchor is available yet for ${activeTab.name}.',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return false;
+    }
+
+    final normalizedLimit = limit.clamp(1, 200);
+    final success = await _ircService.sendChatHistory(
+      target: activeTab.name,
+      subcommand: 'AFTER',
+      reference: reference,
+      limit: normalizedLimit,
+    );
+    _appendMessage(
+      tabId: _serverTabId(network.id),
+      sender: success ? '*' : 'error',
+      content: success
+          ? 'Requested newer history for ${activeTab.name} after $reference ($normalizedLimit messages).'
+          : 'CHATHISTORY is not supported by this server.',
+      kind: IrcMessageKind.system,
+    );
+    unawaited(_persistState());
+    notifyListeners();
+    return success;
+  }
+
+  Future<bool> requestAroundLatestHistory({int limit = 50}) async {
+    if (activeTab.type == ChatTabType.server) {
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: 'error',
+        content: 'Open a channel or query tab to request CHATHISTORY.',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return false;
+    }
+
+    final reference = _latestMsgIdForTab(_activeTabId);
+    if (reference == null) {
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: 'error',
+        content: 'No recent history anchor is available yet for ${activeTab.name}.',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return false;
+    }
+
+    final normalizedLimit = limit.clamp(1, 200);
+    final success = await _ircService.sendChatHistory(
+      target: activeTab.name,
+      subcommand: 'AROUND',
+      reference: reference,
+      limit: normalizedLimit,
+    );
+    _appendMessage(
+      tabId: _serverTabId(network.id),
+      sender: success ? '*' : 'error',
+      content: success
+          ? 'Requested surrounding history for ${activeTab.name} around $reference ($normalizedLimit messages).'
+          : 'CHATHISTORY is not supported by this server.',
+      kind: IrcMessageKind.system,
+    );
+    unawaited(_persistState());
+    notifyListeners();
+    return success;
   }
 
   Future<void> joinChannel(JoinChannelRequest request) async {
@@ -298,12 +533,14 @@ class ChatSessionController extends ChangeNotifier {
           if (text.isNotEmpty) {
             final tab = _ensureQueryTab(target);
             await _ircService.sendPrivmsg(target: target, text: text);
-            _appendMessage(
-              tabId: tab.id,
-              sender: _ircService.currentNick ?? network.nickname,
-              content: text,
-              isOwn: true,
-            );
+            if (!_ircService.enabledCapabilities.contains('echo-message')) {
+              _appendMessage(
+                tabId: tab.id,
+                sender: _ircService.currentNick ?? network.nickname,
+                content: text,
+                isOwn: true,
+              );
+            }
             unawaited(_persistState());
             notifyListeners();
             return;
@@ -320,12 +557,14 @@ class ChatSessionController extends ChangeNotifier {
               _activeTabId = tabId;
             }
             await _ircService.sendNotice(target: target, text: text);
-            _appendMessage(
-              tabId: tabId,
-              sender: currentNick,
-              content: text,
-              isOwn: true,
-            );
+            if (!_ircService.enabledCapabilities.contains('echo-message')) {
+              _appendMessage(
+                tabId: tabId,
+                sender: currentNick,
+                content: text,
+                isOwn: true,
+              );
+            }
             unawaited(_persistState());
             notifyListeners();
             return;
@@ -364,12 +603,42 @@ class ChatSessionController extends ChangeNotifier {
       case 'me':
         if (rest.isNotEmpty && activeTab.type != ChatTabType.server) {
           await _ircService.sendAction(target: activeTab.name, text: rest);
-          _appendMessage(
-            tabId: activeTab.id,
-            sender: _ircService.currentNick ?? network.nickname,
-            content: '• $rest',
-            isOwn: true,
+          if (!_ircService.enabledCapabilities.contains('echo-message')) {
+            _appendMessage(
+              tabId: activeTab.id,
+              sender: _ircService.currentNick ?? network.nickname,
+              content: '• $rest',
+              isOwn: true,
+            );
+          }
+          unawaited(_persistState());
+          notifyListeners();
+          return;
+        }
+      case 'ctcp':
+        final segments = rest.split(RegExp(r'\s+'));
+        if (segments.length >= 2) {
+          final target = segments.first;
+          final ctcpCommand = segments[1].toUpperCase();
+          final args = segments.length > 2 ? segments.skip(2).join(' ') : null;
+          await _ircService.sendCtcpRequest(
+            target: target,
+            command: ctcpCommand,
+            args: args,
           );
+          final tabId = _resolveOutgoingMessageTabId(target);
+          if (!target.startsWith('#')) {
+            _activeTabId = tabId;
+          }
+          if (!_ircService.enabledCapabilities.contains('echo-message')) {
+            _appendMessage(
+              tabId: tabId,
+              sender: currentNick,
+              content: _formatOutgoingCtcpMessage(ctcpCommand, args),
+              isOwn: true,
+              kind: IrcMessageKind.system,
+            );
+          }
           unawaited(_persistState());
           notifyListeners();
           return;
@@ -407,6 +676,36 @@ class ChatSessionController extends ChangeNotifier {
           tabId: _serverTabId(network.id),
           sender: '*',
           content: rest.isEmpty ? 'Requested channel list.' : 'Requested channel list for: $rest',
+          kind: IrcMessageKind.system,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+        return;
+      case 'chathistory':
+        if (activeTab.type == ChatTabType.server) {
+          _appendMessage(
+            tabId: _serverTabId(network.id),
+            sender: 'error',
+            content: 'Usage: open a channel or query tab, then use /chathistory [limit]',
+            kind: IrcMessageKind.system,
+          );
+          unawaited(_persistState());
+          notifyListeners();
+          return;
+        }
+        final request = _parseChatHistoryRequest(rest);
+        final success = await _ircService.sendChatHistory(
+          target: activeTab.name,
+          subcommand: request.subcommand,
+          reference: request.reference,
+          limit: request.limit,
+        );
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: success ? '*' : 'error',
+          content: success
+              ? 'Requested CHATHISTORY ${request.subcommand} for ${activeTab.name} (${request.reference}, ${request.limit} messages).'
+              : 'CHATHISTORY is not supported by this server.',
           kind: IrcMessageKind.system,
         );
         unawaited(_persistState());
@@ -908,6 +1207,10 @@ class ChatSessionController extends ChangeNotifier {
         );
       case 'CAP':
         _handleCapabilityFrame(frame);
+      case 'BATCH':
+        _handleBatch(frame);
+      case 'TAGMSG':
+        _handleTagmsg(frame);
       case 'NOTICE':
         _handleNotice(frame);
       case 'TOPIC':
@@ -949,16 +1252,22 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    final tabId = _resolveMessageTabId(
-      target: target,
-      senderNick: frame.senderNick,
-      preferServerForDirectMessages: false,
-    );
+    final ctcp = parseCtcp(content);
+    if (ctcp.isCtcp && ctcp.command != null) {
+      _handleCtcpReply(frame, ctcp);
+      return;
+    }
+
+    final tabId = _resolveNoticeTabId(target: target, senderNick: frame.senderNick);
 
     _appendMessage(
       tabId: tabId,
       sender: frame.senderNick ?? 'notice',
       content: content,
+      timestamp: _timestampForFrame(frame),
+      tags: frame.tags,
+      isPlayback: _isPlaybackBatch(frame.tags['batch']),
+      isOwn: _isSelfEcho(frame.senderNick),
     );
     _markActivityIfInactive(tabId);
   }
@@ -967,6 +1276,53 @@ class ChatSessionController extends ChangeNotifier {
     final target = _firstOrNull(frame.params);
     final content = frame.trailing;
     if (target == null || content == null) {
+      return;
+    }
+
+    final intentTag = frame.tags['draft/intent']?.toUpperCase();
+    if (intentTag == 'ACTION') {
+      final tabId = _resolveMessageTabId(
+        target: target,
+        senderNick: frame.senderNick,
+        preferServerForDirectMessages: false,
+      );
+      _appendMessage(
+        tabId: tabId,
+        sender: frame.senderNick ?? target,
+        content: '• $content',
+        timestamp: _timestampForFrame(frame),
+        tags: frame.tags,
+        isPlayback: _isPlaybackBatch(frame.tags['batch']),
+        isOwn: _isSelfEcho(frame.senderNick),
+      );
+      _markActivityIfInactive(tabId);
+      _incrementBatchCount(frame.tags['batch']);
+      return;
+    }
+
+    final ctcp = parseCtcp(content);
+    if (ctcp.isCtcp && ctcp.command != null) {
+      if (ctcp.command == 'ACTION') {
+        final tabId = _resolveMessageTabId(
+          target: target,
+          senderNick: frame.senderNick,
+          preferServerForDirectMessages: false,
+        );
+        _appendMessage(
+          tabId: tabId,
+          sender: frame.senderNick ?? target,
+          content: '• ${ctcp.args ?? ''}'.trimRight(),
+          timestamp: _timestampForFrame(frame),
+          tags: frame.tags,
+          isPlayback: _isPlaybackBatch(frame.tags['batch']),
+          isOwn: _isSelfEcho(frame.senderNick),
+        );
+        _markActivityIfInactive(tabId);
+        _incrementBatchCount(frame.tags['batch']);
+        return;
+      }
+
+      _handleCtcpRequest(frame, ctcp);
       return;
     }
 
@@ -980,8 +1336,34 @@ class ChatSessionController extends ChangeNotifier {
       tabId: tabId,
       sender: frame.senderNick ?? target,
       content: _normalizeContent(content),
+      timestamp: _timestampForFrame(frame),
+      tags: frame.tags,
+      isPlayback: _isPlaybackBatch(frame.tags['batch']),
+      isOwn: _isSelfEcho(frame.senderNick),
     );
     _markActivityIfInactive(tabId);
+    _incrementBatchCount(frame.tags['batch']);
+  }
+
+  void _handleTagmsg(IrcMessageFrame frame) {
+    final target = _firstOrNull(frame.params);
+    if (target == null) {
+      return;
+    }
+
+    final tabId = _resolveNoticeTabId(target: target, senderNick: frame.senderNick);
+    _appendMessage(
+      tabId: tabId,
+      sender: '*',
+      content:
+          'TAGMSG from ${frame.senderNick ?? target}${frame.tags.isEmpty ? '' : ' (${frame.tags.keys.join(', ')})'}',
+      timestamp: _timestampForFrame(frame),
+      tags: frame.tags,
+      isPlayback: _isPlaybackBatch(frame.tags['batch']),
+      kind: IrcMessageKind.system,
+    );
+    _markActivityIfInactive(tabId);
+    _incrementBatchCount(frame.tags['batch']);
   }
 
   void _handleTopic(IrcMessageFrame frame) {
@@ -1030,6 +1412,177 @@ class ChatSessionController extends ChangeNotifier {
     return content;
   }
 
+  void _handleBatch(IrcMessageFrame frame) {
+    if (frame.params.isEmpty) {
+      return;
+    }
+
+    final batchToken = frame.params.first;
+    if (batchToken.startsWith('+')) {
+      final ref = batchToken.substring(1);
+      final type = frame.params.length > 1 ? frame.params[1] : 'unknown';
+      _activeBatches[ref] = (type: type, messageCount: 0);
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: '*',
+        content: 'BATCH start: $type${frame.params.length > 2 ? ' ${frame.params.skip(2).join(' ')}' : ''}',
+        timestamp: _timestampForFrame(frame),
+        tags: frame.tags,
+        kind: IrcMessageKind.system,
+      );
+      return;
+    }
+
+    if (batchToken.startsWith('-')) {
+      final ref = batchToken.substring(1);
+      final batch = _activeBatches.remove(ref);
+      final type = batch?.type ?? 'unknown';
+      final summary = switch (type) {
+        'chathistory' || 'history' || 'znc.in/playback' =>
+          'Playback batch completed: ${batch?.messageCount ?? 0} messages',
+        'netsplit' => 'Netsplit batch completed: ${batch?.messageCount ?? 0} events',
+        'netjoin' => 'Netjoin batch completed: ${batch?.messageCount ?? 0} events',
+        _ => 'BATCH end: $type (${batch?.messageCount ?? 0} messages)',
+      };
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: '*',
+        content: summary,
+        timestamp: _timestampForFrame(frame),
+        tags: frame.tags,
+        kind: IrcMessageKind.system,
+      );
+    }
+  }
+
+  void _handleCtcpRequest(IrcMessageFrame frame, CtcpMessage ctcp) {
+    final target = _firstOrNull(frame.params);
+    final senderNick = frame.senderNick;
+    if (target == null || senderNick == null || ctcp.command == null) {
+      return;
+    }
+
+    final tabId = _resolveMessageTabId(
+      target: target,
+      senderNick: senderNick,
+      preferServerForDirectMessages: false,
+    );
+    final command = ctcp.command!;
+    _appendMessage(
+      tabId: tabId,
+      sender: '*',
+      content: _formatIncomingCtcpRequest(senderNick, command, ctcp.args),
+      kind: IrcMessageKind.system,
+    );
+    _markActivityIfInactive(tabId);
+    unawaited(_respondToCtcpRequest(senderNick, command, ctcp.args));
+  }
+
+  void _handleCtcpReply(IrcMessageFrame frame, CtcpMessage ctcp) {
+    final target = _firstOrNull(frame.params);
+    final senderNick = frame.senderNick;
+    if (target == null || senderNick == null || ctcp.command == null) {
+      return;
+    }
+
+    final tabId = _resolveMessageTabId(
+      target: target,
+      senderNick: senderNick,
+      preferServerForDirectMessages: false,
+    );
+    _appendMessage(
+      tabId: tabId,
+      sender: '*',
+      content: _formatIncomingCtcpReply(senderNick, ctcp.command!, ctcp.args),
+      kind: IrcMessageKind.system,
+    );
+    _markActivityIfInactive(tabId);
+  }
+
+  Future<void> _respondToCtcpRequest(String from, String command, String? args) async {
+    switch (command) {
+      case 'VERSION':
+        await _ircService.sendCtcpReply(
+          target: from,
+          command: 'VERSION',
+          args: _ctcpVersionReply,
+        );
+      case 'TIME':
+        await _ircService.sendCtcpReply(
+          target: from,
+          command: 'TIME',
+          args: DateTime.now().toUtc().toIso8601String(),
+        );
+      case 'PING':
+        await _ircService.sendCtcpReply(
+          target: from,
+          command: 'PING',
+          args: (args ?? '').trim().isEmpty
+              ? DateTime.now().millisecondsSinceEpoch.toString()
+              : args,
+        );
+      case 'CLIENTINFO':
+        await _ircService.sendCtcpReply(
+          target: from,
+          command: 'CLIENTINFO',
+          args: _ctcpClientInfoReply,
+        );
+      case 'USERINFO':
+        await _ircService.sendCtcpReply(
+          target: from,
+          command: 'USERINFO',
+          args: _ctcpUserInfoReply,
+        );
+      case 'SOURCE':
+        await _ircService.sendCtcpReply(
+          target: from,
+          command: 'SOURCE',
+          args: _ctcpSourceReply,
+        );
+      case 'FINGER':
+        await _ircService.sendCtcpReply(
+          target: from,
+          command: 'FINGER',
+          args: _ctcpFingerReply,
+        );
+      case 'DCC':
+      case 'XDCC':
+      case 'TDCC':
+      case 'RDCC':
+      case 'ACTION':
+        return;
+      default:
+        return;
+    }
+  }
+
+  String _formatOutgoingCtcpMessage(String command, String? args) {
+    final suffix = (args ?? '').trim();
+    if (suffix.isEmpty) {
+      return 'Sent CTCP $command';
+    }
+
+    return 'Sent CTCP $command: $suffix';
+  }
+
+  String _formatIncomingCtcpRequest(String from, String command, String? args) {
+    final suffix = (args ?? '').trim();
+    if (suffix.isEmpty) {
+      return 'CTCP $command request from $from';
+    }
+
+    return 'CTCP $command request from $from: $suffix';
+  }
+
+  String _formatIncomingCtcpReply(String from, String command, String? args) {
+    final suffix = (args ?? '').trim();
+    if (suffix.isEmpty) {
+      return 'CTCP $command reply from $from';
+    }
+
+    return 'CTCP $command reply from $from: $suffix';
+  }
+
   ChatTab _ensureChannelTab(String channel) {
     final existing = _findTab(_channelTabId(network.id, channel));
     if (existing != null) {
@@ -1066,6 +1619,23 @@ class ChatSessionController extends ChangeNotifier {
     return tab;
   }
 
+  ChatTab _ensureNoticeTab() {
+    final existing = _findTab(_noticeTabId(network.id));
+    if (existing != null) {
+      return existing;
+    }
+
+    final tab = ChatTab(
+      id: _noticeTabId(network.id),
+      name: 'Notices',
+      type: ChatTabType.notice,
+      networkId: network.id,
+    );
+    _tabs = [..._tabs, tab];
+    _messages.putIfAbsent(tab.id, () => []);
+    return tab;
+  }
+
   String _resolveMessageTabId({
     required String target,
     required String? senderNick,
@@ -1073,6 +1643,11 @@ class ChatSessionController extends ChangeNotifier {
   }) {
     if (target.startsWith('#')) {
       return _ensureChannelTab(target).id;
+    }
+
+    if (_isSelfEcho(senderNick) &&
+        target != (_ircService.currentNick ?? network.nickname)) {
+      return _ensureQueryTab(target).id;
     }
 
     final normalizedSender = _normalizeServiceNick(senderNick);
@@ -1095,6 +1670,29 @@ class ChatSessionController extends ChangeNotifier {
     return _ensureQueryTab(target).id;
   }
 
+  String _resolveNoticeTabId({
+    required String target,
+    required String? senderNick,
+  }) {
+    switch (_settings.noticeRouting) {
+      case NoticeRoutingMode.server:
+        return _resolveMessageTabId(
+          target: target,
+          senderNick: senderNick,
+          preferServerForDirectMessages: false,
+        );
+      case NoticeRoutingMode.active:
+        return activeTab.id;
+      case NoticeRoutingMode.notice:
+        return _ensureNoticeTab().id;
+      case NoticeRoutingMode.private:
+        if (senderNick != null && senderNick.trim().isNotEmpty) {
+          return _ensureQueryTab(senderNick).id;
+        }
+        return _ensureNoticeTab().id;
+    }
+  }
+
   ChatTab? _findTab(String id) {
     for (final tab in _tabs) {
       if (tab.id == id) {
@@ -1109,17 +1707,26 @@ class ChatSessionController extends ChangeNotifier {
     required String tabId,
     required String sender,
     required String content,
+    DateTime? timestamp,
+    Map<String, String?> tags = const <String, String?>{},
+    bool isPlayback = false,
     bool isOwn = false,
     IrcMessageKind kind = IrcMessageKind.chat,
   }) {
     final list = _messages.putIfAbsent(tabId, () => []);
+    final msgid = tags['msgid'];
+    if (msgid != null && list.any((item) => item.tags['msgid'] == msgid)) {
+      return;
+    }
     list.add(
       IrcMessage(
         id: '${DateTime.now().microsecondsSinceEpoch}-${list.length}',
         tabId: tabId,
         sender: sender,
         content: content,
-        timestamp: DateTime.now(),
+        timestamp: timestamp ?? DateTime.now(),
+        tags: Map<String, String?>.unmodifiable(tags),
+        isPlayback: isPlayback,
         isOwn: isOwn,
         kind: kind,
       ),
@@ -1188,12 +1795,14 @@ class ChatSessionController extends ChangeNotifier {
     final tab = _ensureQueryTab(service);
     _activeTabId = tab.id;
     await _ircService.sendPrivmsg(target: service, text: command);
-    _appendMessage(
-      tabId: tab.id,
-      sender: currentNick,
-      content: command,
-      isOwn: true,
-    );
+    if (!_ircService.enabledCapabilities.contains('echo-message')) {
+      _appendMessage(
+        tabId: tab.id,
+        sender: currentNick,
+        content: command,
+        isOwn: true,
+      );
+    }
     unawaited(_persistState());
     notifyListeners();
   }
@@ -1368,6 +1977,114 @@ class ChatSessionController extends ChangeNotifier {
     }
   }
 
+  bool _isSelfEcho(String? senderNick) {
+    final sender = senderNick?.trim();
+    if (sender == null || sender.isEmpty) {
+      return false;
+    }
+
+    return sender.toLowerCase() ==
+        (_ircService.currentNick ?? network.nickname).toLowerCase();
+  }
+
+  DateTime? _timestampForFrame(IrcMessageFrame frame) {
+    final timeTag = frame.tags['time'];
+    if (timeTag == null || timeTag.trim().isEmpty) {
+      return null;
+    }
+
+    return DateTime.tryParse(timeTag);
+  }
+
+  bool _isPlaybackBatch(String? batchTag) {
+    final batchId = (batchTag ?? '').trim();
+    if (batchId.isEmpty) {
+      return false;
+    }
+
+    final batch = _activeBatches[batchId];
+    if (batch == null) {
+      return false;
+    }
+
+    return switch (batch.type) {
+      'chathistory' || 'history' || 'znc.in/playback' => true,
+      _ => false,
+    };
+  }
+
+  ({String subcommand, String reference, int limit}) _parseChatHistoryRequest(
+    String rest,
+  ) {
+    final parts = rest
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+    if (parts.isEmpty) {
+      return (subcommand: 'LATEST', reference: '*', limit: 50);
+    }
+
+    final keyword = parts.first.toUpperCase();
+    if (keyword == 'LATEST') {
+      final limit = parts.length > 1 ? int.tryParse(parts[1]) ?? 50 : 50;
+      return (subcommand: 'LATEST', reference: '*', limit: limit.clamp(1, 200));
+    }
+
+    if (keyword == 'BEFORE' || keyword == 'AFTER' || keyword == 'AROUND') {
+      final fallbackReference = _latestMsgIdForTab(activeTab.id) ?? '*';
+      final second = parts.length > 1 ? parts[1] : null;
+      final third = parts.length > 2 ? parts[2] : null;
+      final secondAsLimit = second == null ? null : int.tryParse(second);
+      final reference = second == null || secondAsLimit != null
+          ? fallbackReference
+          : second;
+      final limit = third != null
+          ? int.tryParse(third) ?? 50
+          : secondAsLimit ?? 50;
+      return (
+        subcommand: keyword,
+        reference: reference,
+        limit: limit.clamp(1, 200),
+      );
+    }
+
+    final limit = int.tryParse(parts.first) ?? 50;
+    return (subcommand: 'LATEST', reference: '*', limit: limit.clamp(1, 200));
+  }
+
+  String? _latestMsgIdForTab(String tabId) {
+    final messages = _messages[tabId];
+    if (messages == null) {
+      return null;
+    }
+
+    for (final message in messages.reversed) {
+      final msgid = message.tags['msgid'];
+      if (msgid != null && msgid.trim().isNotEmpty) {
+        return msgid;
+      }
+    }
+
+    return null;
+  }
+
+  String? _oldestMsgIdForTab(String tabId) {
+    final messages = _messages[tabId];
+    if (messages == null) {
+      return null;
+    }
+
+    for (final message in messages) {
+      final msgid = message.tags['msgid'];
+      if (msgid != null && msgid.trim().isNotEmpty) {
+        return msgid;
+      }
+    }
+
+    return null;
+  }
+
   void _removeUserFromAllChannels(String? nick) {
     if (nick == null || nick.isEmpty) {
       return;
@@ -1398,6 +2115,23 @@ class ChatSessionController extends ChangeNotifier {
     _setTabActivity(tabId, true);
   }
 
+  void _incrementBatchCount(String? batchTag) {
+    final batchId = (batchTag ?? '').trim();
+    if (batchId.isEmpty) {
+      return;
+    }
+
+    final batch = _activeBatches[batchId];
+    if (batch == null) {
+      return;
+    }
+
+    _activeBatches[batchId] = (
+      type: batch.type,
+      messageCount: batch.messageCount + 1,
+    );
+  }
+
   void _setTabActivity(String tabId, bool hasActivity) {
     _tabs = _tabs
         .map(
@@ -1418,5 +2152,6 @@ class ChatSessionController extends ChangeNotifier {
 }
 
 String _serverTabId(String networkId) => 'server::$networkId';
+String _noticeTabId(String networkId) => 'notice::$networkId';
 String _channelTabId(String networkId, String name) => 'channel::$networkId::$name';
 String _queryTabId(String networkId, String nick) => 'query::$networkId::$nick';

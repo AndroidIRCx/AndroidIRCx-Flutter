@@ -101,13 +101,23 @@ void main() {
       expect(saved.webSocketPort, 16697);
     });
 
-    test('settings repository saves and loads showRawEvents', () async {
+    test('settings repository saves and loads chat display settings', () async {
       final repository = SharedPrefsSettingsRepository();
 
-      await repository.saveSettings(const AppSettings(showRawEvents: false));
+      await repository.saveSettings(
+        const AppSettings(
+          showRawEvents: false,
+          noticeRouting: NoticeRoutingMode.notice,
+          showHeaderSearchButton: false,
+          showAttachmentPreviews: false,
+        ),
+      );
       final settings = await repository.loadSettings();
 
       expect(settings.showRawEvents, isFalse);
+      expect(settings.noticeRouting, NoticeRoutingMode.notice);
+      expect(settings.showHeaderSearchButton, isFalse);
+      expect(settings.showAttachmentPreviews, isFalse);
     });
 
     test('chat session persistence saves tabs and history', () async {
@@ -124,6 +134,7 @@ void main() {
         sender: 'nick',
         content: 'hello',
         timestamp: DateTime(2026, 3, 16, 12, 0),
+        tags: const <String, String?>{'time': '2026-03-16T12:00:00.000Z'},
       );
 
       await persistence.save(
@@ -141,6 +152,7 @@ void main() {
       expect(snapshot!.tabs.single.name, '#flutter');
       expect(snapshot.activeTabId, tab.id);
       expect(snapshot.messagesByTab[tab.id]!.single.content, 'hello');
+      expect(snapshot.messagesByTab[tab.id]!.single.tags['time'], '2026-03-16T12:00:00.000Z');
     });
 
     test('chat session persistence restores growable message lists', () async {
