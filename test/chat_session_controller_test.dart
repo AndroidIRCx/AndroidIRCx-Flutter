@@ -1399,7 +1399,9 @@ void main() {
       ircService: service,
       dccService: DccService(backend: dccBackend),
     );
-    final file = File('${Directory.systemTemp.path}\\androidircx-dcc-test.txt');
+    final file = File.fromUri(
+      Directory.systemTemp.uri.resolve('androidircx-dcc-test.txt'),
+    );
     await file.writeAsString('hello dcc');
 
     await controller.start();
