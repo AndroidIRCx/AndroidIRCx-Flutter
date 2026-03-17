@@ -13,10 +13,35 @@ typedef IrcTransportConnector = Future<IrcTransport> Function(NetworkConfig netw
 
 class IrcService {
   static const Set<String> _preferredCapabilities = <String>{
+    'account-notify',
+    'account-tag',
+    'away-notify',
+    'batch',
+    'bot',
+    'cap-notify',
+    'chghost',
+    'draft/account-registration',
+    'draft/channel-rename',
+    'draft/multiline',
+    'draft/read-marker',
+    'draft/typing',
+    'draft/message-redaction',
     'echo-message',
+    'event-playback',
+    'extended-join',
+    'extended-monitor',
+    'invite-notify',
     'labeled-response',
     'message-tags',
+    'monitor',
+    'multi-prefix',
     'server-time',
+    'setname',
+    'standard-replies',
+    'sts',
+    'typing',
+    'userhost-in-names',
+    'utf8only',
   };
 
   IrcService({
@@ -71,6 +96,12 @@ class IrcService {
       _labeledResponsesController.stream;
   bool get supportsChatHistory =>
       _capEnabled.contains('chathistory') || _capEnabled.contains('draft/chathistory');
+  bool get supportsReadMarker => _capEnabled.contains('draft/read-marker');
+  bool get supportsMessageRedaction => _capEnabled.contains('draft/message-redaction');
+  bool get supportsMultiline => _capEnabled.contains('draft/multiline');
+  bool get supportsTyping =>
+      _capEnabled.contains('typing') || _capEnabled.contains('draft/typing');
+  bool get supportsSetName => _capEnabled.contains('setname');
 
   Future<void> connect(NetworkConfig network) async {
     if (_state.phase == ConnectionPhase.connecting ||
@@ -186,8 +217,50 @@ class IrcService {
   Future<void> sendPrivmsg({
     required String target,
     required String text,
+    String? replyTo,
   }) async {
-    await sendRaw('PRIVMSG $target :$text');
+    if (text.contains('\n')) {
+      await _sendMultilinePrivmsg(
+        target: target,
+        text: text,
+        replyTo: replyTo,
+      );
+      return;
+    }
+
+    final normalizedReply = (replyTo ?? '').trim();
+    if (normalizedReply.isEmpty) {
+      await sendRaw('PRIVMSG $target :$text');
+      return;
+    }
+
+    await sendRaw('@+draft/reply=$normalizedReply PRIVMSG $target :$text');
+  }
+
+  Future<void> _sendMultilinePrivmsg({
+    required String target,
+    required String text,
+    String? replyTo,
+  }) async {
+    final lines = text.split('\n');
+    if (!supportsMultiline || lines.length <= 1) {
+      for (final line in lines) {
+        await sendPrivmsg(target: target, text: line, replyTo: replyTo);
+      }
+      return;
+    }
+
+    final concatTag = 'androidircx-multiline-${DateTime.now().millisecondsSinceEpoch}';
+    final normalizedReply = (replyTo ?? '').trim();
+    for (var index = 0; index < lines.length; index += 1) {
+      final line = lines[index];
+      final isLast = index == lines.length - 1;
+      final tags = <String>[
+        'draft/multiline-concat=${isLast ? '' : concatTag}',
+        if (normalizedReply.isNotEmpty && isLast) '+draft/reply=$normalizedReply',
+      ];
+      await sendRaw('@${tags.join(';')} PRIVMSG $target :$line');
+    }
   }
 
   Future<void> sendNotice({
@@ -199,6 +272,15 @@ class IrcService {
 
   Future<void> sendWhois(String nick) async {
     await sendRaw('WHOIS $nick $nick');
+  }
+
+  Future<bool> sendSetName(String realName) async {
+    if (!supportsSetName) {
+      return false;
+    }
+
+    await sendRaw('SETNAME :$realName');
+    return true;
   }
 
   Future<void> sendWho(String mask) async {
@@ -235,6 +317,31 @@ class IrcService {
     return true;
   }
 
+  Future<bool> sendReadMarker({
+    required String target,
+    int? timestampMillis,
+  }) async {
+    if (!supportsReadMarker) {
+      return false;
+    }
+
+    final effectiveTimestamp = timestampMillis ?? DateTime.now().millisecondsSinceEpoch;
+    await sendRaw('MARKREAD $target timestamp=$effectiveTimestamp');
+    return true;
+  }
+
+  Future<bool> redactMessage({
+    required String target,
+    required String msgid,
+  }) async {
+    if (!supportsMessageRedaction) {
+      return false;
+    }
+
+    await sendRaw('REDACT $target $msgid');
+    return true;
+  }
+
   Future<void> sendMotd() async {
     await sendRaw('MOTD');
   }
@@ -252,6 +359,40 @@ class IrcService {
   Future<void> sendLinks([String? mask]) async {
     final value = (mask ?? '').trim();
     await sendRaw(value.isEmpty ? 'LINKS' : 'LINKS $value');
+  }
+
+  Future<void> sendIson(List<String> nicknames) async {
+    final filtered = nicknames.map((nick) => nick.trim()).where((nick) => nick.isNotEmpty).toList(growable: false);
+    if (filtered.isEmpty) {
+      return;
+    }
+    await sendRaw('ISON ${filtered.join(' ')}');
+  }
+
+  Future<void> sendUserhost(List<String> nicknames) async {
+    final filtered = nicknames.map((nick) => nick.trim()).where((nick) => nick.isNotEmpty).toList(growable: false);
+    if (filtered.isEmpty) {
+      return;
+    }
+    await sendRaw('USERHOST ${filtered.join(' ')}');
+  }
+
+  Future<void> sendMonitor({
+    required String subcommand,
+    List<String> nicknames = const <String>[],
+  }) async {
+    final normalizedSubcommand = subcommand.trim().toUpperCase();
+    if (normalizedSubcommand.isEmpty) {
+      return;
+    }
+
+    final filtered = nicknames.map((nick) => nick.trim()).where((nick) => nick.isNotEmpty).toList(growable: false);
+    if (filtered.isEmpty) {
+      await sendRaw('MONITOR $normalizedSubcommand');
+      return;
+    }
+
+    await sendRaw('MONITOR $normalizedSubcommand ${filtered.join(',')}');
   }
 
   Future<void> sendInvite({
@@ -345,6 +486,27 @@ class IrcService {
     String? args,
   }) async {
     await sendRaw('NOTICE $target :${encodeCtcp(command, args)}');
+  }
+
+  Future<bool> sendTyping({
+    required String target,
+    required String status,
+  }) async {
+    if (!supportsTyping) {
+      return false;
+    }
+
+    final tagName = _capEnabled.contains('typing') ? '+typing' : '+draft/typing';
+    await sendRaw('@$tagName=$status TAGMSG $target');
+    return true;
+  }
+
+  Future<void> sendReaction({
+    required String target,
+    required String msgid,
+    required String emoji,
+  }) async {
+    await sendRaw('@+draft/react=$msgid\\:$emoji TAGMSG $target');
   }
 
   void _handleIncomingLine(String line) {

@@ -1,4 +1,4 @@
-enum ChatTabType { server, channel, query, notice }
+enum ChatTabType { server, channel, query, notice, dcc }
 
 class ChatTab {
   const ChatTab({

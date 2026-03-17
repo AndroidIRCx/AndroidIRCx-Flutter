@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:androidircx/app/app.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/storage/in_memory_network_repository.dart';
+import 'package:androidircx/dcc/services/dcc_service.dart';
+import 'package:androidircx/dcc/services/dcc_socket_backend.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/presentation/chat_screen.dart';
@@ -17,6 +20,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeTransport implements IrcTransport {
   final StreamController<String> _controller = StreamController<String>.broadcast();
+  final List<String> sentLines = <String>[];
 
   @override
   Stream<String> get lines => _controller.stream;
@@ -27,11 +31,62 @@ class _FakeTransport implements IrcTransport {
   }
 
   @override
-  Future<void> sendLine(String line) async {}
+  Future<void> sendLine(String line) async {
+    sentLines.add(line);
+  }
 
   void emit(String line) {
     _controller.add(line);
   }
+}
+
+class _FakeDccConnection implements DccSocketConnection {
+  final StreamController<List<int>> _controller = StreamController<List<int>>.broadcast();
+  final List<List<int>> sentPackets = <List<int>>[];
+
+  @override
+  Stream<List<int>> get bytes => _controller.stream;
+
+  @override
+  Future<void> close() async {
+    await _controller.close();
+  }
+
+  @override
+  Future<void> sendBytes(List<int> data) async {
+    sentPackets.add(Uint8List.fromList(data));
+  }
+}
+
+class _FakeDccServer implements DccSocketServer {
+  _FakeDccServer(this.connection);
+
+  final DccSocketConnection connection;
+
+  @override
+  String get address => '127.0.0.1';
+
+  @override
+  Stream<DccSocketConnection> get connections => Stream<DccSocketConnection>.value(connection);
+
+  @override
+  int get port => 5001;
+
+  @override
+  Future<void> close() async {}
+}
+
+class _FakeDccBackend implements DccSocketBackend {
+  final _FakeDccConnection connection = _FakeDccConnection();
+
+  @override
+  Future<DccSocketServer> bindEphemeral() async => _FakeDccServer(connection);
+
+  @override
+  Future<DccSocketConnection> connect({
+    required String host,
+    required int port,
+  }) async => connection;
 }
 
 void main() {
@@ -229,11 +284,13 @@ void main() {
       altNickname: 'AndroidIRCX_',
     );
     final transport = _FakeTransport();
+    final dccBackend = _FakeDccBackend();
     final controller = ChatSessionController(
       network: network,
       ircService: IrcService(
         transportConnector: (_) async => transport,
       ),
+      dccService: DccService(backend: dccBackend),
     );
 
     await tester.pumpWidget(
@@ -300,6 +357,187 @@ void main() {
     await tester.tap(find.text('Reply with nick'));
     await tester.pumpAndSettle();
     expect(find.text('> Hello there alice: '), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('shows pending reply bar and sends tagged reply flow', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(
+        transportConnector: (_) async => transport,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(controller: controller),
+      ),
+    );
+    await tester.pump();
+
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    transport.emit('@msgid=seed-1 :alice!user@example PRIVMSG #room :Original text');
+    await tester.pump();
+
+    await tester.longPress(find.textContaining('Original text').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reply to message'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Replying to alice'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).last, 'Reply body');
+    await tester.tap(find.text('Send'));
+    await tester.pump();
+
+    expect(
+      transport.sentLines,
+      contains('@+draft/reply=seed-1 PRIVMSG #room :Reply body'),
+    );
+
+    controller.dispose();
+  });
+
+  testWidgets('shows delete message action and sends redact command', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(
+        transportConnector: (_) async => transport,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(controller: controller),
+      ),
+    );
+    await tester.pump();
+
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    transport.emit(':server CAP * ACK :draft/message-redaction');
+    transport.emit('@msgid=seed-redact :alice!user@example PRIVMSG #room :Delete this');
+    await tester.pump();
+    await tester.pump();
+
+    await tester.longPress(find.textContaining('Delete this').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Delete message'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('Delete message'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete message'));
+    await tester.pump();
+
+    expect(transport.sentLines, contains('REDACT #room seed-redact'));
+
+    controller.dispose();
+  });
+
+  testWidgets('shows typing indicator and reaction chips from TAGMSG state', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(
+        transportConnector: (_) async => transport,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(controller: controller),
+      ),
+    );
+    await tester.pump();
+
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    transport.emit('@msgid=react-ui-1 :alice!user@example PRIVMSG #room :Hello');
+    transport.emit('@+draft/react=react-ui-1\\::thumbsup: :bob!user@example TAGMSG #room');
+    transport.emit('@+typing=active :alice!user@example TAGMSG #room');
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.textContaining(':thumbsup: 1'), findsOneWidget);
+    expect(find.text('alice is typing…'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('shows dcc session banner and actions for incoming dcc tabs', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(
+        transportConnector: (_) async => transport,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(controller: controller),
+      ),
+    );
+    await tester.pump();
+
+    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC CHAT chat 127001 5001\u0001');
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('DCC CHAT session'), findsOneWidget);
+    expect(find.text('Accept'), findsOneWidget);
+    expect(find.text('Decline'), findsOneWidget);
+
+    await tester.tap(find.text('Accept'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Accept'), findsNothing);
+    expect(find.text('Close'), findsOneWidget);
 
     controller.dispose();
   });

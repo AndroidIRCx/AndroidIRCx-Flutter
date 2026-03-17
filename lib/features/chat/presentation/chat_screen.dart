@@ -1,5 +1,6 @@
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
+import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
@@ -30,6 +31,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageSearchController = TextEditingController();
   bool _messageSearchVisible = false;
   _HistoryKindFilter _messageSearchFilter = _HistoryKindFilter.all;
+  IrcMessage? _pendingReplyMessage;
 
   ChatSessionController get _controller => widget.controller;
 
@@ -68,7 +70,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   _controller.activeTab.type == ChatTabType.channel &&
                           _controller.activeChannelSummary.isNotEmpty
                       ? _controller.activeChannelSummary
-                      : _statusText(_controller.connection),
+                      : _controller.activeTab.type == ChatTabType.dcc &&
+                              _controller.activeDccSession != null
+                          ? _dccSummary(_controller.activeDccSession!)
+                          : _statusText(_controller.connection),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -230,6 +235,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 if ((_controller.activeChannelTopic ?? '').trim().isNotEmpty)
                   _ChannelTopicBar(topic: _controller.activeChannelTopic!.trim()),
+                if (_controller.activeTab.type == ChatTabType.dcc &&
+                    _controller.activeDccSession != null)
+                  _DccSessionBanner(
+                    session: _controller.activeDccSession!,
+                    onAccept: _controller.acceptActiveDccSession,
+                    onDecline: _controller.declineActiveDccSession,
+                    onClose: _controller.closeActiveDccSession,
+                  ),
                 if (_controller.activeTab.type == ChatTabType.server)
                   _ServiceQuickActions(
                     onRun: (service, command) async {
@@ -240,6 +253,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: _MessageList(
                     messages: visibleMessages,
                     showAttachmentPreviews: _controller.settings.showAttachmentPreviews,
+                    resolveReplyTarget: (replyId) =>
+                        _controller.messageByMsgId(_controller.activeTabId, replyId),
+                    resolveReactions: _controller.reactionsForMessage,
+                    onRedactMessage: _controller.redactMessage,
                     onQuoteMessage: (message) =>
                         _insertIntoComposer('> ${stripIrcFormatting(message.content)}'),
                     onReplyWithNick: (message) {
@@ -247,12 +264,20 @@ class _ChatScreenState extends State<ChatScreen> {
                           message.sender == _controller.currentNick ? '' : '${message.sender}: ';
                       _insertIntoComposer(prefix);
                     },
+                    onReplyToMessage: _setPendingReply,
                   ),
                 ),
                 if (_controller.commandHistory.isNotEmpty)
                   _CommandHistoryBar(
                     entries: _controller.commandHistory,
                     onSelect: (value) => setState(() => _composerController.text = value),
+                  ),
+                if (_controller.activeTypingUsers.isNotEmpty)
+                  _TypingIndicator(users: _controller.activeTypingUsers),
+                if (_pendingReplyMessage != null)
+                  _PendingReplyBar(
+                    message: _pendingReplyMessage!,
+                    onCancel: () => setState(() => _pendingReplyMessage = null),
                   ),
                 const Divider(height: 1),
                 Padding(
@@ -265,10 +290,15 @@ class _ChatScreenState extends State<ChatScreen> {
                           minLines: 1,
                           maxLines: 4,
                           textInputAction: TextInputAction.send,
+                          onChanged: _controller.updateTypingState,
                           onSubmitted: (_) => _submit(),
                           decoration: InputDecoration(
                             hintText: _controller.activeTab.type == ChatTabType.server
                                 ? 'Type raw IRC or /join #channel'
+                                : _controller.activeTab.type == ChatTabType.dcc
+                                    ? (_controller.activeDccSession?.type == DccSessionType.chat
+                                        ? 'Type DCC chat message'
+                                        : 'DCC SEND tabs do not accept messages')
                                 : 'Message ${_controller.activeTab.name}',
                           ),
                         ),
@@ -305,7 +335,9 @@ class _ChatScreenState extends State<ChatScreen> {
   void _submit() {
     final text = _composerController.text;
     _composerController.clear();
-    _controller.handleComposerSubmit(text);
+    final replyTo = _pendingReplyMessage?.tags['msgid'];
+    setState(() => _pendingReplyMessage = null);
+    _controller.handleComposerSubmit(text, replyTo: replyTo);
   }
 
   Future<void> _openSettings() async {
@@ -346,6 +378,12 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _setPendingReply(IrcMessage message) {
+    setState(() {
+      _pendingReplyMessage = message.tags['msgid'] == null ? null : message;
+    });
+  }
+
   String _statusText(ConnectionSnapshot snapshot) {
     switch (snapshot.phase) {
       case ConnectionPhase.idle:
@@ -373,7 +411,20 @@ class _ChatScreenState extends State<ChatScreen> {
         return Icons.alternate_email;
       case ChatTabType.notice:
         return Icons.info_outline;
+      case ChatTabType.dcc:
+        return Icons.swap_horiz;
     }
+  }
+
+  String _dccSummary(DccSession session) {
+    final status = session.status.name;
+    return switch (session.type) {
+      DccSessionType.chat =>
+        '${session.direction} chat • ${session.host ?? '?'}:${session.port ?? 0} • $status',
+      DccSessionType.send =>
+        '${session.direction} file • ${session.filename ?? 'file'} • ${session.size ?? 0} B • $status',
+      DccSessionType.unknown => '${session.direction} DCC • $status',
+    };
   }
 }
 
@@ -449,6 +500,186 @@ class _InlineMessageSearchBar extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PendingReplyBar extends StatelessWidget {
+  const _PendingReplyBar({
+    required this.message,
+    required this.onCancel,
+  });
+
+  final IrcMessage message;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Row(
+        children: [
+          const Icon(Icons.reply, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Replying to ${message.sender}',
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                Text(
+                  stripIrcFormatting(message.content),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: onCancel,
+            icon: const Icon(Icons.close),
+            tooltip: 'Cancel reply',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TypingIndicator extends StatelessWidget {
+  const _TypingIndicator({required this.users});
+
+  final List<String> users;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final label = switch (users.length) {
+      0 => '',
+      1 => '${users.first} is typing…',
+      2 => '${users.first} and ${users.last} are typing…',
+      _ => '${users.first}, ${users[1]} and ${users.length - 2} more are typing…',
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: Text(
+        label,
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+          fontStyle: FontStyle.italic,
+        ),
+      ),
+    );
+  }
+}
+
+class _DccSessionBanner extends StatelessWidget {
+  const _DccSessionBanner({
+    required this.session,
+    required this.onAccept,
+    required this.onDecline,
+    required this.onClose,
+  });
+
+  final DccSession session;
+  final Future<void> Function() onAccept;
+  final Future<void> Function() onDecline;
+  final Future<void> Function() onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final subtitle = switch (session.type) {
+      DccSessionType.chat =>
+        'Peer: ${session.peerNick} • ${session.host ?? '?'}:${session.port ?? 0} • ${session.status.name}',
+      DccSessionType.send =>
+        'File: ${session.filename ?? 'file'} • ${session.size ?? 0} B • ${session.status.name}',
+      DccSessionType.unknown => 'Peer: ${session.peerNick} • ${session.status.name}',
+    };
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            session.type == DccSessionType.chat ? 'DCC CHAT session' : 'DCC transfer session',
+            style: theme.textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(subtitle, style: theme.textTheme.bodySmall),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (session.status == DccSessionStatus.pending)
+                FilledButton.tonal(onPressed: onAccept, child: const Text('Accept')),
+              if (session.status == DccSessionStatus.pending)
+                FilledButton.tonal(onPressed: onDecline, child: const Text('Decline')),
+              if (session.status != DccSessionStatus.closed)
+                FilledButton.tonal(onPressed: onClose, child: const Text('Close')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReplyPreview extends StatelessWidget {
+  const _ReplyPreview({
+    required this.referenced,
+    required this.replyId,
+  });
+
+  final IrcMessage? referenced;
+  final String replyId;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = referenced == null ? 'Reply' : 'Reply to ${referenced!.sender}';
+    final body = referenced == null
+        ? 'Referenced message: $replyId'
+        : stripIrcFormatting(referenced!.content);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            body,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
       ),
     );
   }
@@ -824,14 +1055,22 @@ class _MessageList extends StatelessWidget {
   const _MessageList({
     required this.messages,
     required this.showAttachmentPreviews,
+    required this.resolveReplyTarget,
+    required this.resolveReactions,
+    required this.onRedactMessage,
     required this.onQuoteMessage,
     required this.onReplyWithNick,
+    required this.onReplyToMessage,
   });
 
   final List<IrcMessage> messages;
   final bool showAttachmentPreviews;
+  final IrcMessage? Function(String replyId) resolveReplyTarget;
+  final Map<String, int> Function(IrcMessage message) resolveReactions;
+  final Future<bool> Function(IrcMessage message) onRedactMessage;
   final ValueChanged<IrcMessage> onQuoteMessage;
   final ValueChanged<IrcMessage> onReplyWithNick;
+  final ValueChanged<IrcMessage> onReplyToMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -848,6 +1087,8 @@ class _MessageList extends StatelessWidget {
       itemBuilder: (context, index) {
         final message = messages[messages.length - 1 - index];
         final align = message.isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+        final isRedacted = message.tags['redacted'] == 'true';
+        final reactions = resolveReactions(message);
         final bubbleColor = switch (message.kind) {
           IrcMessageKind.system => const Color(0xFFF6F8F1),
           IrcMessageKind.raw => const Color(0xFFF7F7FA),
@@ -899,12 +1140,37 @@ class _MessageList extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        if ((message.tags['draft/reply'] ?? '').trim().isNotEmpty)
+                          _ReplyPreview(
+                            referenced: resolveReplyTarget(message.tags['draft/reply']!.trim()),
+                            replyId: message.tags['draft/reply']!.trim(),
+                          ),
                         _IrcFormattedText(
                           message.content,
-                          baseStyle: Theme.of(context).textTheme.bodyMedium,
+                          baseStyle: isRedacted
+                              ? Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  fontStyle: FontStyle.italic,
+                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                )
+                              : Theme.of(context).textTheme.bodyMedium,
                         ),
-                        if (showAttachmentPreviews)
+                        if (showAttachmentPreviews && !isRedacted)
                           _MessageAttachments(content: message.content),
+                        if (reactions.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: reactions.entries
+                                .map(
+                                  (entry) => Chip(
+                                    label: Text('${entry.key} ${entry.value}'),
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                )
+                                .toList(growable: false),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -919,6 +1185,7 @@ class _MessageList extends StatelessWidget {
 
   Future<void> _showMessageActions(BuildContext context, IrcMessage message) async {
     final urls = extractUrls(stripIrcFormatting(message.content));
+    final canRedact = (message.tags['msgid'] ?? '').trim().isNotEmpty;
     await showModalBottomSheet<void>(
       context: context,
       builder: (context) {
@@ -990,6 +1257,17 @@ class _MessageList extends StatelessWidget {
                     },
                   ),
                 ListTile(
+                  leading: const Icon(Icons.subdirectory_arrow_right),
+                  title: const Text('Reply to message'),
+                  onTap: () {
+                    onReplyToMessage(message);
+                    if (!context.mounted) {
+                      return;
+                    }
+                    Navigator.of(context).pop();
+                  },
+                ),
+                ListTile(
                   leading: const Icon(Icons.format_quote),
                   title: const Text('Quote in composer'),
                   onTap: () {
@@ -1011,6 +1289,18 @@ class _MessageList extends StatelessWidget {
                     Navigator.of(context).pop();
                   },
                 ),
+                if (canRedact)
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline),
+                    title: const Text('Delete message'),
+                    onTap: () async {
+                      await onRedactMessage(message);
+                      if (!context.mounted) {
+                        return;
+                      }
+                      Navigator.of(context).pop();
+                    },
+                  ),
               ],
             ),
           ),
