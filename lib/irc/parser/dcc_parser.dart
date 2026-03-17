@@ -7,6 +7,7 @@ class DccOffer {
     this.port,
     this.size,
     this.token,
+    this.offset,
   });
 
   final String command;
@@ -16,6 +17,9 @@ class DccOffer {
   final int? port;
   final int? size;
   final String? token;
+  final int? offset;
+
+  bool get isReverseSend => command == 'SEND' && token != null;
 }
 
 DccOffer? parseDccOffer(String args) {
@@ -56,6 +60,23 @@ DccOffer? parseDccOffer(String args) {
             port: int.tryParse(match.group(3)!),
             size: int.tryParse(match.group(4)!),
             token: match.group(5),
+          );
+        }
+      }
+      return null;
+    case 'RESUME':
+    case 'ACCEPT':
+      if (parts.length >= 5) {
+        final afterCommand = trimmed.substring(trimmed.indexOf(command) + command.length).trim();
+        final match = RegExp(r'^"?(.*?)"?\s+(\d+)\s+(\d+)(?:\s+(\S+))?$').firstMatch(afterCommand);
+        if (match != null) {
+          return DccOffer(
+            command: command,
+            target: 'file',
+            filename: match.group(1),
+            port: int.tryParse(match.group(2)!),
+            offset: int.tryParse(match.group(3)!),
+            token: match.group(4),
           );
         }
       }

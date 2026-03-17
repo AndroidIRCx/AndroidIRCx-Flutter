@@ -198,12 +198,14 @@ class _ChatScreenState extends State<ChatScreen> {
                           child: _controller.activeChannelUsers.isEmpty
                               ? const Center(child: Text('No nick list yet.'))
                               : ListView.builder(
-                                  itemCount: _controller.activeChannelUsers.length,
+                                  itemCount: _controller.activeChannelUserDetails.length,
                                   itemBuilder: (context, index) {
-                                    final nick = _controller.activeChannelUsers[index];
+                                    final entry = _controller.activeChannelUserDetails[index];
+                                    final nick = entry.nick;
                                     return ListTile(
                                       leading: const Icon(Icons.person_outline),
                                       title: Text(nick),
+                                      subtitle: entry.details.isEmpty ? null : Text(entry.details),
                                       onTap: () {
                                         _composerController.text = '/whois $nick';
                                         Navigator.of(context).pop();
@@ -422,7 +424,7 @@ class _ChatScreenState extends State<ChatScreen> {
       DccSessionType.chat =>
         '${session.direction} chat • ${session.host ?? '?'}:${session.port ?? 0} • $status',
       DccSessionType.send =>
-        '${session.direction} file • ${session.filename ?? 'file'} • ${session.size ?? 0} B • $status',
+        '${session.direction}${session.isReverse ? ' reverse' : ''} file • ${session.filename ?? 'file'} • ${session.size ?? 0} B • $status',
       DccSessionType.unknown => '${session.direction} DCC • $status',
     };
   }
@@ -601,7 +603,7 @@ class _DccSessionBanner extends StatelessWidget {
       DccSessionType.chat =>
         'Peer: ${session.peerNick} • ${session.host ?? '?'}:${session.port ?? 0} • ${session.status.name}',
       DccSessionType.send =>
-        'File: ${session.filename ?? 'file'} • ${session.size ?? 0} B • ${session.status.name}',
+        'File: ${session.filename ?? 'file'} • ${session.size ?? 0} B • ${session.status.name}${session.isReverse ? ' • reverse' : ''}${session.resumeOffset > 0 ? ' • resume ${session.resumeOffset}' : ''}',
       DccSessionType.unknown => 'Peer: ${session.peerNick} • ${session.status.name}',
     };
 

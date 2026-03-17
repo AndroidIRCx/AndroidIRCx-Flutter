@@ -423,6 +423,18 @@ class IrcService {
     await sendRaw('MODE $channel +b');
   }
 
+  Future<void> sendExceptList(String channel) async {
+    await sendRaw('MODE $channel +e');
+  }
+
+  Future<void> sendInviteList(String channel) async {
+    await sendRaw('MODE $channel +I');
+  }
+
+  Future<void> sendQuietList(String channel) async {
+    await sendRaw('MODE $channel +q');
+  }
+
   Future<void> sendTopic({
     required String channel,
     String? topic,
@@ -437,6 +449,38 @@ class IrcService {
 
   Future<void> sendMode(String args) async {
     await sendRaw('MODE $args');
+  }
+
+  Future<void> sendMetadata({
+    required String target,
+    required String subcommand,
+    String? key,
+    String? value,
+  }) async {
+    final normalizedSubcommand = subcommand.trim().toUpperCase();
+    final normalizedKey = (key ?? '').trim();
+    final normalizedValue = (value ?? '').trim();
+    final parts = <String>[
+      'METADATA',
+      target,
+      normalizedSubcommand,
+      if (normalizedKey.isNotEmpty) normalizedKey,
+    ];
+    var line = parts.join(' ');
+    if (normalizedValue.isNotEmpty) {
+      line = '$line :$normalizedValue';
+    }
+    await sendRaw(line);
+  }
+
+  Future<void> sendChannelRename({
+    required String oldName,
+    required String newName,
+    String? reason,
+  }) async {
+    final normalizedReason = (reason ?? '').trim();
+    final suffix = normalizedReason.isEmpty ? '' : ' :$normalizedReason';
+    await sendRaw('RENAME $oldName $newName$suffix');
   }
 
   Future<void> sendCapLs() async {
