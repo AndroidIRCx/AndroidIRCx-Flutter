@@ -866,6 +866,27 @@ class ChatSessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> sendDccFileToNick({
+    required String nick,
+    required String filePath,
+  }) async {
+    final normalizedNick = nick.trim();
+    final normalizedPath = filePath.trim();
+    if (normalizedNick.isEmpty || normalizedPath.isEmpty) {
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: 'error',
+        content: 'DCC SEND requires a target nick and file path.',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return;
+    }
+
+    await _startOutgoingDccSend(nick: normalizedNick, filePath: normalizedPath);
+  }
+
   Future<void> closeActiveDccSession() async {
     final session = activeDccSession;
     if (session == null) {
@@ -1708,7 +1729,7 @@ class ChatSessionController extends ChangeNotifier {
           final nick = rest.substring(0, separator).trim();
           final filePath = rest.substring(separator + 1).trim();
           if (nick.isNotEmpty && filePath.isNotEmpty) {
-            await _startOutgoingDccSend(nick: nick, filePath: filePath);
+            await sendDccFileToNick(nick: nick, filePath: filePath);
             return;
           }
         }

@@ -3,6 +3,7 @@ import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/dcc/services/dcc_file_picker.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
@@ -15,9 +16,10 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.controller});
+  const ChatScreen({super.key, required this.controller, this.filePicker});
 
   final ChatSessionController controller;
+  final DccFilePicker? filePicker;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -34,6 +36,8 @@ class _ChatScreenState extends State<ChatScreen> {
   IrcMessage? _pendingReplyMessage;
 
   ChatSessionController get _controller => widget.controller;
+  DccFilePicker get _filePicker =>
+      widget.filePicker ?? const MethodChannelDccFilePicker();
 
   @override
   void initState() {
@@ -320,6 +324,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       : 'Message ${_controller.activeTab.name}',
                   onChanged: _handleComposerChanged,
                   onSubmitted: _submit,
+                  canSendDccFile:
+                      _controller.activeTab.type == ChatTabType.query,
+                  onPickDccFile: _pickAndSendDccFile,
                   onSuggestionSelected: _applyComposerSuggestion,
                   onAutocompleteSelected: _applyAutocompleteSuggestion,
                 ),
@@ -354,6 +361,36 @@ class _ChatScreenState extends State<ChatScreen> {
       _autocompleteSuggestions = const [];
     });
     _controller.handleComposerSubmit(text, replyTo: replyTo);
+  }
+
+  Future<void> _pickAndSendDccFile() async {
+    final targetTab = _controller.activeTab;
+    if (targetTab.type != ChatTabType.query) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Open a private query tab before sending DCC files.'),
+        ),
+      );
+      return;
+    }
+
+    try {
+      final filePath = await _filePicker.pickFile();
+      if (!mounted || filePath == null) {
+        return;
+      }
+      await _controller.sendDccFileToNick(
+        nick: targetTab.name,
+        filePath: filePath,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to send DCC file: $error')),
+      );
+    }
   }
 
   void _handleComposerChanged(String value) {
@@ -518,6 +555,8 @@ class _ComposerArea extends StatelessWidget {
     required this.hintText,
     required this.onChanged,
     required this.onSubmitted,
+    required this.canSendDccFile,
+    required this.onPickDccFile,
     required this.onSuggestionSelected,
     required this.onAutocompleteSelected,
   });
@@ -528,6 +567,8 @@ class _ComposerArea extends StatelessWidget {
   final String hintText;
   final ValueChanged<String> onChanged;
   final VoidCallback onSubmitted;
+  final bool canSendDccFile;
+  final VoidCallback onPickDccFile;
   final ValueChanged<CommandSuggestion> onSuggestionSelected;
   final ValueChanged<ComposerAutocompleteSuggestion> onAutocompleteSelected;
 
@@ -561,6 +602,14 @@ class _ComposerArea extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
+              if (canSendDccFile) ...[
+                IconButton(
+                  onPressed: onPickDccFile,
+                  icon: const Icon(Icons.attach_file),
+                  tooltip: 'Send DCC file',
+                ),
+                const SizedBox(width: 8),
+              ],
               FilledButton(onPressed: onSubmitted, child: const Text('Send')),
             ],
           ),
@@ -590,52 +639,57 @@ class _CommandSuggestionsPanel extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
-      child: ListView.separated(
-        shrinkWrap: true,
-        padding: EdgeInsets.zero,
-        itemCount: suggestions.length,
-        separatorBuilder: (_, _) =>
-            Divider(height: 1, color: theme.colorScheme.outlineVariant),
-        itemBuilder: (context, index) {
-          final suggestion = suggestions[index];
-          final isAlias = suggestion.source == CommandSuggestionSource.alias;
-          final isHistory =
-              suggestion.source == CommandSuggestionSource.history;
-          return ListTile(
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            leading: Icon(
-              isHistory
-                  ? Icons.history
-                  : isAlias
-                  ? Icons.flash_on_outlined
-                  : Icons.terminal,
-              size: 18,
-              color: isAlias ? theme.colorScheme.primary : null,
-            ),
-            title: Row(
-              children: [
-                Text(suggestion.text),
-                if (isAlias || isHistory) ...[
-                  const SizedBox(width: 8),
-                  InputChip(
-                    label: Text(isAlias ? 'alias' : 'history'),
-                    visualDensity: VisualDensity.compact,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: ListView.separated(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
+          itemCount: suggestions.length,
+          separatorBuilder: (_, _) =>
+              Divider(height: 1, color: theme.colorScheme.outlineVariant),
+          itemBuilder: (context, index) {
+            final suggestion = suggestions[index];
+            final isAlias = suggestion.source == CommandSuggestionSource.alias;
+            final isHistory =
+                suggestion.source == CommandSuggestionSource.history;
+            return ListTile(
+              dense: true,
+              visualDensity: VisualDensity.compact,
+              leading: Icon(
+                isHistory
+                    ? Icons.history
+                    : isAlias
+                    ? Icons.flash_on_outlined
+                    : Icons.terminal,
+                size: 18,
+                color: isAlias ? theme.colorScheme.primary : null,
+              ),
+              title: Row(
+                children: [
+                  Text(suggestion.text),
+                  if (isAlias || isHistory) ...[
+                    const SizedBox(width: 8),
+                    InputChip(
+                      label: Text(isAlias ? 'alias' : 'history'),
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ],
                 ],
-              ],
-            ),
-            subtitle: (suggestion.description ?? suggestion.usage) == null
-                ? null
-                : Text(
-                    suggestion.description ?? suggestion.usage!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-            onTap: () => onSelect(suggestion),
-          );
-        },
+              ),
+              subtitle: (suggestion.description ?? suggestion.usage) == null
+                  ? null
+                  : Text(
+                      suggestion.description ?? suggestion.usage!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+              onTap: () => onSelect(suggestion),
+            );
+          },
+        ),
       ),
     );
   }
@@ -661,28 +715,33 @@ class _AutocompleteSuggestionsPanel extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
-      child: ListView.separated(
-        shrinkWrap: true,
-        padding: EdgeInsets.zero,
-        itemCount: suggestions.length,
-        separatorBuilder: (_, _) =>
-            Divider(height: 1, color: theme.colorScheme.outlineVariant),
-        itemBuilder: (context, index) {
-          final suggestion = suggestions[index];
-          final isChannel =
-              suggestion.type == ComposerAutocompleteSuggestionType.channel;
-          return ListTile(
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            leading: Icon(
-              isChannel ? Icons.tag : Icons.person_outline,
-              size: 18,
-            ),
-            title: Text(suggestion.text),
-            subtitle: Text(isChannel ? 'channel' : 'nick'),
-            onTap: () => onSelect(suggestion),
-          );
-        },
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: ListView.separated(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
+          itemCount: suggestions.length,
+          separatorBuilder: (_, _) =>
+              Divider(height: 1, color: theme.colorScheme.outlineVariant),
+          itemBuilder: (context, index) {
+            final suggestion = suggestions[index];
+            final isChannel =
+                suggestion.type == ComposerAutocompleteSuggestionType.channel;
+            return ListTile(
+              dense: true,
+              visualDensity: VisualDensity.compact,
+              leading: Icon(
+                isChannel ? Icons.tag : Icons.person_outline,
+                size: 18,
+              ),
+              title: Text(suggestion.text),
+              subtitle: Text(isChannel ? 'channel' : 'nick'),
+              onTap: () => onSelect(suggestion),
+            );
+          },
+        ),
       ),
     );
   }

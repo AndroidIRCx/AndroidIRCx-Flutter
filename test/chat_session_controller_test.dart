@@ -2296,6 +2296,59 @@ void main() {
     },
   );
 
+  test('starts outgoing dcc send offers from selected file paths', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final dccBackend = _FakeDccBackend();
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+      dccService: DccService(backend: dccBackend),
+    );
+    final file = File.fromUri(
+      Directory.systemTemp.uri.resolve('androidircx-dcc-picker-test.txt'),
+    );
+    await file.writeAsString('picked file');
+
+    await controller.start();
+    await controller.sendDccFileToNick(nick: 'alice', filePath: file.path);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      transport.sentLines.any(
+        (line) => line.startsWith(
+          'PRIVMSG alice :\u0001DCC SEND "androidircx-dcc-picker-test.txt" ',
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      controller.tabs.any(
+        (tab) => tab.type == ChatTabType.dcc && tab.name == 'DCC SEND alice',
+      ),
+      isTrue,
+    );
+
+    for (var attempt = 0; attempt < 20; attempt += 1) {
+      if (controller.dccSessions.any(
+        (session) => session.status == DccSessionStatus.closed,
+      )) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    controller.dispose();
+    await file.delete();
+  });
+
   test(
     'routes invite kick and extended whois numerics into chat state',
     () async {
