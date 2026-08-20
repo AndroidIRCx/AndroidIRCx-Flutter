@@ -21,6 +21,8 @@ import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart'
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/connections/presentation/network_form_screen.dart';
 import 'package:androidircx/features/connections/presentation/network_list_screen.dart';
+import 'package:androidircx/features/onboarding/presentation/onboarding_screen.dart';
+import 'package:androidircx/features/security/presentation/app_lock_gate.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
@@ -166,6 +168,9 @@ void main() {
         networkRepository: SharedPrefsNetworkRepository(
           secretStorage: InMemorySecretStorage(),
         ),
+        settingsRepository: _FakeSettingsRepository(
+          const AppSettings(onboardingCompleted: true),
+        ),
         foregroundConnectionService: const NoopForegroundConnectionService(),
         historyRepositoryLoader: () async => null,
       ),
@@ -176,6 +181,84 @@ void main() {
     expect(find.text('AndroidIRCX'), findsOneWidget);
     expect(find.text('DBase'), findsOneWidget);
     expect(find.text('Connect'), findsOneWidget);
+  });
+
+  testWidgets('app lock gate is transparent when disabled', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: AppLockGate(enabled: false, child: Text('SECRET')),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('SECRET'), findsOneWidget);
+  });
+
+  testWidgets('app lock gate hides content until unlocked', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppLockGate(
+          enabled: true,
+          unlock: () async {
+            calls++;
+            return calls > 1;
+          },
+          child: const Text('SECRET'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('AndroidIRCX is locked'), findsOneWidget);
+    expect(find.text('SECRET'), findsNothing);
+
+    await tester.tap(find.text('Unlock'));
+    await tester.pumpAndSettle();
+    expect(find.text('SECRET'), findsOneWidget);
+  });
+
+  testWidgets('onboarding wizard creates a network and completes', (
+    tester,
+  ) async {
+    final repo = InMemoryNetworkRepository(const []);
+    var completed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: OnboardingScreen(
+          networkRepository: repo,
+          onCompleted: () async {
+            completed = true;
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Welcome to AndroidIRCX'), findsOneWidget);
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Privacy step: consent required before Next is enabled.
+    await tester.tap(find.byType(Checkbox));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Identity step (defaults filled).
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Network step (DBase selected by default).
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Channels step -> Finish.
+    await tester.tap(find.text('Finish'));
+    await tester.pumpAndSettle();
+
+    final networks = await repo.loadNetworks();
+    expect(networks.any((network) => network.name == 'DBase'), isTrue);
+    expect(completed, isTrue);
   });
 
   testWidgets('applies saved app theme from settings repository', (

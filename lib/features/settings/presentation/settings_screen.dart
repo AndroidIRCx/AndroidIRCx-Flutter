@@ -7,6 +7,7 @@ import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/connections/presentation/profiles_screen.dart';
 import 'package:androidircx/features/connections/presentation/server_directory_picker.dart';
+import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -404,6 +405,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       const Divider(height: 1),
                       ListTile(
+                        leading: const Icon(Icons.shield_outlined),
+                        title: const Text('Data & privacy'),
+                        subtitle: const Text(
+                          'How your data is stored and the privacy policy.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const DataPrivacyScreen(),
+                          ),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
                         key: const Key('settings-support-topic'),
                         leading: const Icon(Icons.support_agent_outlined),
                         title: const Text('Support'),
@@ -456,6 +470,123 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           MaterialPageRoute<void>(
                             builder: (_) => const ProfilesScreen(),
                           ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  _SettingsSection(
+                    title: 'Security',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-app-lock'),
+                        secondary: const Icon(Icons.lock_outline),
+                        title: const Text('App lock'),
+                        subtitle: const Text(
+                          'Require fingerprint/PIN to open the app.',
+                        ),
+                        value: _settings.appLockEnabled,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(appLockEnabled: value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  _SettingsSection(
+                    title: 'Notifications',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-notify-highlights'),
+                        title: const Text('Highlights'),
+                        subtitle: const Text('Your nick or highlight words.'),
+                        value: _settings.notifyHighlights,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notifyHighlights: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-notify-pm'),
+                        title: const Text('Private messages'),
+                        value: _settings.notifyPrivateMessages,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notifyPrivateMessages: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-notify-dcc'),
+                        title: const Text('DCC offers'),
+                        value: _settings.notifyDccOffers,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notifyDccOffers: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-notify-errors'),
+                        title: const Text('Errors'),
+                        value: _settings.notifyErrors,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notifyErrors: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-notify-sound'),
+                        title: const Text('Notification sound'),
+                        value: _settings.notificationSound,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notificationSound: value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  _SettingsSection(
+                    title: 'Display',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-hide-jpq'),
+                        title: const Text('Hide join/part/quit'),
+                        subtitle: const Text(
+                          'Hide channel join, part, quit, and nick-change events.',
+                        ),
+                        value: _settings.hideJoinPartQuit,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(hideJoinPartQuit: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-show-timestamps'),
+                        title: const Text('Show timestamps'),
+                        value: _settings.showTimestamps,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(showTimestamps: value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  _SettingsSection(
+                    title: 'Writing',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-enter-to-send'),
+                        title: const Text('Enter key sends'),
+                        subtitle: const Text(
+                          'When off, Enter inserts a newline; use the Send button.',
+                        ),
+                        value: _settings.enterToSend,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(enterToSend: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-show-send-button'),
+                        title: const Text('Show send button'),
+                        value: _settings.showSendButton,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(showSendButton: value),
                         ),
                       ),
                     ],

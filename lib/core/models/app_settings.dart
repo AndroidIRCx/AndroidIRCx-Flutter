@@ -20,6 +20,17 @@ class AppSettings {
     this.messageDensity = MessageDensity.comfortable,
     this.monospaceMessages = false,
     this.nickColorMode = NickColorMode.soft,
+    this.onboardingCompleted = false,
+    this.appLockEnabled = false,
+    this.notifyHighlights = true,
+    this.notifyPrivateMessages = true,
+    this.notifyDccOffers = true,
+    this.notifyErrors = true,
+    this.notificationSound = true,
+    this.hideJoinPartQuit = false,
+    this.showTimestamps = true,
+    this.enterToSend = true,
+    this.showSendButton = true,
   });
 
   final bool showRawEvents;
@@ -35,6 +46,25 @@ class AppSettings {
   final bool monospaceMessages;
   final NickColorMode nickColorMode;
 
+  /// Whether the first-run onboarding + consent flow has been completed.
+  final bool onboardingCompleted;
+
+  /// Whether the whole app is locked behind biometric/PIN on launch/resume.
+  final bool appLockEnabled;
+
+  // Notifications.
+  final bool notifyHighlights;
+  final bool notifyPrivateMessages;
+  final bool notifyDccOffers;
+  final bool notifyErrors;
+  final bool notificationSound;
+
+  // Display / writing.
+  final bool hideJoinPartQuit;
+  final bool showTimestamps;
+  final bool enterToSend;
+  final bool showSendButton;
+
   AppSettings copyWith({
     bool? showRawEvents,
     NoticeRoutingMode? noticeRouting,
@@ -48,6 +78,17 @@ class AppSettings {
     MessageDensity? messageDensity,
     bool? monospaceMessages,
     NickColorMode? nickColorMode,
+    bool? onboardingCompleted,
+    bool? appLockEnabled,
+    bool? notifyHighlights,
+    bool? notifyPrivateMessages,
+    bool? notifyDccOffers,
+    bool? notifyErrors,
+    bool? notificationSound,
+    bool? hideJoinPartQuit,
+    bool? showTimestamps,
+    bool? enterToSend,
+    bool? showSendButton,
   }) {
     return AppSettings(
       showRawEvents: showRawEvents ?? this.showRawEvents,
@@ -68,6 +109,18 @@ class AppSettings {
       messageDensity: messageDensity ?? this.messageDensity,
       monospaceMessages: monospaceMessages ?? this.monospaceMessages,
       nickColorMode: nickColorMode ?? this.nickColorMode,
+      onboardingCompleted: onboardingCompleted ?? this.onboardingCompleted,
+      appLockEnabled: appLockEnabled ?? this.appLockEnabled,
+      notifyHighlights: notifyHighlights ?? this.notifyHighlights,
+      notifyPrivateMessages:
+          notifyPrivateMessages ?? this.notifyPrivateMessages,
+      notifyDccOffers: notifyDccOffers ?? this.notifyDccOffers,
+      notifyErrors: notifyErrors ?? this.notifyErrors,
+      notificationSound: notificationSound ?? this.notificationSound,
+      hideJoinPartQuit: hideJoinPartQuit ?? this.hideJoinPartQuit,
+      showTimestamps: showTimestamps ?? this.showTimestamps,
+      enterToSend: enterToSend ?? this.enterToSend,
+      showSendButton: showSendButton ?? this.showSendButton,
     );
   }
 
@@ -85,6 +138,17 @@ class AppSettings {
       'messageDensity': messageDensity.name,
       'monospaceMessages': monospaceMessages,
       'nickColorMode': nickColorMode.name,
+      'onboardingCompleted': onboardingCompleted,
+      'appLockEnabled': appLockEnabled,
+      'notifyHighlights': notifyHighlights,
+      'notifyPrivateMessages': notifyPrivateMessages,
+      'notifyDccOffers': notifyDccOffers,
+      'notifyErrors': notifyErrors,
+      'notificationSound': notificationSound,
+      'hideJoinPartQuit': hideJoinPartQuit,
+      'showTimestamps': showTimestamps,
+      'enterToSend': enterToSend,
+      'showSendButton': showSendButton,
     };
   }
 
@@ -122,6 +186,17 @@ class AppSettings {
         json['nickColorMode'],
         NickColorMode.soft,
       ),
+      onboardingCompleted: (json['onboardingCompleted'] as bool?) ?? false,
+      appLockEnabled: (json['appLockEnabled'] as bool?) ?? false,
+      notifyHighlights: (json['notifyHighlights'] as bool?) ?? true,
+      notifyPrivateMessages: (json['notifyPrivateMessages'] as bool?) ?? true,
+      notifyDccOffers: (json['notifyDccOffers'] as bool?) ?? true,
+      notifyErrors: (json['notifyErrors'] as bool?) ?? true,
+      notificationSound: (json['notificationSound'] as bool?) ?? true,
+      hideJoinPartQuit: (json['hideJoinPartQuit'] as bool?) ?? false,
+      showTimestamps: (json['showTimestamps'] as bool?) ?? true,
+      enterToSend: (json['enterToSend'] as bool?) ?? true,
+      showSendButton: (json['showSendButton'] as bool?) ?? true,
     );
   }
 }

@@ -93,13 +93,18 @@ class _ChatScreenState extends State<ChatScreen> {
         if (widget.networkController != null) widget.networkController!,
       ]),
       builder: (context, _) {
-        final visibleMessages = _messageSearchVisible
+        final baseMessages = _messageSearchVisible
             ? _controller.messagesForTab(
                 _controller.activeTabId,
                 query: _messageSearchController.text,
                 kinds: _messageSearchFilter.kinds,
               )
             : _controller.activeMessages;
+        final visibleMessages = _controller.settings.hideJoinPartQuit
+            ? baseMessages
+                .where((message) => message.kind != IrcMessageKind.event)
+                .toList(growable: false)
+            : baseMessages;
         return Scaffold(
           appBar: AppBar(
             title: Column(
@@ -313,6 +318,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     },
                     onReplyToMessage: _setPendingReply,
                     onDownloadAttachment: _downloadAttachment,
+                    showTimestamps: _controller.settings.showTimestamps,
                     onLoadOlder:
                         _controller.hasPersistentHistory && !_messageSearchVisible
                         ? () async {
@@ -356,6 +362,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   onPickDccFile: _pickAndSendDccFile,
                   onSuggestionSelected: _applyComposerSuggestion,
                   onAutocompleteSelected: _applyAutocompleteSuggestion,
+                  enterToSend: _controller.settings.enterToSend,
+                  showSendButton: _controller.settings.showSendButton,
                 ),
               ],
             ),
@@ -794,6 +802,13 @@ bool _isActiveDccTransfer(DccSession session) {
       session.status == DccSessionStatus.connected;
 }
 
+String _formatClock(DateTime timestamp) {
+  final local = timestamp.toLocal();
+  final hh = local.hour.toString().padLeft(2, '0');
+  final mm = local.minute.toString().padLeft(2, '0');
+  return '$hh:$mm';
+}
+
 class _ComposerArea extends StatelessWidget {
   const _ComposerArea({
     required this.suggestions,
@@ -806,6 +821,8 @@ class _ComposerArea extends StatelessWidget {
     required this.onPickDccFile,
     required this.onSuggestionSelected,
     required this.onAutocompleteSelected,
+    required this.enterToSend,
+    required this.showSendButton,
   });
 
   final List<CommandSuggestion> suggestions;
@@ -818,6 +835,8 @@ class _ComposerArea extends StatelessWidget {
   final VoidCallback onPickDccFile;
   final ValueChanged<CommandSuggestion> onSuggestionSelected;
   final ValueChanged<ComposerAutocompleteSuggestion> onAutocompleteSelected;
+  final bool enterToSend;
+  final bool showSendButton;
 
   @override
   Widget build(BuildContext context) {
@@ -842,9 +861,13 @@ class _ComposerArea extends StatelessWidget {
                   controller: controller,
                   minLines: 1,
                   maxLines: 4,
-                  textInputAction: TextInputAction.send,
+                  keyboardType:
+                      enterToSend ? TextInputType.text : TextInputType.multiline,
+                  textInputAction: enterToSend
+                      ? TextInputAction.send
+                      : TextInputAction.newline,
                   onChanged: onChanged,
-                  onSubmitted: (_) => onSubmitted(),
+                  onSubmitted: enterToSend ? (_) => onSubmitted() : null,
                   decoration: InputDecoration(hintText: hintText),
                 ),
               ),
@@ -857,7 +880,11 @@ class _ComposerArea extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
               ],
-              FilledButton(onPressed: onSubmitted, child: const Text('Send')),
+              if (showSendButton || !enterToSend)
+                FilledButton(
+                  onPressed: onSubmitted,
+                  child: const Text('Send'),
+                ),
             ],
           ),
         ),
@@ -1677,10 +1704,12 @@ class _MessageList extends StatelessWidget {
     required this.onReplyToMessage,
     required this.onDownloadAttachment,
     this.onLoadOlder,
+    this.showTimestamps = true,
   });
 
   final List<IrcMessage> messages;
   final bool showAttachmentPreviews;
+  final bool showTimestamps;
   final Future<void> Function()? onLoadOlder;
   final IrcMessage? Function(String replyId) resolveReplyTarget;
   final Map<String, int> Function(IrcMessage message) resolveReactions;
@@ -1766,6 +1795,13 @@ class _MessageList extends StatelessWidget {
                           Theme.of(context).textTheme.labelMedium?.color,
                     ),
                   ),
+                  if (showTimestamps) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      _formatClock(message.timestamp),
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ],
                   if (message.isPlayback) ...[
                     const SizedBox(width: 8),
                     Container(

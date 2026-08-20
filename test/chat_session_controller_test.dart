@@ -8,6 +8,7 @@ import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/dcc/services/dcc_service.dart';
 import 'package:androidircx/dcc/services/dcc_socket_backend.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
@@ -2715,6 +2716,47 @@ void main() {
       controller.dispose();
     },
   );
+
+  test('suppresses notifications disabled in settings', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+      settingsRepository: _FakeSettingsRepository(
+        const AppSettings(notifyPrivateMessages: false),
+      ),
+    );
+
+    final received = <ForegroundUserNotification>[];
+    final sub = controller.notifications.listen(received.add);
+    await controller.start();
+    transport.emit(':alice!u@h PRIVMSG AndroidIRCX :hey there');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      received.where(
+        (n) => n.channelKind == ForegroundNotificationChannelKind.queries,
+      ),
+      isEmpty,
+    );
+    // The message is still delivered to the query tab, just not notified.
+    expect(
+      controller.tabs.any((tab) => tab.name == 'alice'),
+      isTrue,
+    );
+
+    await sub.cancel();
+    controller.dispose();
+  });
 
   test('routes incoming notices to the server tab when configured', () async {
     final transport = _FakeTransport();

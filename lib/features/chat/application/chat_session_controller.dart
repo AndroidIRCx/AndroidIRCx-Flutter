@@ -3496,7 +3496,7 @@ class ChatSessionController extends ChangeNotifier {
             tabId: tab.id,
             sender: '*',
             content: joinDetails,
-            kind: IrcMessageKind.system,
+            kind: IrcMessageKind.event,
           );
           if (nick == (_ircService.currentNick ?? network.nickname)) {
             _activeTabId = tab.id;
@@ -3518,7 +3518,7 @@ class ChatSessionController extends ChangeNotifier {
             sender: '*',
             content:
                 '$partingNick left $channel${frame.trailing == null ? '' : ' (${frame.trailing})'}',
-            kind: IrcMessageKind.system,
+            kind: IrcMessageKind.event,
           );
         }
       case 'KICK':
@@ -3547,7 +3547,7 @@ class ChatSessionController extends ChangeNotifier {
           sender: '*',
           content:
               '${frame.senderNick ?? '*'} quit${frame.trailing == null ? '' : ' (${frame.trailing})'}',
-          kind: IrcMessageKind.system,
+          kind: IrcMessageKind.event,
         );
       case 'NICK':
         _renameUserAcrossChannels(
@@ -3559,7 +3559,7 @@ class ChatSessionController extends ChangeNotifier {
           sender: '*',
           content:
               '${frame.senderNick ?? '*'} is now known as ${frame.trailing ?? _firstOrNull(frame.params) ?? '?'}',
-          kind: IrcMessageKind.system,
+          kind: IrcMessageKind.event,
         );
       case 'CAP':
         _handleCapabilityFrame(frame);
@@ -5050,6 +5050,22 @@ class ChatSessionController extends ChangeNotifier {
     );
   }
 
+  bool _notificationEnabledFor(ForegroundNotificationChannelKind kind) {
+    switch (kind) {
+      case ForegroundNotificationChannelKind.highlights:
+        return _settings.notifyHighlights;
+      case ForegroundNotificationChannelKind.queries:
+        return _settings.notifyPrivateMessages;
+      case ForegroundNotificationChannelKind.dccTransfers:
+        return _settings.notifyDccOffers;
+      case ForegroundNotificationChannelKind.errors:
+        return _settings.notifyErrors;
+      case ForegroundNotificationChannelKind.connection:
+      case ForegroundNotificationChannelKind.mediaTransfers:
+        return true;
+    }
+  }
+
   void _emitNotification({
     required ForegroundNotificationChannelKind channelKind,
     required String tabId,
@@ -5057,7 +5073,8 @@ class ChatSessionController extends ChangeNotifier {
     required String body,
     String? messageId,
   }) {
-    if (_notificationController.isClosed) {
+    if (_notificationController.isClosed ||
+        !_notificationEnabledFor(channelKind)) {
       return;
     }
     final normalizedBody = _truncateNotificationText(body);
