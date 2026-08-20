@@ -17,6 +17,8 @@ class DccSession {
     this.token,
     this.filePath,
     this.bytesTransferred = 0,
+    this.resumeOffset = 0,
+    this.isReverse = false,
     this.error,
   });
 
@@ -33,6 +35,8 @@ class DccSession {
   final String? token;
   final String? filePath;
   final int bytesTransferred;
+  final int resumeOffset;
+  final bool isReverse;
   final String? error;
 
   DccSession copyWith({
@@ -49,6 +53,8 @@ class DccSession {
     String? token,
     String? filePath,
     int? bytesTransferred,
+    int? resumeOffset,
+    bool? isReverse,
     String? error,
   }) {
     return DccSession(
@@ -65,6 +71,8 @@ class DccSession {
       token: token ?? this.token,
       filePath: filePath ?? this.filePath,
       bytesTransferred: bytesTransferred ?? this.bytesTransferred,
+      resumeOffset: resumeOffset ?? this.resumeOffset,
+      isReverse: isReverse ?? this.isReverse,
       error: error ?? this.error,
     );
   }

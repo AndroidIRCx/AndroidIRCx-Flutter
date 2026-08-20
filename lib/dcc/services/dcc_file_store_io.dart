@@ -24,7 +24,15 @@ Future<DccTempFile> createPlatformDccTempFile(String fileName) async {
   final path = '${Directory.systemTemp.path}/$sanitized';
   final file = File(path);
   final sink = file.openWrite(mode: FileMode.writeOnly);
-  return (path: path, sink: _IoDccFileSink(sink));
+  return (
+    path: path,
+    sink: _IoDccFileSink(sink),
+    delete: () async {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    },
+  );
 }
 
 Future<DccSourceFile> openPlatformDccSourceFile(String path) async {
@@ -37,8 +45,10 @@ Future<DccSourceFile> openPlatformDccSourceFile(String path) async {
   final stat = await file.stat();
   return (
     path: file.path,
-    fileName: file.uri.pathSegments.isEmpty ? file.path : file.uri.pathSegments.last,
+    fileName: file.uri.pathSegments.isEmpty
+        ? file.path
+        : file.uri.pathSegments.last,
     size: stat.size,
-    readAllBytes: file.readAsBytes,
+    openRead: file.openRead,
   );
 }

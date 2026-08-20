@@ -43,7 +43,7 @@ class ScramSha256Session {
     }
 
     final iterations = int.tryParse(iterationText);
-    if (iterations == null || iterations <= 0) {
+    if (iterations == null || iterations < 4096) {
       throw const FormatException('Invalid SCRAM iteration count.');
     }
 
@@ -57,12 +57,10 @@ class ScramSha256Session {
     );
     final clientKey = _hmacSha256(saltedPassword, utf8.encode('Client Key'));
     final storedKey = sha256.convert(clientKey).bytes;
-    final clientSignature =
-        _hmacSha256(storedKey, utf8.encode(authMessage));
+    final clientSignature = _hmacSha256(storedKey, utf8.encode(authMessage));
     final clientProof = _xor(clientKey, clientSignature);
     final serverKey = _hmacSha256(saltedPassword, utf8.encode('Server Key'));
-    final serverSignature =
-        _hmacSha256(serverKey, utf8.encode(authMessage));
+    final serverSignature = _hmacSha256(serverKey, utf8.encode(authMessage));
     _expectedServerSignature = base64.encode(serverSignature);
 
     return '$clientFinalWithoutProof,p=${base64.encode(clientProof)}';
@@ -81,8 +79,11 @@ class ScramSha256Session {
 
   static String _defaultNonceGenerator() {
     final random = Random.secure();
-    final bytes =
-        List<int>.generate(18, (_) => random.nextInt(256), growable: false);
+    final bytes = List<int>.generate(
+      18,
+      (_) => random.nextInt(256),
+      growable: false,
+    );
     return base64.encode(bytes).replaceAll('=', '');
   }
 
@@ -110,13 +111,7 @@ class ScramSha256Session {
     List<int> salt,
     int iterations,
   ) {
-    final blockIndex = Uint8List.fromList([
-      ...salt,
-      0,
-      0,
-      0,
-      1,
-    ]);
+    final blockIndex = Uint8List.fromList([...salt, 0, 0, 0, 1]);
     var u = _hmacSha256(password, blockIndex);
     final output = Uint8List.fromList(u);
     for (var i = 1; i < iterations; i++) {

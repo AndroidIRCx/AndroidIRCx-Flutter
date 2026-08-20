@@ -7,17 +7,23 @@ import 'package:androidircx/core/models/dcc_session.dart';
 import 'dcc_file_store.dart';
 import 'dcc_socket_backend.dart';
 
-typedef DccMessageEvent = ({String tabId, String sender, String content, bool isOwn});
+typedef DccMessageEvent = ({
+  String tabId,
+  String sender,
+  String content,
+  bool isOwn,
+});
 
 class DccService {
-  DccService({
-    DccSocketBackend? backend,
-  }) : _backend = backend ?? createDccSocketBackend();
+  DccService({DccSocketBackend? backend})
+    : _backend = backend ?? createDccSocketBackend();
 
   final DccSocketBackend _backend;
   final Map<String, DccSession> _sessions = <String, DccSession>{};
-  final Map<String, DccSocketConnection> _connections = <String, DccSocketConnection>{};
+  final Map<String, DccSocketConnection> _connections =
+      <String, DccSocketConnection>{};
   final Map<String, DccSocketServer> _servers = <String, DccSocketServer>{};
+  final Map<String, DccTempFile> _tempFiles = <String, DccTempFile>{};
   final Map<String, StreamSubscription<List<int>>> _subscriptions =
       <String, StreamSubscription<List<int>>>{};
   final StreamController<DccSession> _sessionController =
@@ -63,10 +69,16 @@ class DccService {
   }
 
   Future<void> close(DccSession session) async {
+    final activeSession = _sessions[session.tabId] ?? session;
     await _subscriptions.remove(session.tabId)?.cancel();
     await _connections.remove(session.tabId)?.close();
     await _servers.remove(session.tabId)?.close();
-    final closed = session.copyWith(status: DccSessionStatus.closed);
+    if (activeSession.type == DccSessionType.send &&
+        activeSession.direction == 'incoming' &&
+        activeSession.status != DccSessionStatus.closed) {
+      await _deleteTempFile(session.tabId);
+    }
+    final closed = activeSession.copyWith(status: DccSessionStatus.closed);
     _sessions[session.tabId] = closed;
     _emitSession(closed);
   }
@@ -186,11 +198,17 @@ class DccService {
         _sessions[tabId] = connected;
         _emitSession(connected);
         try {
-          final payload = await sourceFile.readAllBytes();
-          await connection.sendBytes(payload);
+          var transferred = 0;
+          await for (final chunk in sourceFile.openRead()) {
+            await connection.sendBytes(chunk);
+            transferred += chunk.length;
+            final updated = connected.copyWith(bytesTransferred: transferred);
+            _sessions[tabId] = updated;
+            _emitSession(updated);
+          }
           final completed = connected.copyWith(
             status: DccSessionStatus.closed,
-            bytesTransferred: payload.length,
+            bytesTransferred: transferred,
           );
           _sessions[tabId] = completed;
           _emitSession(completed);
@@ -218,6 +236,9 @@ class DccService {
     }
     for (final server in _servers.values) {
       await server.close();
+    }
+    for (final tabId in _tempFiles.keys.toList(growable: false)) {
+      await _deleteTempFile(tabId);
     }
     await _sessionController.close();
     await _messageController.close();
@@ -280,6 +301,7 @@ class DccService {
       _connections[session.tabId] = connection;
       final fileName = session.filename ?? 'dcc-download.bin';
       final tempFile = await createDccTempFile(fileName);
+      _tempFiles[session.tabId] = tempFile;
       sink = tempFile.sink;
       final connected = connecting.copyWith(
         status: DccSessionStatus.connected,
@@ -305,11 +327,12 @@ class DccService {
             status: DccSessionStatus.closed,
             bytesTransferred: transferred,
           );
+          _tempFiles.remove(session.tabId);
           _sessions[session.tabId] = completed;
           _emitSession(completed);
         },
         onError: (Object error, StackTrace stackTrace) async {
-          await sink?.close();
+          await _deleteTempFile(session.tabId);
           final failed = connected.copyWith(
             status: DccSessionStatus.failed,
             error: error.toString(),
@@ -320,7 +343,7 @@ class DccService {
         },
       );
     } catch (error) {
-      await sink?.close();
+      await _deleteTempFile(session.tabId);
       final failed = connecting.copyWith(
         status: DccSessionStatus.failed,
         error: error.toString(),
@@ -336,6 +359,31 @@ class DccService {
       return null;
     }
 
-    return ((parts[0]! << 24) >>> 0) + (parts[1]! << 16) + (parts[2]! << 8) + parts[3]!;
+    return ((parts[0]! << 24) >>> 0) +
+        (parts[1]! << 16) +
+        (parts[2]! << 8) +
+        parts[3]!;
+  }
+
+  Future<void> _deleteTempFile(String tabId) async {
+    final tempFile = _tempFiles.remove(tabId);
+    if (tempFile == null) {
+      return;
+    }
+    try {
+      await tempFile.sink.flush();
+    } catch (_) {
+      // Best-effort cleanup only. The transfer state already reports failure or close.
+    }
+    try {
+      await tempFile.sink.close();
+    } catch (_) {
+      // Best-effort cleanup only. The transfer state already reports failure or close.
+    }
+    try {
+      await tempFile.delete();
+    } catch (_) {
+      // Best-effort cleanup only. The transfer state already reports failure or close.
+    }
   }
 }

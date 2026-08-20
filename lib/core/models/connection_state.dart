@@ -1,7 +1,10 @@
 enum ConnectionPhase {
   idle,
   connecting,
+  registering,
+  authenticating,
   connected,
+  reconnecting,
   disconnecting,
   disconnected,
   error,

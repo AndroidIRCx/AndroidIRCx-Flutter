@@ -4,18 +4,32 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('detects media and url parts in a message', () {
     final parts = parseMessageContent(
-      'Look https://example.com/a.png !enc-media [123e4567-e89b-12d3-a456-426614174000]',
+      'Look https://example.com/a.png https://example.com/a.mp4 https://example.com/readme.pdf !enc-media [123e4567-e89b-12d3-a456-426614174000]',
     );
 
-    expect(parts.any((part) => part.type == ParsedMessagePartType.image), isTrue);
-    expect(parts.any((part) => part.type == ParsedMessagePartType.media), isTrue);
+    expect(
+      parts.any((part) => part.type == ParsedMessagePartType.image),
+      isTrue,
+    );
+    expect(
+      parts.any((part) => part.type == ParsedMessagePartType.video),
+      isTrue,
+    );
+    expect(
+      parts.any((part) => part.type == ParsedMessagePartType.file),
+      isTrue,
+    );
+    expect(
+      parts.any((part) => part.type == ParsedMessagePartType.media),
+      isTrue,
+    );
   });
 
   test('extracts urls and emojis', () {
-    expect(
-      extractUrls('Visit www.androidircx.com and https://example.com'),
-      hasLength(2),
-    );
+    expect(extractUrls('Visit www.androidircx.com, and https://example.com.'), [
+      'www.androidircx.com',
+      'https://example.com',
+    ]);
     expect(extractEmojis('Hi 😀 IRC'), contains('😀'));
   });
 

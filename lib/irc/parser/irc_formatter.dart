@@ -1,7 +1,9 @@
 class IrcFormatCodes {
   static const int bold = 0x02;
+  static const int hexColor = 0x04;
   static const int color = 0x03;
   static const int reset = 0x0F;
+  static const int monospace = 0x11;
   static const int reverse = 0x16;
   static const int italic = 0x1D;
   static const int strikethrough = 0x1E;
@@ -119,27 +121,36 @@ class IrcFormatStyle {
     this.underline = false,
     this.italic = false,
     this.strikethrough = false,
+    this.monospace = false,
     this.reverse = false,
     this.color,
     this.background,
+    this.colorHex,
+    this.backgroundHex,
   });
 
   final bool bold;
   final bool underline;
   final bool italic;
   final bool strikethrough;
+  final bool monospace;
   final bool reverse;
   final int? color;
   final int? background;
+  final String? colorHex;
+  final String? backgroundHex;
 
   IrcFormatStyle copyWith({
     bool? bold,
     bool? underline,
     bool? italic,
     bool? strikethrough,
+    bool? monospace,
     bool? reverse,
     int? color,
     int? background,
+    String? colorHex,
+    String? backgroundHex,
     bool clearColor = false,
     bool clearBackground = false,
   }) {
@@ -148,29 +159,31 @@ class IrcFormatStyle {
       underline: underline ?? this.underline,
       italic: italic ?? this.italic,
       strikethrough: strikethrough ?? this.strikethrough,
+      monospace: monospace ?? this.monospace,
       reverse: reverse ?? this.reverse,
-      color: clearColor ? null : (color ?? this.color),
-      background: clearBackground ? null : (background ?? this.background),
+      color: clearColor || colorHex != null ? null : (color ?? this.color),
+      background: clearBackground || backgroundHex != null
+          ? null
+          : (background ?? this.background),
+      colorHex: clearColor || color != null
+          ? null
+          : (colorHex ?? this.colorHex),
+      backgroundHex: clearBackground || background != null
+          ? null
+          : (backgroundHex ?? this.backgroundHex),
     );
   }
 }
 
 class IrcTextSegment {
-  const IrcTextSegment({
-    required this.text,
-    required this.style,
-  });
+  const IrcTextSegment({required this.text, required this.style});
 
   final String text;
   final IrcFormatStyle style;
 }
 
 class IrcLinkSegment {
-  const IrcLinkSegment({
-    required this.text,
-    required this.style,
-    this.url,
-  });
+  const IrcLinkSegment({required this.text, required this.style, this.url});
 
   final String text;
   final IrcFormatStyle style;
@@ -218,12 +231,31 @@ List<IrcTextSegment> parseIrcText(String text) {
         currentStyle = currentStyle.copyWith(bold: !currentStyle.bold);
         i += 1;
         continue;
+      case IrcFormatCodes.hexColor:
+        flushText();
+        final parsed = _parseHexColorSequence(text, i);
+        i = parsed.nextIndex;
+        if (parsed.foreground == null && parsed.background == null) {
+          currentStyle = currentStyle.copyWith(
+            clearColor: true,
+            clearBackground: true,
+          );
+        } else {
+          currentStyle = currentStyle.copyWith(
+            colorHex: parsed.foreground ?? currentStyle.colorHex,
+            backgroundHex: parsed.background ?? currentStyle.backgroundHex,
+          );
+        }
+        continue;
       case IrcFormatCodes.color:
         flushText();
         final parsed = _parseColorSequence(text, i);
         i = parsed.nextIndex;
         if (parsed.foreground == null && parsed.background == null) {
-          currentStyle = currentStyle.copyWith(clearColor: true, clearBackground: true);
+          currentStyle = currentStyle.copyWith(
+            clearColor: true,
+            clearBackground: true,
+          );
         } else {
           currentStyle = currentStyle.copyWith(
             color: parsed.foreground ?? currentStyle.color,
@@ -238,7 +270,16 @@ List<IrcTextSegment> parseIrcText(String text) {
         continue;
       case IrcFormatCodes.underline:
         flushText();
-        currentStyle = currentStyle.copyWith(underline: !currentStyle.underline);
+        currentStyle = currentStyle.copyWith(
+          underline: !currentStyle.underline,
+        );
+        i += 1;
+        continue;
+      case IrcFormatCodes.monospace:
+        flushText();
+        currentStyle = currentStyle.copyWith(
+          monospace: !currentStyle.monospace,
+        );
         i += 1;
         continue;
       case IrcFormatCodes.italic:
@@ -248,7 +289,9 @@ List<IrcTextSegment> parseIrcText(String text) {
         continue;
       case IrcFormatCodes.strikethrough:
         flushText();
-        currentStyle = currentStyle.copyWith(strikethrough: !currentStyle.strikethrough);
+        currentStyle = currentStyle.copyWith(
+          strikethrough: !currentStyle.strikethrough,
+        );
         i += 1;
         continue;
       case IrcFormatCodes.reverse:
@@ -279,10 +322,14 @@ String stripIrcFormatting(String text) {
       case IrcFormatCodes.bold:
       case IrcFormatCodes.reset:
       case IrcFormatCodes.underline:
+      case IrcFormatCodes.monospace:
       case IrcFormatCodes.italic:
       case IrcFormatCodes.strikethrough:
       case IrcFormatCodes.reverse:
         i += 1;
+        continue;
+      case IrcFormatCodes.hexColor:
+        i = _parseHexColorSequence(text, i).nextIndex;
         continue;
       case IrcFormatCodes.color:
         i = _parseColorSequence(text, i).nextIndex;
@@ -294,6 +341,14 @@ String stripIrcFormatting(String text) {
   }
 
   return buffer.toString();
+}
+
+String formatIrcPlainText(String text, {bool collapseWhitespace = false}) {
+  final stripped = stripIrcFormatting(text);
+  if (!collapseWhitespace) {
+    return stripped;
+  }
+  return stripped.replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
 String formatIrcDebug(String text) {
@@ -309,6 +364,18 @@ String formatIrcDebug(String text) {
       case IrcFormatCodes.bold:
         buffer.write('[B]');
         i += 1;
+      case IrcFormatCodes.hexColor:
+        final parsed = _parseHexColorSequence(text, i);
+        final colorBuffer = StringBuffer('[HC');
+        if (parsed.foreground != null) {
+          colorBuffer.write(parsed.foreground);
+        }
+        if (parsed.background != null) {
+          colorBuffer.write(',${parsed.background}');
+        }
+        colorBuffer.write(']');
+        buffer.write(colorBuffer.toString());
+        i = parsed.nextIndex;
       case IrcFormatCodes.color:
         final parsed = _parseColorSequence(text, i);
         final colorBuffer = StringBuffer('[C');
@@ -326,6 +393,9 @@ String formatIrcDebug(String text) {
         i += 1;
       case IrcFormatCodes.underline:
         buffer.write('[U]');
+        i += 1;
+      case IrcFormatCodes.monospace:
+        buffer.write('[M]');
         i += 1;
       case IrcFormatCodes.italic:
         buffer.write('[I]');
@@ -358,13 +428,11 @@ List<IrcLinkSegment> parseIrcTextWithLinks(String text) {
         );
       }
       final rawUrl = match.group(0)!;
-      final fullUrl = rawUrl.toLowerCase().startsWith('www.') ? 'https://$rawUrl' : rawUrl;
+      final fullUrl = rawUrl.toLowerCase().startsWith('www.')
+          ? 'https://$rawUrl'
+          : rawUrl;
       output.add(
-        IrcLinkSegment(
-          text: rawUrl,
-          style: segment.style,
-          url: fullUrl,
-        ),
+        IrcLinkSegment(text: rawUrl, style: segment.style, url: fullUrl),
       );
       lastIndex = match.end;
     }
@@ -395,6 +463,18 @@ class _ParsedColorSequence {
   final int? background;
 }
 
+class _ParsedHexColorSequence {
+  const _ParsedHexColorSequence({
+    required this.nextIndex,
+    this.foreground,
+    this.background,
+  });
+
+  final int nextIndex;
+  final String? foreground;
+  final String? background;
+}
+
 _ParsedColorSequence _parseColorSequence(String text, int start) {
   var i = start + 1;
   int? foreground;
@@ -418,8 +498,12 @@ _ParsedColorSequence _parseColorSequence(String text, int start) {
 
   foreground = readNumber();
   if (i < text.length && text[i] == ',') {
+    final commaIndex = i;
     i += 1;
     background = readNumber();
+    if (background == null) {
+      i = commaIndex;
+    }
   }
 
   return _ParsedColorSequence(
@@ -429,4 +513,53 @@ _ParsedColorSequence _parseColorSequence(String text, int start) {
   );
 }
 
+_ParsedHexColorSequence _parseHexColorSequence(String text, int start) {
+  var i = start + 1;
+
+  String? readHex() {
+    if (i + 6 > text.length) {
+      return null;
+    }
+    final candidate = text.substring(i, i + 6);
+    if (!_isHexColor(candidate)) {
+      return null;
+    }
+    i += 6;
+    return '#${candidate.toUpperCase()}';
+  }
+
+  final foreground = readHex();
+  String? background;
+  if (foreground != null && i < text.length && text[i] == ',') {
+    final commaIndex = i;
+    i += 1;
+    background = readHex();
+    if (background == null) {
+      i = commaIndex;
+    }
+  }
+
+  return _ParsedHexColorSequence(
+    nextIndex: i,
+    foreground: foreground,
+    background: background,
+  );
+}
+
 bool _isAsciiDigit(int codeUnit) => codeUnit >= 48 && codeUnit <= 57;
+
+bool _isHexColor(String value) {
+  if (value.length != 6) {
+    return false;
+  }
+  for (var i = 0; i < value.length; i += 1) {
+    final unit = value.codeUnitAt(i);
+    final isDigit = unit >= 48 && unit <= 57;
+    final isUpper = unit >= 65 && unit <= 70;
+    final isLower = unit >= 97 && unit <= 102;
+    if (!isDigit && !isUpper && !isLower) {
+      return false;
+    }
+  }
+  return true;
+}

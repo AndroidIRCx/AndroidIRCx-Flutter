@@ -1,8 +1,6 @@
-enum SaslMechanism {
-  plain,
-  scramSha256,
-  external,
-}
+import 'package:androidircx/core/security/secret_redaction.dart';
+
+enum SaslMechanism { plain, scramSha256, external }
 
 class NetworkConfig {
   const NetworkConfig({
@@ -22,6 +20,10 @@ class NetworkConfig {
     this.saslPassword,
     this.saslMechanism = SaslMechanism.plain,
     this.autoConnect = false,
+    this.autoJoinChannels = const <String>[],
+    this.autoJoinChannelKeys = const <String, String>{},
+    this.profileLabel,
+    this.profileGroup,
   });
 
   final String id;
@@ -40,6 +42,10 @@ class NetworkConfig {
   final String? saslPassword;
   final SaslMechanism saslMechanism;
   final bool autoConnect;
+  final List<String> autoJoinChannels;
+  final Map<String, String> autoJoinChannelKeys;
+  final String? profileLabel;
+  final String? profileGroup;
 
   NetworkConfig copyWith({
     String? id,
@@ -58,6 +64,10 @@ class NetworkConfig {
     String? saslPassword,
     SaslMechanism? saslMechanism,
     bool? autoConnect,
+    List<String>? autoJoinChannels,
+    Map<String, String>? autoJoinChannelKeys,
+    String? profileLabel,
+    String? profileGroup,
   }) {
     return NetworkConfig(
       id: id ?? this.id,
@@ -76,6 +86,10 @@ class NetworkConfig {
       saslPassword: saslPassword ?? this.saslPassword,
       saslMechanism: saslMechanism ?? this.saslMechanism,
       autoConnect: autoConnect ?? this.autoConnect,
+      autoJoinChannels: autoJoinChannels ?? this.autoJoinChannels,
+      autoJoinChannelKeys: autoJoinChannelKeys ?? this.autoJoinChannelKeys,
+      profileLabel: profileLabel ?? this.profileLabel,
+      profileGroup: profileGroup ?? this.profileGroup,
     );
   }
 
@@ -97,7 +111,20 @@ class NetworkConfig {
       'saslPassword': saslPassword,
       'saslMechanism': saslMechanism.name,
       'autoConnect': autoConnect,
+      'autoJoinChannels': autoJoinChannels,
+      'autoJoinChannelKeys': autoJoinChannelKeys,
+      'profileLabel': profileLabel,
+      'profileGroup': profileGroup,
     };
+  }
+
+  Map<String, Object?> toRedactedJson() {
+    return redactNetworkSecrets(toJson());
+  }
+
+  @override
+  String toString() {
+    return 'NetworkConfig(${toRedactedJson()})';
   }
 
   factory NetworkConfig.fromJson(Map<String, Object?> json) {
@@ -120,6 +147,53 @@ class NetworkConfig {
           ? SaslMechanism.plain
           : SaslMechanism.values.byName(json['saslMechanism']! as String),
       autoConnect: (json['autoConnect'] as bool?) ?? false,
+      autoJoinChannels: _stringList(json['autoJoinChannels']),
+      autoJoinChannelKeys: _channelKeyMap(json['autoJoinChannelKeys']),
+      profileLabel: _nonEmptyString(json['profileLabel']),
+      profileGroup: _nonEmptyString(json['profileGroup']),
     );
+  }
+
+  static List<String> _stringList(Object? value) {
+    if (value is! List) {
+      return const <String>[];
+    }
+
+    return value
+        .whereType<String>()
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  static Map<String, String> _channelKeyMap(Object? value) {
+    if (value is! Map) {
+      return const <String, String>{};
+    }
+
+    final result = <String, String>{};
+    value.forEach((rawChannel, rawKey) {
+      if (rawChannel is! String || rawKey is! String) {
+        return;
+      }
+      final trimmedChannel = rawChannel.trim();
+      final trimmedKey = rawKey.trim();
+      if (trimmedChannel.isEmpty || trimmedKey.isEmpty) {
+        return;
+      }
+      final channel = trimmedChannel.startsWith('#')
+          ? trimmedChannel
+          : '#$trimmedChannel';
+      result[channel] = trimmedKey;
+    });
+    return Map<String, String>.unmodifiable(result);
+  }
+
+  static String? _nonEmptyString(Object? value) {
+    if (value is! String) {
+      return null;
+    }
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
   }
 }

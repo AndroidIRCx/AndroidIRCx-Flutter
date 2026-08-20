@@ -1,25 +1,32 @@
 import 'package:androidircx/irc/models/irc_message_frame.dart';
 
 IrcMessageFrame parseIrcMessage(String raw) {
-  var rest = raw.trim();
+  var rest = raw.replaceFirst(RegExp(r'[\r\n]+$'), '').trimLeft();
   Map<String, String?> tags = const <String, String?>{};
   String? prefix;
   String? trailing;
 
   if (rest.startsWith('@')) {
     final tagsEnd = rest.indexOf(' ');
-    if (tagsEnd != -1) {
-      tags = _parseMessageTags(rest.substring(1, tagsEnd));
-      rest = rest.substring(tagsEnd + 1);
+    if (tagsEnd == -1) {
+      return IrcMessageFrame(raw: raw, command: '', params: const []);
     }
+    tags = _parseMessageTags(rest.substring(1, tagsEnd));
+    rest = rest.substring(tagsEnd + 1).trimLeft();
   }
 
   if (rest.startsWith(':')) {
     final prefixEnd = rest.indexOf(' ');
-    if (prefixEnd != -1) {
-      prefix = rest.substring(1, prefixEnd);
-      rest = rest.substring(prefixEnd + 1);
+    if (prefixEnd == -1) {
+      return IrcMessageFrame(
+        raw: raw,
+        tags: tags,
+        command: '',
+        params: const [],
+      );
     }
+    prefix = rest.substring(1, prefixEnd);
+    rest = rest.substring(prefixEnd + 1).trimLeft();
   }
 
   final trailingIndex = rest.indexOf(' :');
@@ -60,13 +67,13 @@ Map<String, String?> _parseMessageTags(String source) {
 
     final separator = entry.indexOf('=');
     if (separator == -1) {
-      tags[entry] = null;
+      tags.putIfAbsent(entry, () => null);
       continue;
     }
 
     final key = entry.substring(0, separator);
     final value = entry.substring(separator + 1);
-    tags[key] = _unescapeTagValue(value);
+    tags.putIfAbsent(key, () => _unescapeTagValue(value));
   }
 
   return tags;
