@@ -272,6 +272,51 @@ void main() {
       controller.dispose();
     });
 
+    test('network availability pauses and resumes reconnects once', () async {
+      final transports = <_FakeTransport>[];
+      final service = IrcService(
+        transportConnector: (_) async {
+          final transport = _FakeTransport();
+          transports.add(transport);
+          return transport;
+        },
+      );
+      final controller = controllerFor(service);
+
+      await controller.start();
+      transports.single.emit(':server 001 AndroidIRCX :Welcome');
+      await Future<void>.delayed(Duration.zero);
+
+      await controller.handleNetworkAvailabilityChanged(false);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.connection.phase, ConnectionPhase.disconnected);
+      expect(controller.isReconnectScheduled, isFalse);
+      expect(transports.single.closeCount, 1);
+      expect(
+        controller
+            .messagesForTab(controller.activeTabId)
+            .any((message) => message.content.contains('reconnect is paused')),
+        isTrue,
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 6));
+      expect(transports, hasLength(1));
+
+      await controller.handleNetworkAvailabilityChanged(true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(transports, hasLength(2));
+      expect(controller.isReconnectScheduled, isFalse);
+
+      await controller.handleNetworkAvailabilityChanged(true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(transports, hasLength(2));
+
+      controller.dispose();
+    });
+
     test(
       'IRC ERROR enters reconnecting state without waiting for socket close',
       () async {

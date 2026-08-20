@@ -14,6 +14,8 @@ class _FakeTransport implements IrcTransport {
   final StreamController<String> _controller =
       StreamController<String>.broadcast();
   final List<String> sentLines = <String>[];
+  Duration sendDelay = Duration.zero;
+  Completer<void>? sendBlocker;
   int closeCount = 0;
 
   @override
@@ -37,11 +39,134 @@ class _FakeTransport implements IrcTransport {
 
   @override
   Future<void> sendLine(String line) async {
+    if (sendDelay > Duration.zero) {
+      await Future<void>.delayed(sendDelay);
+    }
+    final blocker = sendBlocker;
+    if (blocker != null) {
+      await blocker.future;
+    }
     sentLines.add(line);
   }
 }
 
 void main() {
+  test(
+    'connect timeout moves service to error and closes late transport',
+    () async {
+      final connectorGate = Completer<IrcTransport>();
+      final transport = _FakeTransport();
+      final service = IrcService(
+        connectTimeout: const Duration(milliseconds: 5),
+        transportConnector: (_) => connectorGate.future,
+      );
+
+      await service.connect(
+        const NetworkConfig(
+          id: 'timeout-net',
+          name: 'TimeoutNet',
+          host: 'irc.timeout.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+        ),
+      );
+      connectorGate.complete(transport);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.state.phase, ConnectionPhase.error);
+      expect(service.state.message, contains('Connection timed out'));
+      expect(transport.closeCount, 1);
+
+      service.dispose();
+    },
+  );
+
+  test('read timeout moves service to error after idle socket', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      readTimeout: const Duration(milliseconds: 10),
+      transportConnector: (_) async => transport,
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'read-timeout',
+        name: 'ReadTimeout',
+        host: 'irc.timeout.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    expect(service.state.phase, ConnectionPhase.error);
+    expect(service.state.message, 'Read timeout.');
+    expect(transport.closeCount, 1);
+
+    service.dispose();
+  });
+
+  test('write timeout fails queued send and closes transport', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      writeTimeout: const Duration(milliseconds: 5),
+      transportConnector: (_) async => transport,
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'write-timeout',
+        name: 'WriteTimeout',
+        host: 'irc.timeout.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+    transport.sendBlocker = Completer<void>();
+
+    await expectLater(
+      service.sendRaw('PING timeout'),
+      throwsA(isA<TimeoutException>()),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(service.state.phase, ConnectionPhase.error);
+    expect(transport.closeCount, 1);
+
+    service.dispose();
+  });
+
+  test('send queue preserves order and applies burst backpressure', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      sendRateBurst: 1,
+      sendRateWindow: const Duration(milliseconds: 20),
+      transportConnector: (_) async => transport,
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'queued',
+        name: 'Queued',
+        host: 'irc.queue.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 25));
+    final stopwatch = Stopwatch()..start();
+    await Future.wait(<Future<void>>[
+      service.sendRaw('ONE'),
+      service.sendRaw('TWO'),
+    ]);
+    stopwatch.stop();
+
+    expect(transport.sentLines.sublist(3), ['ONE', 'TWO']);
+    expect(stopwatch.elapsedMilliseconds, greaterThanOrEqualTo(15));
+
+    service.dispose();
+  });
+
   test('connect while connecting does not open duplicate transport', () async {
     var connectorCalls = 0;
     final connectorGate = Completer<IrcTransport>();

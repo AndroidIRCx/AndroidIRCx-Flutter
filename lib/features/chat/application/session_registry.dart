@@ -124,6 +124,16 @@ class SessionRegistry extends ChangeNotifier {
     }
   }
 
+  Future<void> handleNetworkAvailabilityChanged(bool isOnline) async {
+    final sessions = _sessions.values.toList(growable: false);
+    await Future.wait(
+      sessions.map(
+        (controller) => controller.handleNetworkAvailabilityChanged(isOnline),
+      ),
+    );
+    await syncForegroundConnectionService();
+  }
+
   Future<void> syncForegroundConnectionService() async {
     final snapshot = _foregroundSnapshot();
     if (!snapshot.shouldRunForegroundService) {

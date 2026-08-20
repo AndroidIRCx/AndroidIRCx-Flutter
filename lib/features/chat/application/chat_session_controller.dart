@@ -126,6 +126,7 @@ class ChatSessionController extends ChangeNotifier {
   bool _isBootstrapped = false;
   bool _manualDisconnectRequested = false;
   bool _isDisposed = false;
+  bool _isNetworkAvailable = true;
   bool _autoJoinAttempted = false;
   bool _serviceAuthFallbackAttempted = false;
   int _reconnectAttempt = 0;
@@ -1347,8 +1348,44 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   Future<void> reconnectNow() async {
+    _manualDisconnectRequested = false;
     _cancelReconnect();
     await start();
+  }
+
+  Future<void> handleNetworkAvailabilityChanged(bool isOnline) async {
+    if (_isDisposed || _isNetworkAvailable == isOnline) {
+      return;
+    }
+
+    _isNetworkAvailable = isOnline;
+    if (!isOnline) {
+      _cancelReconnect();
+      _appendMessage(
+        tabId: _serverTabId(network.id),
+        sender: '*',
+        content: 'Network unavailable. IRC reconnect is paused.',
+        kind: IrcMessageKind.system,
+      );
+      if (_isConnectionActiveForNetworkChange(_connection.phase)) {
+        await _ircService.disconnect('Network unavailable');
+      }
+      unawaited(_persistState());
+      notifyListeners();
+      return;
+    }
+
+    _appendMessage(
+      tabId: _serverTabId(network.id),
+      sender: '*',
+      content: 'Network available. Reconnecting IRC session.',
+      kind: IrcMessageKind.system,
+    );
+    _manualDisconnectRequested = false;
+    _cancelReconnect();
+    unawaited(_persistState());
+    await start();
+    notifyListeners();
   }
 
   Future<void> flushState() {
@@ -1590,7 +1627,7 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   void _scheduleReconnect() {
-    if (_isDisposed || _manualDisconnectRequested) {
+    if (_isDisposed || _manualDisconnectRequested || !_isNetworkAvailable) {
       return;
     }
 
@@ -1623,6 +1660,20 @@ class ChatSessionController extends ChangeNotifier {
         notifyListeners();
       }
     });
+  }
+
+  bool _isConnectionActiveForNetworkChange(ConnectionPhase phase) {
+    return switch (phase) {
+      ConnectionPhase.connecting ||
+      ConnectionPhase.registering ||
+      ConnectionPhase.authenticating ||
+      ConnectionPhase.connected ||
+      ConnectionPhase.reconnecting => true,
+      ConnectionPhase.idle ||
+      ConnectionPhase.disconnecting ||
+      ConnectionPhase.disconnected ||
+      ConnectionPhase.error => false,
+    };
   }
 
   Duration _nextReconnectDelay() {

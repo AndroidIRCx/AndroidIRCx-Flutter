@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
@@ -15,6 +16,7 @@ class _FakeTransport implements IrcTransport {
   final StreamController<String> _controller =
       StreamController<String>.broadcast();
   final List<String> sentLines = <String>[];
+  int closeCount = 0;
 
   @override
   Stream<String> get lines => _controller.stream;
@@ -25,6 +27,7 @@ class _FakeTransport implements IrcTransport {
 
   @override
   Future<void> close() async {
+    closeCount += 1;
     if (!_controller.isClosed) {
       await _controller.close();
     }
@@ -166,6 +169,59 @@ void main() {
     await registry.closeSession(network.id);
 
     expect(foregroundService.stopCount, greaterThanOrEqualTo(1));
+
+    registry.dispose();
+  });
+
+  test('handles network availability changes for tracked sessions', () async {
+    final transports = <_FakeTransport>[];
+    final foregroundService = _RecordingForegroundConnectionService();
+    final registry = SessionRegistry(
+      foregroundService: foregroundService,
+      sessionFactory: (network) => ChatSessionController(
+        network: network,
+        ircService: IrcService(
+          transportConnector: (_) async {
+            final transport = _FakeTransport();
+            transports.add(transport);
+            return transport;
+          },
+        ),
+        reconnectJitterFactor: 0,
+      ),
+    );
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+
+    final session = registry.obtainSession(network);
+    await session.start();
+    transports.single.emit(':server 001 AndroidIRCX :Welcome');
+    await Future<void>.delayed(Duration.zero);
+    await registry.syncForegroundConnectionService();
+    final stopCountBeforeOffline = foregroundService.stopCount;
+
+    await registry.handleNetworkAvailabilityChanged(false);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(session.connection.phase, ConnectionPhase.disconnected);
+    expect(transports.single.closeCount, 1);
+    expect(foregroundService.stopCount, greaterThan(stopCountBeforeOffline));
+
+    final updateCountBeforeOnline = foregroundService.updates.length;
+    await registry.handleNetworkAvailabilityChanged(true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(transports, hasLength(2));
+    expect(
+      foregroundService.updates.length,
+      greaterThan(updateCountBeforeOnline),
+    );
 
     registry.dispose();
   });
