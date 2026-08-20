@@ -1466,7 +1466,9 @@ void main() {
 
     await controller.handleComposerSubmit('/query alice');
     await tester.pump();
-    await tester.tap(find.byTooltip('Send DCC file'));
+    await tester.tap(find.byTooltip('Attach'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Send file (DCC)'));
     await tester.pump();
 
     expect(picker.calls, 1);

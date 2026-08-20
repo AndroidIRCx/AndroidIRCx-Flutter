@@ -21,6 +21,7 @@ import 'package:androidircx/media/services/link_preview_service.dart';
 import 'package:androidircx/media/services/media_download_service.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -386,6 +387,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   onAutocompleteSelected: _applyAutocompleteSuggestion,
                   enterToSend: _controller.settings.enterToSend,
                   showSendButton: _controller.settings.showSendButton,
+                  onCameraPhoto: () =>
+                      _captureAndSendMedia(ImageSource.camera),
+                  onGalleryImage: () =>
+                      _captureAndSendMedia(ImageSource.gallery),
+                  onCameraVideo: () => _captureAndSendMedia(
+                    ImageSource.camera,
+                    video: true,
+                  ),
                 ),
               ],
             ),
@@ -538,6 +547,29 @@ class _ChatScreenState extends State<ChatScreen> {
       return '${current.substring(0, leading)}$replacement ';
     }
     return '${current.substring(0, leading)}$replacement${current.substring(restStart)}';
+  }
+
+  final ImagePicker _imagePicker = ImagePicker();
+
+  Future<void> _captureAndSendMedia(
+    ImageSource source, {
+    bool video = false,
+  }) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final nick = _controller.activeTab.name;
+    try {
+      final XFile? file = video
+          ? await _imagePicker.pickVideo(source: source)
+          : await _imagePicker.pickImage(source: source);
+      if (file == null) {
+        return;
+      }
+      await _controller.sendDccFileToNick(nick: nick, filePath: file.path);
+    } catch (error) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Capture failed: $error')),
+      );
+    }
   }
 
   Future<void> _openChannelList() async {
@@ -853,6 +885,9 @@ class _ComposerArea extends StatelessWidget {
     required this.onAutocompleteSelected,
     required this.enterToSend,
     required this.showSendButton,
+    required this.onCameraPhoto,
+    required this.onGalleryImage,
+    required this.onCameraVideo,
   });
 
   final List<CommandSuggestion> suggestions;
@@ -867,6 +902,9 @@ class _ComposerArea extends StatelessWidget {
   final ValueChanged<ComposerAutocompleteSuggestion> onAutocompleteSelected;
   final bool enterToSend;
   final bool showSendButton;
+  final VoidCallback onCameraPhoto;
+  final VoidCallback onGalleryImage;
+  final VoidCallback onCameraVideo;
 
   @override
   Widget build(BuildContext context) {
@@ -903,10 +941,39 @@ class _ComposerArea extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               if (canSendDccFile) ...[
-                IconButton(
-                  onPressed: onPickDccFile,
+                PopupMenuButton<String>(
                   icon: const Icon(Icons.attach_file),
-                  tooltip: 'Send DCC file',
+                  tooltip: 'Attach',
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'file':
+                        onPickDccFile();
+                      case 'camera':
+                        onCameraPhoto();
+                      case 'gallery':
+                        onGalleryImage();
+                      case 'video':
+                        onCameraVideo();
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem<String>(
+                      value: 'file',
+                      child: Text('Send file (DCC)'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'camera',
+                      child: Text('Camera photo'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'gallery',
+                      child: Text('Gallery image'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'video',
+                      child: Text('Record video'),
+                    ),
+                  ],
                 ),
                 const SizedBox(width: 8),
               ],

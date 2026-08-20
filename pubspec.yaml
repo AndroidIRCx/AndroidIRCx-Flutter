@@ -46,6 +46,7 @@ dependencies:
   local_auth: ^3.0.2
   sqlite3_flutter_libs: ^0.6.0+eol
   cryptography: ^2.9.0
+  image_picker: ^1.2.3
 
 dev_dependencies:
   flutter_test:
