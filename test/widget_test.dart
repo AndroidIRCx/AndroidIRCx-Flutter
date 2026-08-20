@@ -888,6 +888,48 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('shows reverse dcc limitations for passive send offers', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC SEND "reverse.bin" 127001 0 42 abc123\u0001',
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('DCC transfer session'), findsOneWidget);
+    expect(
+      find.textContaining('Reverse DCC opens a local listener'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('NAT, firewall, and peer support'),
+      findsOneWidget,
+    );
+
+    controller.dispose();
+  });
+
   testWidgets('opens the DCC file picker from query tabs', (tester) async {
     SharedPreferences.setMockInitialValues({});
     const network = NetworkConfig(

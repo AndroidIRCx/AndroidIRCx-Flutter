@@ -610,6 +610,13 @@ String _dccTransferSubtitle(DccSession session) {
   return parts.join(' • ');
 }
 
+String? _dccLimitationNote(DccSession session) {
+  if (session.isReverse) {
+    return 'Reverse DCC opens a local listener and asks the peer to connect back. NAT, firewall, and peer support can still block the transfer.';
+  }
+  return null;
+}
+
 String _formatDccTransferProgress(DccSession session) {
   final transferred = session.bytesTransferred;
   final total = session.size;
@@ -1026,6 +1033,7 @@ class _DccSessionBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final limitationNote = _dccLimitationNote(session);
     final subtitle = switch (session.type) {
       DccSessionType.chat =>
         'Peer: ${session.peerNick} • ${session.host ?? '?'}:${session.port ?? 0} • ${session.status.name}',
@@ -1053,6 +1061,15 @@ class _DccSessionBanner extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(subtitle, style: theme.textTheme.bodySmall),
+          if (limitationNote != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              limitationNote,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,

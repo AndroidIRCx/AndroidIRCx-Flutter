@@ -28,6 +28,8 @@ class AndroidIrcxForegroundService : Service() {
             return START_NOT_STICKY
         }
 
+        AndroidIrcxEngineManager.ensureEngine(this)
+
         val connectedNetworkCount = intent?.getIntExtra(EXTRA_CONNECTED_NETWORK_COUNT, 0) ?: 0
         val reconnectingNetworkCount = intent?.getIntExtra(EXTRA_RECONNECTING_NETWORK_COUNT, 0) ?: 0
         val errorNetworkCount = intent?.getIntExtra(EXTRA_ERROR_NETWORK_COUNT, 0) ?: 0
