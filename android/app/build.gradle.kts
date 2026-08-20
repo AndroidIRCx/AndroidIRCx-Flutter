@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -7,13 +8,55 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-val releaseKeystorePropertiesFile = rootProject.file("key.properties")
+val secretsPropertiesFile = rootProject.file("../secrets/gradle.properties")
+val legacyKeyPropertiesFile = rootProject.file("key.properties")
+val releaseKeystorePropertiesFile =
+    listOf(secretsPropertiesFile, legacyKeyPropertiesFile).firstOrNull { it.exists() }
 val releaseKeystoreProperties = Properties().apply {
-    if (releaseKeystorePropertiesFile.exists()) {
+    if (releaseKeystorePropertiesFile != null) {
         releaseKeystorePropertiesFile.inputStream().use { load(it) }
     }
 }
-val hasReleaseKeystore = releaseKeystorePropertiesFile.exists()
+
+fun Properties.releaseProperty(vararg names: String): String? =
+    names.asSequence()
+        .mapNotNull { getProperty(it)?.trim()?.takeIf(String::isNotEmpty) }
+        .firstOrNull()
+
+fun resolveReleaseStoreFile(path: String, propertiesFile: File?): File {
+    val explicitFile = File(path)
+    if (explicitFile.isAbsolute) {
+        return explicitFile
+    }
+
+    val candidates =
+        buildList {
+            if (propertiesFile != null) {
+                add(File(propertiesFile.parentFile, path))
+            }
+            add(project.file(path))
+            add(rootProject.file(path))
+            add(rootProject.file("../$path"))
+        }
+
+    return candidates.firstOrNull { it.exists() } ?: candidates.first()
+}
+
+val releaseStoreFile =
+    releaseKeystoreProperties.releaseProperty("storeFile", "MYAPP_UPLOAD_STORE_FILE")
+val releaseKeyAlias =
+    releaseKeystoreProperties.releaseProperty("keyAlias", "MYAPP_UPLOAD_KEY_ALIAS")
+val releaseStorePassword =
+    releaseKeystoreProperties.releaseProperty("storePassword", "MYAPP_UPLOAD_STORE_PASSWORD")
+val releaseKeyPassword =
+    releaseKeystoreProperties.releaseProperty("keyPassword", "MYAPP_UPLOAD_KEY_PASSWORD")
+val hasReleaseKeystore =
+    listOf(
+        releaseStoreFile,
+        releaseKeyAlias,
+        releaseStorePassword,
+        releaseKeyPassword,
+    ).all { !it.isNullOrBlank() }
 
 android {
     namespace = "com.androidircx.flutter"
@@ -40,10 +83,13 @@ android {
     signingConfigs {
         if (hasReleaseKeystore) {
             create("release") {
-                keyAlias = releaseKeystoreProperties["keyAlias"] as String
-                keyPassword = releaseKeystoreProperties["keyPassword"] as String
-                storeFile = file(releaseKeystoreProperties["storeFile"] as String)
-                storePassword = releaseKeystoreProperties["storePassword"] as String
+                keyAlias = checkNotNull(releaseKeyAlias)
+                keyPassword = checkNotNull(releaseKeyPassword)
+                storeFile = resolveReleaseStoreFile(
+                    checkNotNull(releaseStoreFile),
+                    releaseKeystorePropertiesFile,
+                )
+                storePassword = checkNotNull(releaseStorePassword)
             }
         }
     }
