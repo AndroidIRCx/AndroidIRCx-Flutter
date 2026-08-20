@@ -690,6 +690,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ],
                   ),
+                  _SettingsSection(
+                    title: 'Message history',
+                    children: [
+                      ListTile(
+                        title: const Text('Keep per tab'),
+                        subtitle: const Text(
+                          'Older encrypted messages are trimmed on load.',
+                        ),
+                        trailing: DropdownButton<int>(
+                          key: const Key('settings-history-retention'),
+                          value: _settings.historyRetentionPerTab,
+                          items: const [
+                            DropdownMenuItem<int>(
+                              value: 1000,
+                              child: Text('1000'),
+                            ),
+                            DropdownMenuItem<int>(
+                              value: 5000,
+                              child: Text('5000'),
+                            ),
+                            DropdownMenuItem<int>(
+                              value: 20000,
+                              child: Text('20000'),
+                            ),
+                            DropdownMenuItem<int>(
+                              value: 0,
+                              child: Text('Unlimited'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              _saveSettings(
+                                _settings.copyWith(
+                                  historyRetentionPerTab: value,
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
       ),

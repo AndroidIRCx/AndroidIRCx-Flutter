@@ -35,6 +35,7 @@ class AppSettings {
     this.autoAwayEnabled = false,
     this.autoAwayMinutes = 10,
     this.awayMessage = 'Away',
+    this.historyRetentionPerTab = 5000,
   });
 
   final bool showRawEvents;
@@ -75,6 +76,9 @@ class AppSettings {
   final int autoAwayMinutes;
   final String awayMessage;
 
+  /// Max messages kept per tab in the encrypted history (0 = unlimited).
+  final int historyRetentionPerTab;
+
   AppSettings copyWith({
     bool? showRawEvents,
     NoticeRoutingMode? noticeRouting,
@@ -103,6 +107,7 @@ class AppSettings {
     bool? autoAwayEnabled,
     int? autoAwayMinutes,
     String? awayMessage,
+    int? historyRetentionPerTab,
   }) {
     return AppSettings(
       showRawEvents: showRawEvents ?? this.showRawEvents,
@@ -139,6 +144,8 @@ class AppSettings {
       autoAwayEnabled: autoAwayEnabled ?? this.autoAwayEnabled,
       autoAwayMinutes: autoAwayMinutes ?? this.autoAwayMinutes,
       awayMessage: awayMessage ?? this.awayMessage,
+      historyRetentionPerTab:
+          historyRetentionPerTab ?? this.historyRetentionPerTab,
     );
   }
 
@@ -171,6 +178,7 @@ class AppSettings {
       'autoAwayEnabled': autoAwayEnabled,
       'autoAwayMinutes': autoAwayMinutes,
       'awayMessage': awayMessage,
+      'historyRetentionPerTab': historyRetentionPerTab,
     };
   }
 
@@ -225,6 +233,8 @@ class AppSettings {
       awayMessage: (json['awayMessage'] as String?)?.trim().isEmpty ?? true
           ? 'Away'
           : (json['awayMessage'] as String).trim(),
+      historyRetentionPerTab:
+          (json['historyRetentionPerTab'] as num?)?.toInt() ?? 5000,
     );
   }
 }

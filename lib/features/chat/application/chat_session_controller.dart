@@ -50,7 +50,6 @@ enum ChannelUserAction { whois, query, op, deop, voice, devoice, kick, ban }
 
 class ChatSessionController extends ChangeNotifier {
   static const _historyPageSize = 200;
-  static const _historyRetentionPerTab = 5000;
   static const _ctcpVersionReply = 'AndroidIRCx Flutter 1.0.0';
   static const _ctcpClientInfoReply =
       'ACTION CLIENTINFO DCC FINGER PING SOURCE TIME USERINFO VERSION';
@@ -5349,10 +5348,12 @@ class ChatSessionController extends ChangeNotifier {
       }
     }
 
-    await repository.enforceRetention(
-      networkId: network.id,
-      maxMessages: _historyRetentionPerTab,
-    );
+    if (_settings.historyRetentionPerTab > 0) {
+      await repository.enforceRetention(
+        networkId: network.id,
+        maxMessages: _settings.historyRetentionPerTab,
+      );
+    }
 
     for (final tab in _tabs) {
       final loaded = await repository.loadTabHistory(
