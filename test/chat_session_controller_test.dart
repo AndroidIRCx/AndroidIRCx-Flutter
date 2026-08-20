@@ -3763,6 +3763,56 @@ void main() {
     controller.dispose();
   });
 
+  test('restores tab history from the repository on restart', () async {
+    SharedPreferences.setMockInitialValues({});
+    final history = InMemoryMessageHistoryRepository();
+    const config = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.example.test',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+
+    final transport1 = _FakeTransport();
+    final service1 = IrcService(transportConnector: (_) async => transport1);
+    final controller1 = ChatSessionController(
+      network: config,
+      ircService: service1,
+      historyRepository: history,
+    );
+    await controller1.start();
+    transport1.emit(':alice!u@h PRIVMSG #room :first message');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    transport1.emit(':bob!u@h PRIVMSG #room :second message');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    await controller1.flushState();
+    controller1.dispose();
+
+    final transport2 = _FakeTransport();
+    final service2 = IrcService(transportConnector: (_) async => transport2);
+    final controller2 = ChatSessionController(
+      network: config,
+      ircService: service2,
+      historyRepository: history,
+    );
+    await controller2.start();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    final roomTab = controller2.tabs.firstWhere((tab) => tab.name == '#room');
+    controller2.selectTab(roomTab.id);
+    final contents =
+        controller2.activeMessages.map((message) => message.content).toList();
+    expect(contents, contains('first message'));
+    expect(contents, contains('second message'));
+
+    controller2.dispose();
+  });
+
   test('routes CTCP replies into the matching query tab', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);

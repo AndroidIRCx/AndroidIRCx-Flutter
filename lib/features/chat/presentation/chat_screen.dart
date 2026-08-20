@@ -297,6 +297,14 @@ class _ChatScreenState extends State<ChatScreen> {
                     },
                     onReplyToMessage: _setPendingReply,
                     onDownloadAttachment: _downloadAttachment,
+                    onLoadOlder:
+                        _controller.hasPersistentHistory && !_messageSearchVisible
+                        ? () async {
+                            await _controller.loadOlderHistory(
+                              _controller.activeTabId,
+                            );
+                          }
+                        : null,
                   ),
                 ),
                 if (_controller.commandHistory.isNotEmpty)
@@ -1595,10 +1603,12 @@ class _MessageList extends StatelessWidget {
     required this.onReplyWithNick,
     required this.onReplyToMessage,
     required this.onDownloadAttachment,
+    this.onLoadOlder,
   });
 
   final List<IrcMessage> messages;
   final bool showAttachmentPreviews;
+  final Future<void> Function()? onLoadOlder;
   final IrcMessage? Function(String replyId) resolveReplyTarget;
   final Map<String, int> Function(IrcMessage message) resolveReactions;
   final Future<bool> Function(IrcMessage message) onRedactMessage;
@@ -1631,11 +1641,24 @@ class _MessageList extends StatelessWidget {
       );
     }
 
+    final hasLoadOlder = onLoadOlder != null;
     return ListView.builder(
       reverse: true,
       padding: const EdgeInsets.all(12),
-      itemCount: messages.length,
+      itemCount: messages.length + (hasLoadOlder ? 1 : 0),
       itemBuilder: (context, index) {
+        if (hasLoadOlder && index == messages.length) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: TextButton.icon(
+                onPressed: onLoadOlder,
+                icon: const Icon(Icons.history),
+                label: const Text('Load earlier messages'),
+              ),
+            ),
+          );
+        }
         final message = messages[messages.length - 1 - index];
         final align = message.isOwn
             ? CrossAxisAlignment.end

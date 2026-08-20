@@ -48,6 +48,8 @@ class ComposerAutocompleteSuggestion {
 enum ChannelUserAction { whois, query, op, deop, voice, devoice, kick, ban }
 
 class ChatSessionController extends ChangeNotifier {
+  static const _historyPageSize = 200;
+  static const _historyRetentionPerTab = 5000;
   static const _ctcpVersionReply = 'AndroidIRCx Flutter 1.0.0';
   static const _ctcpClientInfoReply =
       'ACTION CLIENTINFO DCC FINGER PING SOURCE TIME USERINFO VERSION';
@@ -375,6 +377,10 @@ class ChatSessionController extends ChangeNotifier {
   List<IrcMessage> get activeMessages {
     return messagesForTab(_activeTabId);
   }
+
+  /// Whether persisted scrollback is available (an encrypted history repository
+  /// is attached), so the UI can offer a "load earlier messages" affordance.
+  bool get hasPersistentHistory => _historyRepository != null;
 
   IrcMessage? messageByMsgId(String tabId, String msgid) {
     final normalized = msgid.trim();
@@ -5197,6 +5203,7 @@ class ChatSessionController extends ChangeNotifier {
     _applySettingsToServices();
     final snapshot = await _persistence.load(network.id);
     if (snapshot == null) {
+      await _restoreHistoryFromRepository();
       return;
     }
 
@@ -5221,6 +5228,81 @@ class ChatSessionController extends ChangeNotifier {
         _findTab(snapshot.activeTabId) != null) {
       _activeTabId = snapshot.activeTabId;
     }
+
+    await _restoreHistoryFromRepository();
+  }
+
+  /// When an encrypted history repository is present, this makes it the source
+  /// of truth for message bodies: any plaintext bodies still in the session
+  /// snapshot are migrated into the repository (once), retention is enforced,
+  /// and each tab's scrollback is reloaded from the repository. Persisting
+  /// afterwards clears chat bodies out of the plaintext snapshot.
+  Future<void> _restoreHistoryFromRepository() async {
+    final repository = _historyRepository;
+    if (repository == null) {
+      return;
+    }
+
+    for (final entry in _messages.entries) {
+      if (entry.value.isNotEmpty) {
+        await repository.appendAll(
+          networkId: network.id,
+          messages: entry.value,
+        );
+      }
+    }
+
+    await repository.enforceRetention(
+      networkId: network.id,
+      maxMessages: _historyRetentionPerTab,
+    );
+
+    for (final tab in _tabs) {
+      final loaded = await repository.loadTabHistory(
+        networkId: network.id,
+        tabId: tab.id,
+        limit: _historyPageSize,
+      );
+      _messages[tab.id] = List<IrcMessage>.of(loaded);
+    }
+
+    unawaited(_persistState());
+  }
+
+  /// Prepends an older page of scrollback for [tabId] from the encrypted
+  /// history repository. No-op without a repository or when nothing older
+  /// remains. Returns true if any messages were prepended.
+  Future<bool> loadOlderHistory(String tabId) async {
+    final repository = _historyRepository;
+    if (repository == null) {
+      return false;
+    }
+
+    final current = _messages[tabId];
+    final anchor =
+        (current == null || current.isEmpty) ? null : current.first.id;
+    final older = await repository.loadTabHistory(
+      networkId: network.id,
+      tabId: tabId,
+      limit: _historyPageSize,
+      beforeMessageId: anchor,
+    );
+    if (older.isEmpty) {
+      return false;
+    }
+
+    final list = _messages.putIfAbsent(tabId, () => <IrcMessage>[]);
+    final existingIds = list.map((message) => message.id).toSet();
+    final toPrepend = older
+        .where((message) => !existingIds.contains(message.id))
+        .toList(growable: false);
+    if (toPrepend.isEmpty) {
+      return false;
+    }
+
+    list.insertAll(0, toPrepend);
+    notifyListeners();
+    return true;
   }
 
   void _applySettingsToServices() {
@@ -5228,10 +5310,14 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   Future<void> _persistState() {
+    // With an encrypted repository, message bodies live only in that repository;
+    // the plaintext session snapshot keeps just the tab shape.
     return _persistence.save(
       networkId: network.id,
       tabs: _tabs,
-      messagesByTab: _messages,
+      messagesByTab: _historyRepository == null
+          ? _messages
+          : const <String, List<IrcMessage>>{},
       activeTabId: _activeTabId,
     );
   }
