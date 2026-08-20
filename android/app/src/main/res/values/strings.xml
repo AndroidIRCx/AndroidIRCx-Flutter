@@ -1,3 +1,17 @@
 <resources>
     <string name="app_name">AndroidIRCx Flutter</string>
+    <string name="notification_connection_title">AndroidIRCx is connected</string>
+    <string name="notification_disconnect_all">Disconnect all</string>
+    <string name="notification_channel_connection">IRC connection</string>
+    <string name="notification_channel_connection_description">Persistent IRC connection status.</string>
+    <string name="notification_channel_highlights">Highlights</string>
+    <string name="notification_channel_highlights_description">Mentions, highlights, and important channel messages.</string>
+    <string name="notification_channel_queries">Private messages</string>
+    <string name="notification_channel_queries_description">Direct IRC query messages.</string>
+    <string name="notification_channel_dcc_transfers">DCC transfers</string>
+    <string name="notification_channel_dcc_transfers_description">DCC chat and file transfer progress.</string>
+    <string name="notification_channel_media_transfers">Media transfers</string>
+    <string name="notification_channel_media_transfers_description">Media preview and download progress.</string>
+    <string name="notification_channel_errors">Connection errors</string>
+    <string name="notification_channel_errors_description">Connection failures and important protocol errors.</string>
 </resources>

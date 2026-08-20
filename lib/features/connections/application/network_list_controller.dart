@@ -5,9 +5,8 @@ import 'package:androidircx/core/storage/network_repository.dart';
 import 'package:flutter/foundation.dart';
 
 class NetworkListController extends ChangeNotifier {
-  NetworkListController({
-    required NetworkRepository repository,
-  }) : _repository = repository;
+  NetworkListController({required NetworkRepository repository})
+    : _repository = repository;
 
   final NetworkRepository _repository;
 
@@ -35,6 +34,9 @@ class NetworkListController extends ChangeNotifier {
     int? webSocketPort,
     String? webSocketPath,
     required bool autoConnect,
+    List<String> autoJoinChannels = const <String>[],
+    String? profileLabel,
+    String? profileGroup,
     required SaslMechanism saslMechanism,
     String? saslAccount,
     String? saslPassword,
@@ -49,10 +51,17 @@ class NetworkListController extends ChangeNotifier {
       altNickname: altNickname.trim(),
       useTls: useTls,
       webSocketPort: webSocketPort,
-      webSocketPath: (webSocketPath ?? '').trim().isEmpty ? null : webSocketPath?.trim(),
+      webSocketPath: (webSocketPath ?? '').trim().isEmpty
+          ? null
+          : webSocketPath?.trim(),
       autoConnect: autoConnect,
+      autoJoinChannels: _normalizeChannels(autoJoinChannels),
+      profileLabel: _optionalText(profileLabel),
+      profileGroup: _optionalText(profileGroup),
       saslMechanism: saslMechanism,
-      saslAccount: (saslAccount ?? '').trim().isEmpty ? null : saslAccount?.trim(),
+      saslAccount: (saslAccount ?? '').trim().isEmpty
+          ? null
+          : saslAccount?.trim(),
       saslPassword: (saslPassword ?? '').trim().isEmpty ? null : saslPassword,
     );
 
@@ -66,7 +75,31 @@ class NetworkListController extends ChangeNotifier {
   }
 
   String _createId(String seed) {
-    final normalized = seed.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
+    final normalized = seed.toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9]+'),
+      '-',
+    );
     return '$normalized-${Random().nextInt(9999).toString().padLeft(4, '0')}';
+  }
+
+  List<String> _normalizeChannels(List<String> channels) {
+    final seen = <String>{};
+    final result = <String>[];
+    for (final raw in channels) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      final channel = trimmed.startsWith('#') ? trimmed : '#$trimmed';
+      if (seen.add(channel.toLowerCase())) {
+        result.add(channel);
+      }
+    }
+    return result;
+  }
+
+  String? _optionalText(String? value) {
+    final trimmed = (value ?? '').trim();
+    return trimmed.isEmpty ? null : trimmed;
   }
 }

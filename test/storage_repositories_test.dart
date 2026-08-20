@@ -4,6 +4,9 @@ import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/security/secret_redaction.dart';
+import 'package:androidircx/core/security/secret_storage.dart';
+import 'package:androidircx/core/storage/network_secret_keys.dart';
 import 'package:androidircx/core/storage/shared_prefs_network_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
@@ -41,6 +44,9 @@ void main() {
           webSocketPath: '/irc',
           saslMechanism: SaslMechanism.scramSha256,
           autoConnect: true,
+          autoJoinChannels: ['#androidircx', '#flutter'],
+          profileLabel: 'Main profile',
+          profileGroup: 'General',
         ),
       );
 
@@ -53,6 +59,429 @@ void main() {
       expect(saved.webSocketPort, 16667);
       expect(saved.webSocketPath, '/irc');
       expect(saved.saslMechanism, SaslMechanism.scramSha256);
+      expect(saved.autoJoinChannels, ['#androidircx', '#flutter']);
+      expect(saved.profileLabel, 'Main profile');
+      expect(saved.profileGroup, 'General');
+    });
+
+    test('network config backfills absent auto-join and profile fields', () {
+      final saved = NetworkConfig.fromJson({
+        'id': 'legacy',
+        'name': 'LegacyNet',
+        'host': 'irc.legacy.test',
+        'port': 6667,
+        'nickname': 'tester',
+      });
+
+      expect(saved.autoJoinChannels, isEmpty);
+      expect(saved.profileLabel, isNull);
+      expect(saved.profileGroup, isNull);
+    });
+
+    test('network config sanitizes auto-join channel lists', () {
+      final saved = NetworkConfig.fromJson({
+        'id': 'channels',
+        'name': 'ChannelsNet',
+        'host': 'irc.channels.test',
+        'port': 6667,
+        'nickname': 'tester',
+        'autoJoinChannels': [' #one ', '', 42, '#two'],
+        'profileLabel': '  Work  ',
+        'profileGroup': ' ',
+      });
+
+      expect(saved.autoJoinChannels, ['#one', '#two']);
+      expect(saved.profileLabel, 'Work');
+      expect(saved.profileGroup, isNull);
+    });
+
+    test('network config sanitizes and redacts auto-join channel keys', () {
+      final saved = NetworkConfig.fromJson({
+        'id': 'keyed-channels',
+        'name': 'KeyedChannelsNet',
+        'host': 'irc.channels.test',
+        'port': 6667,
+        'nickname': 'tester',
+        'autoJoinChannelKeys': {
+          ' secret ': ' opensesame ',
+          '#empty': ' ',
+          '#bad': 42,
+        },
+      });
+
+      expect(saved.autoJoinChannelKeys, {'#secret': 'opensesame'});
+      expect(saved.toJson()['autoJoinChannelKeys'], {'#secret': 'opensesame'});
+      expect(saved.toRedactedJson()['autoJoinChannelKeys'], '[REDACTED]');
+      expect(saved.toString(), isNot(contains('opensesame')));
+    });
+
+    test(
+      'network config redacts classified secrets in public representations',
+      () {
+        const config = NetworkConfig(
+          id: 'secret-net',
+          name: 'SecretNet',
+          host: 'irc.secret.test',
+          port: 6697,
+          nickname: 'tester',
+          password: 'server-pass-value',
+          saslAccount: 'sasl-account',
+          saslPassword: 'sasl-pass-value',
+        );
+
+        final redacted = config.toRedactedJson();
+        final redactedText = jsonEncode(redacted);
+        final debugText = config.toString();
+
+        expect(config.toJson()['password'], 'server-pass-value');
+        expect(config.toJson()['saslPassword'], 'sasl-pass-value');
+        expect(redacted['password'], '[REDACTED]');
+        expect(redacted['saslPassword'], '[REDACTED]');
+        expect(redacted['saslAccount'], 'sasl-account');
+        expect(redactedText, isNot(contains('server-pass-value')));
+        expect(redactedText, isNot(contains('sasl-pass-value')));
+        expect(debugText, isNot(contains('server-pass-value')));
+        expect(debugText, isNot(contains('sasl-pass-value')));
+        expect(debugText, contains('[REDACTED]'));
+      },
+    );
+
+    test(
+      'redaction covers future token certificate and private key fields',
+      () {
+        final redacted = redactNetworkSecrets({
+          'name': 'SecretNet',
+          'saslAccount': 'sasl-account',
+          'serverPassword': 'server-pass-value',
+          'authToken': 'auth-token-value',
+          'clientPrivateKey': 'private-key-value',
+          'clientCertificate': 'client-cert-value',
+          'certificateFingerprint': 'public-fingerprint-value',
+        });
+
+        expect(redacted['name'], 'SecretNet');
+        expect(redacted['saslAccount'], 'sasl-account');
+        expect(redacted['serverPassword'], '[REDACTED]');
+        expect(redacted['authToken'], '[REDACTED]');
+        expect(redacted['clientPrivateKey'], '[REDACTED]');
+        expect(redacted['clientCertificate'], '[REDACTED]');
+        expect(redacted['certificateFingerprint'], 'public-fingerprint-value');
+        expect(jsonEncode(redacted), isNot(contains('server-pass-value')));
+        expect(jsonEncode(redacted), isNot(contains('auth-token-value')));
+        expect(jsonEncode(redacted), isNot(contains('private-key-value')));
+        expect(jsonEncode(redacted), isNot(contains('client-cert-value')));
+      },
+    );
+
+    test('network config leaves absent or empty secrets unredacted', () {
+      const config = NetworkConfig(
+        id: 'empty-secret-net',
+        name: 'EmptySecretNet',
+        host: 'irc.empty-secret.test',
+        port: 6667,
+        nickname: 'tester',
+        password: '',
+      );
+
+      final redacted = config.toRedactedJson();
+
+      expect(redacted['password'], '');
+      expect(redacted['saslPassword'], isNull);
+    });
+
+    test(
+      'network repository raw fallback persists secrets in shared prefs',
+      () async {
+        final repository = SharedPrefsNetworkRepository();
+
+        await repository.saveNetwork(
+          const NetworkConfig(
+            id: 'secret-net',
+            name: 'SecretNet',
+            host: 'irc.secret.test',
+            port: 6697,
+            nickname: 'tester',
+            password: 'server-pass-value',
+            saslAccount: 'sasl-account',
+            saslPassword: 'sasl-pass-value',
+          ),
+        );
+
+        final saved = (await repository.loadNetworks()).firstWhere(
+          (item) => item.id == 'secret-net',
+        );
+
+        expect(repository.storesSecretsInRawJson, isTrue);
+        expect(saved.password, 'server-pass-value');
+        expect(saved.saslPassword, 'sasl-pass-value');
+        expect(saved.toString(), isNot(contains('server-pass-value')));
+        expect(saved.toString(), isNot(contains('sasl-pass-value')));
+      },
+    );
+
+    test(
+      'network repository can split secrets to SecretStorage and public JSON',
+      () async {
+        final storage = InMemorySecretStorage();
+        final repository = SharedPrefsNetworkRepository(secretStorage: storage);
+
+        await repository.saveNetwork(
+          const NetworkConfig(
+            id: 'secret-net',
+            name: 'SecretNet',
+            host: 'irc.secret.test',
+            port: 6697,
+            nickname: 'tester',
+            password: 'server-pass-value',
+            saslAccount: 'sasl-account',
+            saslPassword: 'sasl-pass-value',
+            autoJoinChannels: ['#secret'],
+            autoJoinChannelKeys: {'#secret': 'channel-key-value'},
+            profileLabel: 'Secure profile',
+            profileGroup: 'Ops',
+          ),
+        );
+
+        final prefs = await SharedPreferences.getInstance();
+        final raw = prefs.getString('androidircx.networks')!;
+        final decoded = jsonDecode(raw) as List<dynamic>;
+        final savedJson = decoded.cast<Map<String, Object?>>().firstWhere(
+          (item) => item['id'] == 'secret-net',
+        );
+
+        expect(repository.storesSecretsInRawJson, isFalse);
+        expect(raw, isNot(contains('server-pass-value')));
+        expect(raw, isNot(contains('sasl-pass-value')));
+        expect(raw, isNot(contains('channel-key-value')));
+        expect(savedJson['password'], isNull);
+        expect(savedJson['saslPassword'], isNull);
+        expect(savedJson['autoJoinChannelKeys'], isNull);
+        expect(
+          await storage.getSecret('androidircx.network.secret-net.password'),
+          'server-pass-value',
+        );
+        expect(
+          await storage.getSecret(
+            'androidircx.network.secret-net.saslPassword',
+          ),
+          'sasl-pass-value',
+        );
+        expect(
+          await storage.getSecret(
+            'androidircx.network.secret-net.autoJoinChannelKeys',
+          ),
+          '{"#secret":"channel-key-value"}',
+        );
+
+        final saved = (await repository.loadNetworks()).firstWhere(
+          (item) => item.id == 'secret-net',
+        );
+        expect(saved.password, 'server-pass-value');
+        expect(saved.saslPassword, 'sasl-pass-value');
+        expect(saved.profileLabel, 'Secure profile');
+        expect(saved.profileGroup, 'Ops');
+      },
+    );
+
+    test('network repository deletes split network secrets', () async {
+      final storage = InMemorySecretStorage();
+      final repository = SharedPrefsNetworkRepository(secretStorage: storage);
+
+      await repository.saveNetwork(
+        const NetworkConfig(
+          id: 'delete-secret-net',
+          name: 'DeleteSecretNet',
+          host: 'irc.delete-secret.test',
+          port: 6697,
+          nickname: 'tester',
+          password: 'server-pass-value',
+          saslPassword: 'sasl-pass-value',
+          autoJoinChannelKeys: {'#secret': 'channel-key-value'},
+        ),
+      );
+
+      await repository.deleteNetwork('delete-secret-net');
+
+      expect(
+        await storage.getSecret(
+          'androidircx.network.delete-secret-net.password',
+        ),
+        isNull,
+      );
+      expect(
+        await storage.getSecret(
+          'androidircx.network.delete-secret-net.saslPassword',
+        ),
+        isNull,
+      );
+      expect(
+        await storage.getSecret(
+          'androidircx.network.delete-secret-net.autoJoinChannelKeys',
+        ),
+        isNull,
+      );
+      expect(
+        (await repository.loadNetworks()).any(
+          (item) => item.id == 'delete-secret-net',
+        ),
+        isFalse,
+      );
+    });
+
+    test(
+      'network repository migrates legacy raw JSON secrets on load',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'androidircx.networks': jsonEncode([
+            {
+              'id': 'legacy-secret-net',
+              'name': 'LegacySecretNet',
+              'host': 'irc.legacy-secret.test',
+              'port': 6697,
+              'nickname': 'tester',
+              'password': 'legacy-server-pass-value',
+              'saslAccount': 'sasl-account',
+              'saslPassword': 'legacy-sasl-pass-value',
+            },
+          ]),
+        });
+        final storage = InMemorySecretStorage();
+        final repository = SharedPrefsNetworkRepository(secretStorage: storage);
+
+        final saved = (await repository.loadNetworks()).single;
+
+        expect(saved.password, 'legacy-server-pass-value');
+        expect(saved.saslPassword, 'legacy-sasl-pass-value');
+        expect(
+          await storage.getSecret(
+            'androidircx.network.legacy-secret-net.password',
+          ),
+          'legacy-server-pass-value',
+        );
+        expect(
+          await storage.getSecret(
+            'androidircx.network.legacy-secret-net.saslPassword',
+          ),
+          'legacy-sasl-pass-value',
+        );
+
+        final prefs = await SharedPreferences.getInstance();
+        final raw = prefs.getString('androidircx.networks')!;
+        final decoded = jsonDecode(raw) as List<dynamic>;
+        final migratedJson = decoded.cast<Map<String, Object?>>().single;
+        expect(raw, isNot(contains('legacy-server-pass-value')));
+        expect(raw, isNot(contains('legacy-sasl-pass-value')));
+        expect(migratedJson['password'], isNull);
+        expect(migratedJson['saslPassword'], isNull);
+      },
+    );
+
+    test(
+      'network secret migration keys are stable and redact planned writes',
+      () {
+        const config = NetworkConfig(
+          id: 'secret-net',
+          name: 'SecretNet',
+          host: 'irc.secret.test',
+          port: 6697,
+          nickname: 'tester',
+          password: 'server-pass-value',
+          saslAccount: 'sasl-account',
+          saslPassword: 'sasl-pass-value',
+        );
+
+        final plannedSecrets = networkSecretMigrationValues(config);
+        final redactedPlan = redactNetworkSecretMigrationValues(plannedSecrets);
+
+        expect(
+          plannedSecrets.keys,
+          containsAll(<String>[
+            'androidircx.network.secret-net.password',
+            'androidircx.network.secret-net.saslPassword',
+          ]),
+        );
+        expect(
+          plannedSecrets['androidircx.network.secret-net.password'],
+          'server-pass-value',
+        );
+        expect(
+          plannedSecrets['androidircx.network.secret-net.saslPassword'],
+          'sasl-pass-value',
+        );
+        expect(
+          redactedPlan['androidircx.network.secret-net.password'],
+          '[REDACTED]',
+        );
+        expect(
+          redactedPlan['androidircx.network.secret-net.saslPassword'],
+          '[REDACTED]',
+        );
+        expect(jsonEncode(redactedPlan), isNot(contains('server-pass-value')));
+        expect(jsonEncode(redactedPlan), isNot(contains('sasl-pass-value')));
+      },
+    );
+
+    test(
+      'in-memory secret storage supports future network secret migration flow',
+      () async {
+        final storage = InMemorySecretStorage();
+        const config = NetworkConfig(
+          id: 'secret-net',
+          name: 'SecretNet',
+          host: 'irc.secret.test',
+          port: 6697,
+          nickname: 'tester',
+          password: 'server-pass-value',
+          saslPassword: 'sasl-pass-value',
+        );
+
+        final plannedSecrets = networkSecretMigrationValues(config);
+        for (final entry in plannedSecrets.entries) {
+          await storage.setSecret(entry.key, entry.value);
+        }
+
+        expect(
+          await storage.getSecret('androidircx.network.secret-net.password'),
+          'server-pass-value',
+        );
+        expect(
+          await storage.getSecret(
+            'androidircx.network.secret-net.saslPassword',
+          ),
+          'sasl-pass-value',
+        );
+        expect(
+          await storage.getAllSecretKeys(),
+          plannedSecrets.keys.toList()..sort(),
+        );
+
+        await storage.setSecret('androidircx.network.secret-net.password', '');
+        expect(
+          await storage.getSecret('androidircx.network.secret-net.password'),
+          isNull,
+        );
+
+        final status = await storage.getStatus();
+        expect(status.isSecure, isFalse);
+        expect(status.backend, SecretStorageBackend.inMemory);
+        expect(status.warning, isNotNull);
+      },
+    );
+
+    test('platform secret storage reports secure backend', () async {
+      final status = await FlutterSecureSecretStorage().getStatus();
+
+      expect(status.isSecure, isTrue);
+      expect(status.isFallback, isFalse);
+      expect(status.backend, SecretStorageBackend.platformSecureStorage);
+      expect(status.warning, isNull);
+    });
+
+    test('shared prefs network repository declares raw fallback behavior', () {
+      expect(
+        SharedPrefsNetworkRepository.rawJsonFallbackStoresNetworkSecrets,
+        isTrue,
+      );
     });
 
     test('network repository persists EXTERNAL SASL mechanism', () async {
@@ -70,8 +499,9 @@ void main() {
         ),
       );
 
-      final saved = (await repository.loadNetworks())
-          .firstWhere((item) => item.id == 'certnet');
+      final saved = (await repository.loadNetworks()).firstWhere(
+        (item) => item.id == 'certnet',
+      );
 
       expect(saved.saslMechanism, SaslMechanism.external);
     });
@@ -152,7 +582,10 @@ void main() {
       expect(snapshot!.tabs.single.name, '#flutter');
       expect(snapshot.activeTabId, tab.id);
       expect(snapshot.messagesByTab[tab.id]!.single.content, 'hello');
-      expect(snapshot.messagesByTab[tab.id]!.single.tags['time'], '2026-03-16T12:00:00.000Z');
+      expect(
+        snapshot.messagesByTab[tab.id]!.single.tags['time'],
+        '2026-03-16T12:00:00.000Z',
+      );
     });
 
     test('chat session persistence restores growable message lists', () async {

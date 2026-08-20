@@ -8,18 +8,25 @@ IrcMessageFrame parseIrcMessage(String raw) {
 
   if (rest.startsWith('@')) {
     final tagsEnd = rest.indexOf(' ');
-    if (tagsEnd != -1) {
-      tags = _parseMessageTags(rest.substring(1, tagsEnd));
-      rest = rest.substring(tagsEnd + 1);
+    if (tagsEnd == -1) {
+      return IrcMessageFrame(raw: raw, command: '', params: const []);
     }
+    tags = _parseMessageTags(rest.substring(1, tagsEnd));
+    rest = rest.substring(tagsEnd + 1).trimLeft();
   }
 
   if (rest.startsWith(':')) {
     final prefixEnd = rest.indexOf(' ');
-    if (prefixEnd != -1) {
-      prefix = rest.substring(1, prefixEnd);
-      rest = rest.substring(prefixEnd + 1);
+    if (prefixEnd == -1) {
+      return IrcMessageFrame(
+        raw: raw,
+        tags: tags,
+        command: '',
+        params: const [],
+      );
     }
+    prefix = rest.substring(1, prefixEnd);
+    rest = rest.substring(prefixEnd + 1).trimLeft();
   }
 
   final trailingIndex = rest.indexOf(' :');

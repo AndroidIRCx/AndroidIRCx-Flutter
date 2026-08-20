@@ -42,51 +42,54 @@ class NetworkListScreen extends StatelessWidget {
             child: controller.isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : controller.networks.isEmpty
-                    ? _EmptyState(onAddNetwork: () => _openForm(context))
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                        itemCount: controller.networks.length + 1,
-                        separatorBuilder: (_, _) => const SizedBox(height: 12),
-                        itemBuilder: (context, index) {
-                          if (index == 0) {
-                            return _ActiveSessionsCard(
-                              registry: sessionRegistry,
-                              onOpen: (network) => _openChat(context, network),
-                              onClose: sessionRegistry.closeSession,
-                              onCloseAll: sessionRegistry.closeAllSessions,
-                            );
-                          }
+                ? _EmptyState(onAddNetwork: () => _openForm(context))
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                    itemCount: controller.networks.length + 1,
+                    separatorBuilder: (_, _) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      if (index == 0) {
+                        return _ActiveSessionsCard(
+                          registry: sessionRegistry,
+                          onOpen: (network) => _openChat(context, network),
+                          onClose: sessionRegistry.closeSession,
+                          onCloseAll: sessionRegistry.closeAllSessions,
+                        );
+                      }
 
-                          final network = controller.networks[index - 1];
-                          final snapshot =
-                              sessionRegistry.connectionFor(network.id);
-                          final currentNick =
-                              sessionRegistry.currentNickFor(network.id);
-                          final activityCount =
-                              sessionRegistry.activityCountFor(network.id);
-                          final hasSession = sessionRegistry.hasSession(network.id);
-                          return _NetworkCard(
-                            network: network,
-                            connection: snapshot,
-                            hasSession: hasSession,
-                            currentNick: currentNick,
-                            activityCount: activityCount,
-                            statusMessage: snapshot.message,
-                            onEdit: () => _openForm(context, initialValue: network),
-                            onDelete: () async {
-                              await sessionRegistry.closeSession(network.id);
-                              await controller.deleteNetwork(network.id);
-                            },
-                            onQuickAction: () => _handleQuickAction(
-                              context,
-                              network: network,
-                              hasSession: hasSession,
-                              phase: snapshot.phase,
-                            ),
-                            onConnect: () => _openChat(context, network),
-                          );
+                      final network = controller.networks[index - 1];
+                      final snapshot = sessionRegistry.connectionFor(
+                        network.id,
+                      );
+                      final currentNick = sessionRegistry.currentNickFor(
+                        network.id,
+                      );
+                      final activityCount = sessionRegistry.activityCountFor(
+                        network.id,
+                      );
+                      final hasSession = sessionRegistry.hasSession(network.id);
+                      return _NetworkCard(
+                        network: network,
+                        connection: snapshot,
+                        hasSession: hasSession,
+                        currentNick: currentNick,
+                        activityCount: activityCount,
+                        statusMessage: snapshot.message,
+                        onEdit: () => _openForm(context, initialValue: network),
+                        onDelete: () async {
+                          await sessionRegistry.closeSession(network.id);
+                          await controller.deleteNetwork(network.id);
                         },
-                      ),
+                        onQuickAction: () => _handleQuickAction(
+                          context,
+                          network: network,
+                          hasSession: hasSession,
+                          phase: snapshot.phase,
+                        ),
+                        onConnect: () => _openChat(context, network),
+                      );
+                    },
+                  ),
           ),
         );
       },
@@ -107,7 +110,7 @@ class NetworkListScreen extends StatelessWidget {
       return;
     }
 
-      await controller.saveNetwork(
+    await controller.saveNetwork(
       name: result.name,
       host: result.host,
       port: result.port,
@@ -117,6 +120,9 @@ class NetworkListScreen extends StatelessWidget {
       webSocketPort: result.webSocketPort,
       webSocketPath: result.webSocketPath,
       autoConnect: result.autoConnect,
+      autoJoinChannels: result.autoJoinChannels,
+      profileLabel: result.profileLabel,
+      profileGroup: result.profileGroup,
       saslMechanism: result.saslMechanism,
       saslAccount: result.saslAccount,
       saslPassword: result.saslPassword,
@@ -127,17 +133,13 @@ class NetworkListScreen extends StatelessWidget {
   Future<void> _openChat(BuildContext context, NetworkConfig network) async {
     final session = sessionRegistry.obtainSession(network);
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => ChatScreen(controller: session),
-      ),
+      MaterialPageRoute<void>(builder: (_) => ChatScreen(controller: session)),
     );
   }
 
   Future<void> _openSettings(BuildContext context) async {
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => const SettingsScreen(),
-      ),
+      MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
     );
   }
 
@@ -153,7 +155,8 @@ class NetworkListScreen extends StatelessWidget {
       return;
     }
 
-    if (phase == ConnectionPhase.connected || phase == ConnectionPhase.connecting) {
+    if (phase == ConnectionPhase.connected ||
+        phase == ConnectionPhase.connecting) {
       await sessionRegistry.closeSession(network.id);
       return;
     }
@@ -201,10 +204,7 @@ class _NetworkCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    network.name,
-                    style: theme.textTheme.titleMedium,
-                  ),
+                  child: Text(network.name, style: theme.textTheme.titleMedium),
                 ),
                 PopupMenuButton<String>(
                   onSelected: (value) {
@@ -216,10 +216,7 @@ class _NetworkCard extends StatelessWidget {
                     }
                   },
                   itemBuilder: (_) => const [
-                    PopupMenuItem<String>(
-                      value: 'edit',
-                      child: Text('Edit'),
-                    ),
+                    PopupMenuItem<String>(value: 'edit', child: Text('Edit')),
                     PopupMenuItem<String>(
                       value: 'delete',
                       child: Text('Delete'),
@@ -229,6 +226,16 @@ class _NetworkCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 6),
+            if (_profileSummary(network) != null) ...[
+              Text(
+                _profileSummary(network)!,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
             Text('${network.host}:${network.port}'),
             const SizedBox(height: 4),
             Text(
@@ -282,7 +289,11 @@ class _NetworkCard extends StatelessWidget {
                 Expanded(
                   child: FilledButton.icon(
                     onPressed: onConnect,
-                    icon: Icon(hasSession ? Icons.forum_outlined : Icons.chat_bubble_outline),
+                    icon: Icon(
+                      hasSession
+                          ? Icons.forum_outlined
+                          : Icons.chat_bubble_outline,
+                    ),
                     label: Text(hasSession ? 'Open session' : 'Open chat'),
                   ),
                 ),
@@ -291,7 +302,9 @@ class _NetworkCard extends StatelessWidget {
                   child: OutlinedButton.icon(
                     onPressed: onQuickAction,
                     icon: Icon(_quickActionIcon(connection.phase, hasSession)),
-                    label: Text(_quickActionLabel(connection.phase, hasSession)),
+                    label: Text(
+                      _quickActionLabel(connection.phase, hasSession),
+                    ),
                   ),
                 ),
               ],
@@ -302,12 +315,27 @@ class _NetworkCard extends StatelessWidget {
     );
   }
 
+  String? _profileSummary(NetworkConfig network) {
+    final label = (network.profileLabel ?? '').trim();
+    final group = (network.profileGroup ?? '').trim();
+    if (label.isEmpty && group.isEmpty) {
+      return null;
+    }
+    if (label.isEmpty) {
+      return 'Profile group: $group';
+    }
+    if (group.isEmpty) {
+      return 'Profile: $label';
+    }
+    return 'Profile: $label • $group';
+  }
+
   String _quickActionLabel(ConnectionPhase phase, bool hasSession) {
     if (!hasSession) {
       return 'Connect';
     }
 
-    if (phase == ConnectionPhase.connected || phase == ConnectionPhase.connecting) {
+    if (_isSessionActive(phase)) {
       return 'Disconnect';
     }
 
@@ -319,7 +347,7 @@ class _NetworkCard extends StatelessWidget {
       return Icons.wifi_tethering;
     }
 
-    if (phase == ConnectionPhase.connected || phase == ConnectionPhase.connecting) {
+    if (_isSessionActive(phase)) {
       return Icons.link_off;
     }
 
@@ -332,8 +360,14 @@ class _NetworkCard extends StatelessWidget {
         return 'Idle';
       case ConnectionPhase.connecting:
         return 'Connecting';
+      case ConnectionPhase.registering:
+        return 'Registering';
+      case ConnectionPhase.authenticating:
+        return 'Authenticating';
       case ConnectionPhase.connected:
         return 'Connected';
+      case ConnectionPhase.reconnecting:
+        return 'Reconnecting';
       case ConnectionPhase.disconnecting:
         return 'Disconnecting';
       case ConnectionPhase.disconnected:
@@ -350,6 +384,20 @@ class _NetworkCard extends StatelessWidget {
     }
 
     return _statusLabel(phase);
+  }
+
+  bool _isSessionActive(ConnectionPhase phase) {
+    return switch (phase) {
+      ConnectionPhase.connecting ||
+      ConnectionPhase.registering ||
+      ConnectionPhase.authenticating ||
+      ConnectionPhase.connected ||
+      ConnectionPhase.reconnecting ||
+      ConnectionPhase.disconnecting => true,
+      ConnectionPhase.idle ||
+      ConnectionPhase.disconnected ||
+      ConnectionPhase.error => false,
+    };
   }
 }
 
@@ -434,8 +482,14 @@ class _ActiveSessionsCard extends StatelessWidget {
         return 'Idle';
       case ConnectionPhase.connecting:
         return 'Connecting';
+      case ConnectionPhase.registering:
+        return 'Registering';
+      case ConnectionPhase.authenticating:
+        return 'Authenticating';
       case ConnectionPhase.connected:
         return 'Connected';
+      case ConnectionPhase.reconnecting:
+        return 'Reconnecting';
       case ConnectionPhase.disconnecting:
         return 'Disconnecting';
       case ConnectionPhase.disconnected:
@@ -451,8 +505,14 @@ class _ActiveSessionsCard extends StatelessWidget {
         return Icons.pause_circle_outline;
       case ConnectionPhase.connecting:
         return Icons.sync;
+      case ConnectionPhase.registering:
+        return Icons.how_to_reg_outlined;
+      case ConnectionPhase.authenticating:
+        return Icons.verified_user_outlined;
       case ConnectionPhase.connected:
         return Icons.check_circle_outline;
+      case ConnectionPhase.reconnecting:
+        return Icons.refresh;
       case ConnectionPhase.disconnecting:
         return Icons.link_off;
       case ConnectionPhase.disconnected:
@@ -464,9 +524,7 @@ class _ActiveSessionsCard extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({
-    required this.onAddNetwork,
-  });
+  const _EmptyState({required this.onAddNetwork});
 
   final VoidCallback onAddNetwork;
 
@@ -486,10 +544,7 @@ class _EmptyState extends StatelessWidget {
               color: theme.colorScheme.primary,
             ),
             const SizedBox(height: 16),
-            Text(
-              'No networks configured',
-              style: theme.textTheme.titleLarge,
-            ),
+            Text('No networks configured', style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             const Text(
               'Sprint 1 starts with network management and IRC foundation.',

@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('parses prefixed privmsg with trailing body', () {
-    final frame = parseIrcMessage(':nick!user@host PRIVMSG #flutter :hello world');
+    final frame = parseIrcMessage(
+      ':nick!user@host PRIVMSG #flutter :hello world',
+    );
 
     expect(frame.prefix, 'nick!user@host');
     expect(frame.command, 'PRIVMSG');
@@ -29,5 +31,41 @@ void main() {
     expect(frame.tags['+draft/example'], 'hello world');
     expect(frame.command, 'PRIVMSG');
     expect(frame.trailing, 'hi');
+  });
+
+  test('parses IRCv3 tag escaping edge cases', () {
+    final frame = parseIrcMessage(
+      r'@semi=a\:b;space=a\sb;slash=a\\b;cr=a\rb;lf=a\nb;empty;blank= PRIVMSG #c :body',
+    );
+
+    expect(frame.tags['semi'], 'a;b');
+    expect(frame.tags['space'], 'a b');
+    expect(frame.tags['slash'], r'a\b');
+    expect(frame.tags['cr'], 'a\rb');
+    expect(frame.tags['lf'], 'a\nb');
+    expect(frame.tags['empty'], isNull);
+    expect(frame.tags['blank'], '');
+    expect(frame.command, 'PRIVMSG');
+    expect(frame.params, ['#c']);
+    expect(frame.trailing, 'body');
+  });
+
+  test('handles repeated spaces around tags prefix params and trailing', () {
+    final frame = parseIrcMessage(
+      '@time=2026-03-17T10:11:12.000Z   :nick!user@host   PRIVMSG   #flutter   :hello world',
+    );
+
+    expect(frame.tags['time'], '2026-03-17T10:11:12.000Z');
+    expect(frame.prefix, 'nick!user@host');
+    expect(frame.command, 'PRIVMSG');
+    expect(frame.params, ['#flutter']);
+    expect(frame.trailing, 'hello world');
+  });
+
+  test('returns empty command for empty and incomplete frames', () {
+    expect(parseIrcMessage('').command, '');
+    expect(parseIrcMessage('   ').command, '');
+    expect(parseIrcMessage('@time=2026-03-17T10:11:12.000Z').command, '');
+    expect(parseIrcMessage(':nick!user@host').command, '');
   });
 }

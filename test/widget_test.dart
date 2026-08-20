@@ -3,7 +3,10 @@ import 'dart:typed_data';
 
 import 'package:androidircx/app/app.dart';
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/platform/foreground_connection_service.dart';
+import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/core/storage/in_memory_network_repository.dart';
+import 'package:androidircx/core/storage/shared_prefs_network_repository.dart';
 import 'package:androidircx/dcc/services/dcc_service.dart';
 import 'package:androidircx/dcc/services/dcc_socket_backend.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
@@ -11,6 +14,7 @@ import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/presentation/chat_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
+import 'package:androidircx/features/connections/presentation/network_form_screen.dart';
 import 'package:androidircx/features/connections/presentation/network_list_screen.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
@@ -19,7 +23,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeTransport implements IrcTransport {
-  final StreamController<String> _controller = StreamController<String>.broadcast();
+  final StreamController<String> _controller =
+      StreamController<String>.broadcast();
   final List<String> sentLines = <String>[];
 
   @override
@@ -41,7 +46,8 @@ class _FakeTransport implements IrcTransport {
 }
 
 class _FakeDccConnection implements DccSocketConnection {
-  final StreamController<List<int>> _controller = StreamController<List<int>>.broadcast();
+  final StreamController<List<int>> _controller =
+      StreamController<List<int>>.broadcast();
   final List<List<int>> sentPackets = <List<int>>[];
 
   @override
@@ -67,7 +73,8 @@ class _FakeDccServer implements DccSocketServer {
   String get address => '127.0.0.1';
 
   @override
-  Stream<DccSocketConnection> get connections => Stream<DccSocketConnection>.value(connection);
+  Stream<DccSocketConnection> get connections =>
+      Stream<DccSocketConnection>.value(connection);
 
   @override
   int get port => 5001;
@@ -93,7 +100,14 @@ void main() {
   testWidgets('shows seeded network on bootstrap', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
-    await tester.pumpWidget(const AndroidIrcxApp());
+    await tester.pumpWidget(
+      AndroidIrcxApp(
+        networkRepository: SharedPrefsNetworkRepository(
+          secretStorage: InMemorySecretStorage(),
+        ),
+        foregroundConnectionService: const NoopForegroundConnectionService(),
+      ),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -114,6 +128,8 @@ void main() {
       nickname: 'AndroidIRCX',
       altNickname: 'AndroidIRCX_',
       autoConnect: true,
+      profileLabel: 'Main identity',
+      profileGroup: 'general',
     );
     final controller = NetworkListController(
       repository: InMemoryNetworkRepository(const [network]),
@@ -137,6 +153,7 @@ void main() {
     expect(find.text('1 live'), findsOneWidget);
     expect(find.text('Disconnect all'), findsOneWidget);
     expect(find.text('Auto connect enabled'), findsOneWidget);
+    expect(find.text('Profile: Main identity • general'), findsOneWidget);
     expect(find.text('Open session'), findsOneWidget);
     expect(find.text('Reconnect'), findsOneWidget);
     expect(find.text('Active nick: AndroidIRCX'), findsOneWidget);
@@ -145,6 +162,61 @@ void main() {
 
     registry.dispose();
     controller.dispose();
+  });
+
+  testWidgets('network form edits profile label and group fields', (
+    tester,
+  ) async {
+    NetworkFormResult? result;
+    const network = NetworkConfig(
+      id: 'profile-net',
+      name: 'ProfileNet',
+      host: 'irc.profile.test',
+      port: 6697,
+      nickname: 'tester',
+      altNickname: 'tester_',
+      profileLabel: 'Old profile',
+      profileGroup: 'old-group',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              result = await Navigator.of(context).push<NetworkFormResult>(
+                MaterialPageRoute<NetworkFormResult>(
+                  builder: (_) =>
+                      const NetworkFormScreen(initialValue: network),
+                ),
+              );
+            },
+            child: const Text('Open form'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open form'));
+    await tester.pumpAndSettle();
+    final profileLabelField = find
+        .byKey(const Key('network-form-profile-label'))
+        .first;
+    final profileGroupField = find
+        .byKey(const Key('network-form-profile-group'))
+        .first;
+    await tester.drag(find.byType(ListView), const Offset(0, -700));
+    await tester.pumpAndSettle();
+    await tester.enterText(profileLabelField, ' Main profile ');
+    await tester.enterText(profileGroupField, ' General ');
+    await tester.drag(find.byType(ListView), const Offset(0, -400));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save network'));
+    await tester.pumpAndSettle();
+
+    expect(result, isNotNull);
+    expect(result!.profileLabel, 'Main profile');
+    expect(result!.profileGroup, 'General');
   });
 
   testWidgets('shows IRC services quick actions on the server tab', (
@@ -162,15 +234,11 @@ void main() {
     final transport = _FakeTransport();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
@@ -180,6 +248,103 @@ void main() {
     await tester.tap(find.text('NickServ HELP'));
     await tester.pump();
     expect(find.text('NickServ'), findsWidgets);
+
+    controller.dispose();
+  });
+
+  testWidgets('shows and applies slash command suggestions in chat composer', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    await tester.enterText(find.byType(TextField).last, '/n hello');
+    await tester.pump();
+
+    expect(find.text('/nick'), findsWidgets);
+    expect(find.text('/nickserv'), findsWidgets);
+    expect(find.text('/ns'), findsOneWidget);
+    expect(find.text('alias'), findsWidgets);
+    expect(find.text('/encmsg'), findsNothing);
+
+    await tester.tap(find.text('/ns'));
+    await tester.pump();
+
+    expect(find.text('/ns hello'), findsOneWidget);
+    expect(find.text('/nickserv'), findsNothing);
+
+    controller.dispose();
+  });
+
+  testWidgets('shows and applies nick/channel autocomplete in chat composer', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    await controller.joinChannel(
+      const JoinChannelRequest(channel: '#androidircx'),
+    );
+    transport.emit(':server 353 AndroidIRCX = #room :@alice bob carol');
+    await tester.pump();
+    await tester.pump();
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+    );
+    await tester.pump();
+
+    await tester.enterText(find.byType(TextField).last, 'hello al');
+    await tester.pump();
+    expect(find.text('alice'), findsOneWidget);
+    expect(find.text('nick'), findsOneWidget);
+
+    await tester.tap(find.text('alice'));
+    await tester.pump();
+    expect(find.text('hello alice '), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).last, '/msg #and');
+    await tester.pump();
+    expect(find.text('#androidircx'), findsOneWidget);
+    expect(find.text('channel'), findsOneWidget);
+
+    await tester.tap(find.text('#androidircx'));
+    await tester.pump();
+    expect(find.text('/msg #androidircx '), findsOneWidget);
 
     controller.dispose();
   });
@@ -199,15 +364,11 @@ void main() {
     final transport = _FakeTransport();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
@@ -229,7 +390,9 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('shows rich nick details in the channel user drawer', (tester) async {
+  testWidgets('shows rich nick details in the channel user drawer', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     const network = NetworkConfig(
       id: 'dbase',
@@ -242,24 +405,24 @@ void main() {
     final transport = _FakeTransport();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
-    transport.emit(':alice!ident@example JOIN #room aliceAccount :Alice Example');
+    transport.emit(
+      ':alice!ident@example JOIN #room aliceAccount :Alice Example',
+    );
     transport.emit(':server 353 AndroidIRCX = #room :@alice!ident@example');
     transport.emit(':alice!ident@example AWAY :coffee');
     await tester.pump();
     await tester.pump();
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.name == '#room').id);
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+    );
     await tester.pump();
 
     await tester.tap(find.byIcon(Icons.people_outline));
@@ -287,15 +450,11 @@ void main() {
     final transport = _FakeTransport();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
@@ -330,26 +489,26 @@ void main() {
     final dccBackend = _FakeDccBackend();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
       dccService: DccService(backend: dccBackend),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
-    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :see https://example.com/file.pdf');
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :see https://example.com/file.pdf',
+    );
     await tester.pump();
 
     expect(find.text('Link'), findsOneWidget);
     expect(find.textContaining('https://example.com/file.pdf'), findsWidgets);
 
-    await tester.longPress(find.textContaining('https://example.com/file.pdf').first);
+    await tester.longPress(
+      find.textContaining('https://example.com/file.pdf').first,
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('Copy clean text'), findsOneWidget);
@@ -373,15 +532,11 @@ void main() {
     final transport = _FakeTransport();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
@@ -419,20 +574,18 @@ void main() {
     final transport = _FakeTransport();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
     await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit('@msgid=seed-1 :alice!user@example PRIVMSG #room :Original text');
+    transport.emit(
+      '@msgid=seed-1 :alice!user@example PRIVMSG #room :Original text',
+    );
     await tester.pump();
 
     await tester.longPress(find.textContaining('Original text').first);
@@ -469,21 +622,19 @@ void main() {
     final transport = _FakeTransport();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
     await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
     transport.emit(':server CAP * ACK :draft/message-redaction');
-    transport.emit('@msgid=seed-redact :alice!user@example PRIVMSG #room :Delete this');
+    transport.emit(
+      '@msgid=seed-redact :alice!user@example PRIVMSG #room :Delete this',
+    );
     await tester.pump();
     await tester.pump();
 
@@ -516,21 +667,21 @@ void main() {
     final transport = _FakeTransport();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
     await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit('@msgid=react-ui-1 :alice!user@example PRIVMSG #room :Hello');
-    transport.emit('@+draft/react=react-ui-1\\::thumbsup: :bob!user@example TAGMSG #room');
+    transport.emit(
+      '@msgid=react-ui-1 :alice!user@example PRIVMSG #room :Hello',
+    );
+    transport.emit(
+      '@+draft/react=react-ui-1\\::thumbsup: :bob!user@example TAGMSG #room',
+    );
     transport.emit('@+typing=active :alice!user@example TAGMSG #room');
     await tester.pump();
     await tester.pump();
@@ -556,19 +707,17 @@ void main() {
     final transport = _FakeTransport();
     final controller = ChatSessionController(
       network: network,
-      ircService: IrcService(
-        transportConnector: (_) async => transport,
-      ),
+      ircService: IrcService(transportConnector: (_) async => transport),
     );
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(controller: controller),
-      ),
+      MaterialApp(home: ChatScreen(controller: controller)),
     );
     await tester.pump();
 
-    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC CHAT chat 127001 5001\u0001');
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC CHAT chat 127001 5001\u0001',
+    );
     await tester.pump();
     await tester.pump();
 

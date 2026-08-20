@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
@@ -17,13 +18,31 @@ import 'package:androidircx/irc/parser/ctcp.dart';
 import 'package:androidircx/irc/parser/dcc_parser.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
+
+enum ComposerAutocompleteSuggestionType { nick, channel }
+
+class ComposerAutocompleteSuggestion {
+  const ComposerAutocompleteSuggestion({
+    required this.text,
+    required this.type,
+    required this.tokenStart,
+    required this.tokenEnd,
+  });
+
+  final String text;
+  final ComposerAutocompleteSuggestionType type;
+  final int tokenStart;
+  final int tokenEnd;
+}
 
 class ChatSessionController extends ChangeNotifier {
   static const _ctcpVersionReply = 'AndroidIRCx Flutter 1.0.0';
   static const _ctcpClientInfoReply =
       'ACTION CLIENTINFO DCC FINGER PING SOURCE TIME USERINFO VERSION';
   static const _ctcpUserInfoReply = 'AndroidIRCx Flutter user';
-  static const _ctcpSourceReply = 'https://github.com/AndroidIRCx/AndroidIRCx-Flutter';
+  static const _ctcpSourceReply =
+      'https://github.com/AndroidIRCx/AndroidIRCx-Flutter';
   static const _ctcpFingerReply = 'AndroidIRCx Flutter';
 
   ChatSessionController({
@@ -33,12 +52,23 @@ class ChatSessionController extends ChangeNotifier {
     ChatSessionPersistence? persistence,
     SettingsRepository? settingsRepository,
     CommandService? commandService,
-  })  : _ircService = ircService ?? IrcService(),
-        _dccService = dccService ?? DccService(),
-        _persistence = persistence ?? ChatSessionPersistence(),
-        _settingsRepository =
-            settingsRepository ?? SharedPrefsSettingsRepository(),
-        _commandService = commandService ?? CommandService() {
+    int maxReconnectAttempts = 6,
+    Duration reconnectBaseDelay = const Duration(seconds: 2),
+    Duration reconnectMaxDelay = const Duration(seconds: 60),
+    double reconnectJitterFactor = 0.2,
+    double Function()? reconnectJitterSampler,
+  }) : _ircService = ircService ?? IrcService(),
+       _dccService = dccService ?? DccService(),
+       _persistence = persistence ?? ChatSessionPersistence(),
+       _settingsRepository =
+           settingsRepository ?? SharedPrefsSettingsRepository(),
+       _commandService = commandService ?? CommandService(),
+       _maxReconnectAttempts = maxReconnectAttempts,
+       _reconnectBaseDelay = reconnectBaseDelay,
+       _reconnectMaxDelay = reconnectMaxDelay,
+       _reconnectJitterFactor = reconnectJitterFactor.clamp(0, 1).toDouble(),
+       _reconnectJitterSampler =
+           reconnectJitterSampler ?? math.Random().nextDouble {
     final serverTab = ChatTab(
       id: _serverTabId(network.id),
       name: network.name,
@@ -56,6 +86,11 @@ class ChatSessionController extends ChangeNotifier {
   final ChatSessionPersistence _persistence;
   final SettingsRepository _settingsRepository;
   final CommandService _commandService;
+  final int _maxReconnectAttempts;
+  final Duration _reconnectBaseDelay;
+  final Duration _reconnectMaxDelay;
+  final double _reconnectJitterFactor;
+  final double Function() _reconnectJitterSampler;
   final Map<String, List<IrcMessage>> _messages = {};
   final Map<String, Set<String>> _channelUsers = {};
   final Map<String, String> _channelTopics = {};
@@ -74,12 +109,15 @@ class ChatSessionController extends ChangeNotifier {
   final Map<String, DccSession> _dccSessions = {};
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   Timer? _reconnectTimer;
+  Future<void>? _startInFlight;
 
   late List<ChatTab> _tabs;
   late String _activeTabId;
   AppSettings _settings = const AppSettings();
   bool _isBootstrapped = false;
   bool _manualDisconnectRequested = false;
+  bool _isDisposed = false;
+  bool _autoJoinAttempted = false;
   int _reconnectAttempt = 0;
   Duration? _pendingReconnectDelay;
   String _nickPrefixChars = '~&@%+';
@@ -94,6 +132,166 @@ class ChatSessionController extends ChangeNotifier {
   ConnectionSnapshot get connection => _connection;
   AppSettings get settings => _settings;
   List<CommandHistoryEntry> get commandHistory => _commandService.history;
+  List<CommandSuggestion> commandSuggestionsForComposer(String input) {
+    final suggestions = <CommandSuggestion>[];
+    final seen = <String>{};
+
+    void add(CommandSuggestion suggestion) {
+      if (seen.add(suggestion.text.toLowerCase())) {
+        suggestions.add(suggestion);
+      }
+    }
+
+    for (final suggestion in _commandService.suggestCommands(
+      input,
+      limit: 20,
+    )) {
+      add(suggestion);
+    }
+    for (final suggestion in _commandService.suggestHistory(input, limit: 3)) {
+      add(suggestion);
+    }
+
+    suggestions.sort((left, right) {
+      final sourceOrder = _suggestionSourceOrder(
+        left.source,
+      ).compareTo(_suggestionSourceOrder(right.source));
+      if (sourceOrder != 0) {
+        return sourceOrder;
+      }
+      return left.text.toLowerCase().compareTo(right.text.toLowerCase());
+    });
+
+    return List<CommandSuggestion>.unmodifiable(suggestions.take(8));
+  }
+
+  List<ComposerAutocompleteSuggestion> autocompleteSuggestionsForComposer(
+    String input, {
+    int? cursorOffset,
+    int limit = 8,
+  }) {
+    final token = _composerTokenAt(input, cursorOffset: cursorOffset);
+    if (token == null) {
+      return const [];
+    }
+
+    final rawToken = input.substring(token.start, token.end);
+    if (rawToken.isEmpty || (token.start == 0 && rawToken.startsWith('/'))) {
+      return const [];
+    }
+
+    final suggestions = <ComposerAutocompleteSuggestion>[];
+    final seen = <String>{};
+
+    void add(String value, ComposerAutocompleteSuggestionType type) {
+      final normalized = value.trim();
+      if (normalized.isEmpty ||
+          !seen.add('${type.name}:${normalized.toLowerCase()}')) {
+        return;
+      }
+      suggestions.add(
+        ComposerAutocompleteSuggestion(
+          text: normalized,
+          type: type,
+          tokenStart: token.start,
+          tokenEnd: token.end,
+        ),
+      );
+    }
+
+    if (_isChannelToken(rawToken)) {
+      final tokenLower = rawToken.toLowerCase();
+      final channels =
+          _tabs
+              .where((tab) => tab.type == ChatTabType.channel)
+              .map((tab) => tab.name)
+              .where((name) => name.toLowerCase().startsWith(tokenLower))
+              .toList()
+            ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      for (final channel in channels) {
+        add(channel, ComposerAutocompleteSuggestionType.channel);
+        if (suggestions.length >= limit) {
+          break;
+        }
+      }
+      return List<ComposerAutocompleteSuggestion>.unmodifiable(suggestions);
+    }
+
+    final query = rawToken.startsWith('@') ? rawToken.substring(1) : rawToken;
+    if (query.length < 2 || activeTab.type != ChatTabType.channel) {
+      return const [];
+    }
+
+    final queryLower = query.toLowerCase();
+    final users =
+        activeChannelUsers
+            .where((nick) => nick.toLowerCase().startsWith(queryLower))
+            .toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    for (final nick in users) {
+      add(nick, ComposerAutocompleteSuggestionType.nick);
+      if (suggestions.length >= limit) {
+        break;
+      }
+    }
+
+    return List<ComposerAutocompleteSuggestion>.unmodifiable(suggestions);
+  }
+
+  String applyComposerAutocompleteSuggestion(
+    String input,
+    ComposerAutocompleteSuggestion suggestion,
+  ) {
+    final prefix = input.substring(0, suggestion.tokenStart);
+    final suffix = input.substring(suggestion.tokenEnd);
+    final currentToken = input.substring(
+      suggestion.tokenStart,
+      suggestion.tokenEnd,
+    );
+    final atPrefix =
+        suggestion.type == ComposerAutocompleteSuggestionType.nick &&
+        currentToken.startsWith('@');
+    final replacement = '${atPrefix ? '@' : ''}${suggestion.text}';
+    final needsSpace = suffix.isEmpty || !suffix.startsWith(RegExp(r'\s'));
+    return '$prefix$replacement${needsSpace ? ' ' : ''}$suffix';
+  }
+
+  static int _suggestionSourceOrder(CommandSuggestionSource source) {
+    return switch (source) {
+      CommandSuggestionSource.alias => 0,
+      CommandSuggestionSource.command => 1,
+      CommandSuggestionSource.history => 2,
+    };
+  }
+
+  ({int start, int end})? _composerTokenAt(String input, {int? cursorOffset}) {
+    if (input.isEmpty) {
+      return null;
+    }
+    final offset = (cursorOffset ?? input.length).clamp(0, input.length);
+    if (offset == 0) {
+      return null;
+    }
+
+    var start = offset;
+    while (start > 0 && input[start - 1].trim().isNotEmpty) {
+      start -= 1;
+    }
+    var end = offset;
+    while (end < input.length && input[end].trim().isNotEmpty) {
+      end += 1;
+    }
+
+    if (start == end) {
+      return null;
+    }
+    return (start: start, end: end);
+  }
+
+  bool _isChannelToken(String token) {
+    return token.length >= 2 && _channelPrefixChars.contains(token[0]);
+  }
+
   bool get isReconnectScheduled => _reconnectTimer?.isActive ?? false;
   Duration? get pendingReconnectDelay => _pendingReconnectDelay;
   ChatTab get activeTab => _tabs.firstWhere((tab) => tab.id == _activeTabId);
@@ -109,8 +307,9 @@ class ChatSessionController extends ChangeNotifier {
   String? get activeChannelTopic => _channelTopics[activeTabId];
   String? get activeChannelModes => _channelModes[activeTabId];
   DateTime? get activeReadMarker => _readMarkers[activeTabId];
-  List<String> get activeTypingUsers =>
-      List<String>.unmodifiable((_typingUsersByTab[activeTabId] ?? const <String>{}).toList()..sort());
+  List<String> get activeTypingUsers => List<String>.unmodifiable(
+    (_typingUsersByTab[activeTabId] ?? const <String>{}).toList()..sort(),
+  );
   DccSession? get activeDccSession => _dccSessions[activeTabId];
   String get activeChannelSummary {
     if (activeTab.type != ChatTabType.channel) {
@@ -125,20 +324,26 @@ class ChatSessionController extends ChangeNotifier {
 
     return '$users users • $modes';
   }
+
   List<String> get activeChannelUsers {
     final users = _channelUsers[activeTab.id];
     if (users == null) {
       return const [];
     }
 
-    final sorted = users.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final sorted = users.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     return List<String>.unmodifiable(sorted);
   }
+
   List<({String nick, String details})> get activeChannelUserDetails {
     return List<({String nick, String details})>.unmodifiable(
-      activeChannelUsers.map((nick) => (nick: nick, details: userDetailsForNick(nick))),
+      activeChannelUsers.map(
+        (nick) => (nick: nick, details: userDetailsForNick(nick)),
+      ),
     );
   }
+
   List<IrcMessage> get activeMessages {
     return messagesForTab(_activeTabId);
   }
@@ -190,9 +395,12 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     final details = <String>[
-      if ((_nickAccounts[key] ?? '').isNotEmpty) 'account: ${_nickAccounts[key]}',
-      if ((_nickRealNames[key] ?? '').isNotEmpty) 'realname: ${_nickRealNames[key]}',
-      if ((_nickIdents[key] ?? '').isNotEmpty || (_nickHosts[key] ?? '').isNotEmpty)
+      if ((_nickAccounts[key] ?? '').isNotEmpty)
+        'account: ${_nickAccounts[key]}',
+      if ((_nickRealNames[key] ?? '').isNotEmpty)
+        'realname: ${_nickRealNames[key]}',
+      if ((_nickIdents[key] ?? '').isNotEmpty ||
+          (_nickHosts[key] ?? '').isNotEmpty)
         '${(_nickIdents[key] ?? '').isEmpty ? '*' : _nickIdents[key]}@${(_nickHosts[key] ?? '').isEmpty ? '*' : _nickHosts[key]}',
       if ((_nickAwayMessages[key] ?? '').isNotEmpty)
         _nickAwayMessages[key] == '__away__'
@@ -209,7 +417,8 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     final identity = _senderIdentity(frame);
-    final accountTag = frame.tags['account'] ??
+    final accountTag =
+        frame.tags['account'] ??
         frame.tags['+account'] ??
         frame.tags['draft/account'] ??
         frame.tags['+draft/account'];
@@ -221,13 +430,17 @@ class ChatSessionController extends ChangeNotifier {
     );
   }
 
-  String _messageContextTarget(String fallbackTarget, Map<String, String?> tags) {
-    final context = (tags['draft/channel-context'] ??
-            tags['+draft/channel-context'] ??
-            tags['channel-context'] ??
-            tags['+channel-context'] ??
-            '')
-        .trim();
+  String _messageContextTarget(
+    String fallbackTarget,
+    Map<String, String?> tags,
+  ) {
+    final context =
+        (tags['draft/channel-context'] ??
+                tags['+draft/channel-context'] ??
+                tags['channel-context'] ??
+                tags['+channel-context'] ??
+                '')
+            .trim();
     if (context.isEmpty) {
       return fallbackTarget;
     }
@@ -337,11 +550,7 @@ class ChatSessionController extends ChangeNotifier {
     final bangIndex = cursor.indexOf('!');
     final atIndex = cursor.indexOf('@');
     if (bangIndex == -1 || atIndex == -1 || bangIndex > atIndex) {
-      return (
-        nick: _normalizeNickPrefix(trimmed),
-        ident: null,
-        host: null,
-      );
+      return (nick: _normalizeNickPrefix(trimmed), ident: null, host: null);
     }
 
     final nick = cursor.substring(0, bangIndex).trim();
@@ -354,62 +563,95 @@ class ChatSessionController extends ChangeNotifier {
     );
   }
 
-  Future<void> start() async {
+  Future<void> start() {
+    if (_isDisposed) {
+      return Future<void>.value();
+    }
+    final inFlight = _startInFlight;
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = _startInternal();
+    _startInFlight = future;
+    future.whenComplete(() {
+      if (identical(_startInFlight, future)) {
+        _startInFlight = null;
+      }
+    });
+    return future;
+  }
+
+  Future<void> _startInternal() async {
     if (!_isBootstrapped) {
       await _commandService.load();
       await _loadPersistedState();
+      if (_isDisposed) {
+        return;
+      }
       _isBootstrapped = true;
       notifyListeners();
     }
 
     if (_subscriptions.isEmpty) {
       _subscriptions.add(_ircService.frames.listen(_handleFrame));
-      _subscriptions.add(_ircService.stateStream.listen((snapshot) {
-        _connection = snapshot;
-        _handleConnectionLifecycle(snapshot);
-        notifyListeners();
-      }));
-      _subscriptions.add(_ircService.rawEvents.listen((line) {
-        _appendMessage(
-          tabId: _serverTabId(network.id),
-          sender: '*',
-          content: line,
-          kind: IrcMessageKind.raw,
-        );
-        unawaited(_persistState());
-        notifyListeners();
-      }));
-      _subscriptions.add(_ircService.labeledResponses.listen((event) {
-        _appendMessage(
-          tabId: _serverTabId(network.id),
-          sender: '*',
-          content:
-              'Labeled response matched: ${event.command} [${event.label}]',
-          kind: IrcMessageKind.system,
-        );
-        unawaited(_persistState());
-        notifyListeners();
-      }));
-      _subscriptions.add(_dccService.sessions.listen((session) {
-        final previous = _dccSessions[session.tabId];
-        _dccSessions[session.tabId] = session;
-        _appendDccStatusMessage(previous: previous, next: session);
-        unawaited(_persistState());
-        notifyListeners();
-      }));
-      _subscriptions.add(_dccService.messages.listen((event) {
-        _appendMessage(
-          tabId: event.tabId,
-          sender: event.sender,
-          content: event.content,
-          isOwn: event.isOwn,
-        );
-        unawaited(_persistState());
-        notifyListeners();
-      }));
+      _subscriptions.add(
+        _ircService.stateStream.listen((snapshot) {
+          _connection = snapshot;
+          _handleConnectionLifecycle(snapshot);
+          notifyListeners();
+        }),
+      );
+      _subscriptions.add(
+        _ircService.rawEvents.listen((line) {
+          _appendMessage(
+            tabId: _serverTabId(network.id),
+            sender: '*',
+            content: line,
+            kind: IrcMessageKind.raw,
+          );
+          unawaited(_persistState());
+          notifyListeners();
+        }),
+      );
+      _subscriptions.add(
+        _ircService.labeledResponses.listen((event) {
+          _appendMessage(
+            tabId: _serverTabId(network.id),
+            sender: '*',
+            content:
+                'Labeled response matched: ${event.command} [${event.label}]',
+            kind: IrcMessageKind.system,
+          );
+          unawaited(_persistState());
+          notifyListeners();
+        }),
+      );
+      _subscriptions.add(
+        _dccService.sessions.listen((session) {
+          final previous = _dccSessions[session.tabId];
+          _dccSessions[session.tabId] = session;
+          _appendDccStatusMessage(previous: previous, next: session);
+          unawaited(_persistState());
+          notifyListeners();
+        }),
+      );
+      _subscriptions.add(
+        _dccService.messages.listen((event) {
+          _appendMessage(
+            tabId: event.tabId,
+            sender: event.sender,
+            content: event.content,
+            isOwn: event.isOwn,
+          );
+          unawaited(_persistState());
+          notifyListeners();
+        }),
+      );
     }
 
     _manualDisconnectRequested = false;
+    _autoJoinAttempted = false;
     _cancelReconnect();
     await _ircService.connect(network);
   }
@@ -482,9 +724,7 @@ class ChatSessionController extends ChangeNotifier {
         tabId: activeTab.id,
         sender: _ircService.currentNick ?? network.nickname,
         content: text,
-        tags: {
-          if (normalizedReply.isNotEmpty) 'draft/reply': normalizedReply,
-        },
+        tags: {if (normalizedReply.isNotEmpty) 'draft/reply': normalizedReply},
         isOwn: true,
       );
     }
@@ -502,7 +742,8 @@ class ChatSessionController extends ChangeNotifier {
       _appendMessage(
         tabId: session.tabId,
         sender: 'error',
-        content: 'Reverse DCC SEND is detected, but direct reverse accept is not implemented yet.',
+        content:
+            'Reverse DCC SEND is detected, but direct reverse accept is not implemented yet.',
         kind: IrcMessageKind.system,
       );
       unawaited(_persistState());
@@ -607,10 +848,7 @@ class ChatSessionController extends ChangeNotifier {
 
   Future<void> _startOutgoingDccChat(String nick) async {
     final sessionId = 'outgoing-chat-${DateTime.now().microsecondsSinceEpoch}';
-    final tab = _ensureDccTab(
-      sessionId: sessionId,
-      name: 'DCC CHAT $nick',
-    );
+    final tab = _ensureDccTab(sessionId: sessionId, name: 'DCC CHAT $nick');
     _activeTabId = tab.id;
     try {
       await _dccService.startOutgoingChat(
@@ -643,10 +881,7 @@ class ChatSessionController extends ChangeNotifier {
     required String filePath,
   }) async {
     final sessionId = 'outgoing-send-${DateTime.now().microsecondsSinceEpoch}';
-    final tab = _ensureDccTab(
-      sessionId: sessionId,
-      name: 'DCC SEND $nick',
-    );
+    final tab = _ensureDccTab(sessionId: sessionId, name: 'DCC SEND $nick');
     _activeTabId = tab.id;
     try {
       final session = await _dccService.startOutgoingSend(
@@ -773,7 +1008,8 @@ class ChatSessionController extends ChangeNotifier {
         if (!_settings.showRawEvents && message.kind == IrcMessageKind.raw) {
           return false;
         }
-        if (effectiveKinds.isNotEmpty && !effectiveKinds.contains(message.kind)) {
+        if (effectiveKinds.isNotEmpty &&
+            !effectiveKinds.contains(message.kind)) {
           return false;
         }
         if (normalizedQuery.isEmpty) {
@@ -900,7 +1136,8 @@ class ChatSessionController extends ChangeNotifier {
       _appendMessage(
         tabId: _serverTabId(network.id),
         sender: 'error',
-        content: 'No recent history anchor is available yet for ${activeTab.name}.',
+        content:
+            'No recent history anchor is available yet for ${activeTab.name}.',
         kind: IrcMessageKind.system,
       );
       unawaited(_persistState());
@@ -946,7 +1183,8 @@ class ChatSessionController extends ChangeNotifier {
       _appendMessage(
         tabId: _serverTabId(network.id),
         sender: 'error',
-        content: 'No recent history anchor is available yet for ${activeTab.name}.',
+        content:
+            'No recent history anchor is available yet for ${activeTab.name}.',
         kind: IrcMessageKind.system,
       );
       unawaited(_persistState());
@@ -999,6 +1237,29 @@ class ChatSessionController extends ChangeNotifier {
     await start();
   }
 
+  Future<void> flushState() {
+    if (_isDisposed) {
+      return Future<void>.value();
+    }
+    return _persistState();
+  }
+
+  Future<void> handleAppLifecycleState(AppLifecycleState state) async {
+    if (_isDisposed) {
+      return;
+    }
+
+    switch (state) {
+      case AppLifecycleState.resumed:
+        return;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        await flushState();
+    }
+  }
+
   Future<void> reloadSettings() async {
     _settings = await _settingsRepository.loadSettings();
     notifyListeners();
@@ -1025,7 +1286,10 @@ class ChatSessionController extends ChangeNotifier {
       return false;
     }
 
-    final success = await _ircService.redactMessage(target: target, msgid: msgid);
+    final success = await _ircService.redactMessage(
+      target: target,
+      msgid: msgid,
+    );
     if (!success) {
       _appendMessage(
         tabId: _serverTabId(network.id),
@@ -1047,10 +1311,7 @@ class ChatSessionController extends ChangeNotifier {
         sender: existing.sender,
         content: '[message deleted]',
         timestamp: existing.timestamp,
-        tags: {
-          ...existing.tags,
-          'redacted': 'true',
-        },
+        tags: {...existing.tags, 'redacted': 'true'},
         isPlayback: existing.isPlayback,
         isOwn: existing.isOwn,
         kind: existing.kind,
@@ -1062,6 +1323,10 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   void _handleConnectionLifecycle(ConnectionSnapshot snapshot) {
+    if (_isDisposed) {
+      return;
+    }
+
     if (snapshot.phase == ConnectionPhase.connected) {
       _autoHistoryRequestedChannels.clear();
       _reconnectAttempt = 0;
@@ -1078,24 +1343,126 @@ class ChatSessionController extends ChangeNotifier {
     if (snapshot.phase == ConnectionPhase.error ||
         snapshot.phase == ConnectionPhase.disconnected) {
       _autoHistoryRequestedChannels.clear();
+      _autoJoinAttempted = false;
       _scheduleReconnect();
     }
   }
 
+  Future<void> _autoJoinConfiguredChannels() async {
+    if (_autoJoinAttempted || _connection.phase != ConnectionPhase.connected) {
+      return;
+    }
+
+    final channels = _normalizedAutoJoinChannels();
+    if (channels.isEmpty) {
+      _autoJoinAttempted = true;
+      return;
+    }
+
+    _autoJoinAttempted = true;
+    for (final channel in channels) {
+      if (_isDisposed || _connection.phase != ConnectionPhase.connected) {
+        return;
+      }
+      final tab = _ensureChannelTab(channel);
+      _messages.putIfAbsent(tab.id, () => <IrcMessage>[]);
+      await _ircService.joinChannel(
+        channel,
+        network.autoJoinChannelKeys[channel],
+      );
+    }
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  List<String> _normalizedAutoJoinChannels() {
+    final seen = <String>{};
+    final result = <String>[];
+    for (final raw in network.autoJoinChannels) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      final channel = _isChannelName(trimmed) ? trimmed : '#$trimmed';
+      final key = channel.toLowerCase();
+      if (seen.add(key)) {
+        result.add(channel);
+      }
+    }
+    return result;
+  }
+
   void _scheduleReconnect() {
+    if (_isDisposed || _manualDisconnectRequested) {
+      return;
+    }
+
     if (_reconnectTimer?.isActive ?? false) {
       return;
     }
 
+    if (_maxReconnectAttempts > 0 &&
+        _reconnectAttempt >= _maxReconnectAttempts) {
+      _pendingReconnectDelay = null;
+      return;
+    }
+
     _reconnectAttempt += 1;
-    final seconds = (_reconnectAttempt * 2).clamp(2, 12);
-    _pendingReconnectDelay = Duration(seconds: seconds);
+    _pendingReconnectDelay = _nextReconnectDelay();
+    _connection = ConnectionSnapshot(
+      networkId: network.id,
+      phase: ConnectionPhase.reconnecting,
+      message:
+          'Reconnecting in ${_formatReconnectDelay(_pendingReconnectDelay!)}.',
+    );
     _reconnectTimer = Timer(_pendingReconnectDelay!, () {
       _reconnectTimer = null;
       _pendingReconnectDelay = null;
+      if (_isDisposed || _manualDisconnectRequested) {
+        return;
+      }
       unawaited(start());
-      notifyListeners();
+      if (!_isDisposed) {
+        notifyListeners();
+      }
     });
+  }
+
+  Duration _nextReconnectDelay() {
+    final baseMillis = math.max(0, _reconnectBaseDelay.inMilliseconds);
+    final maxMillis = math.max(baseMillis, _reconnectMaxDelay.inMilliseconds);
+    final multiplier = 1 << (_reconnectAttempt - 1).clamp(0, 30);
+    final boundedMillis = (baseMillis * multiplier).clamp(
+      baseMillis,
+      maxMillis,
+    );
+
+    if (_reconnectJitterFactor <= 0 || boundedMillis <= 0) {
+      return Duration(milliseconds: boundedMillis.toInt());
+    }
+
+    final jitterMillis = (boundedMillis * _reconnectJitterFactor).round();
+    if (jitterMillis <= 0) {
+      return Duration(milliseconds: boundedMillis.toInt());
+    }
+
+    final minMillis = math.max(baseMillis, boundedMillis - jitterMillis);
+    final jitteredMaxMillis = math.min(maxMillis, boundedMillis + jitterMillis);
+    final jitterRangeMillis = jitteredMaxMillis - minMillis;
+    if (jitterRangeMillis <= 0) {
+      return Duration(milliseconds: minMillis.toInt());
+    }
+
+    final sample = _reconnectJitterSampler().clamp(0.0, 1.0).toDouble();
+    final jitteredMillis = minMillis + (jitterRangeMillis * sample).round();
+    return Duration(milliseconds: jitteredMillis.toInt());
+  }
+
+  String _formatReconnectDelay(Duration delay) {
+    if (delay.inSeconds > 0) {
+      return '${delay.inSeconds}s';
+    }
+    return '${delay.inMilliseconds}ms';
   }
 
   void _cancelReconnect() {
@@ -1135,10 +1502,7 @@ class ChatSessionController extends ChangeNotifier {
           final text = rest.substring(space + 1).trim();
           if (text.isNotEmpty) {
             final tab = _ensureQueryTab(target);
-            await _ircService.sendPrivmsg(
-              target: target,
-              text: text,
-            );
+            await _ircService.sendPrivmsg(target: target, text: text);
             if (!_ircService.enabledCapabilities.contains('echo-message')) {
               _appendMessage(
                 tabId: tab.id,
@@ -1299,7 +1663,11 @@ class ChatSessionController extends ChangeNotifier {
           return;
         }
       case 'who':
-        await _ircService.sendWho(rest.isEmpty && activeTab.type == ChatTabType.channel ? activeTab.name : rest);
+        await _ircService.sendWho(
+          rest.isEmpty && activeTab.type == ChatTabType.channel
+              ? activeTab.name
+              : rest,
+        );
         return;
       case 'whowas':
         if (rest.isNotEmpty) {
@@ -1320,7 +1688,9 @@ class ChatSessionController extends ChangeNotifier {
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',
-          content: rest.isEmpty ? 'Requested channel list.' : 'Requested channel list for: $rest',
+          content: rest.isEmpty
+              ? 'Requested channel list.'
+              : 'Requested channel list for: $rest',
           kind: IrcMessageKind.system,
         );
         unawaited(_persistState());
@@ -1331,7 +1701,8 @@ class ChatSessionController extends ChangeNotifier {
           _appendMessage(
             tabId: _serverTabId(network.id),
             sender: 'error',
-            content: 'Usage: open a channel or query tab, then use /chathistory [limit]',
+            content:
+                'Usage: open a channel or query tab, then use /chathistory [limit]',
             kind: IrcMessageKind.system,
           );
           unawaited(_persistState());
@@ -1372,7 +1743,9 @@ class ChatSessionController extends ChangeNotifier {
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',
-          content: rest.isEmpty ? 'Requested server time.' : 'Requested time for: $rest',
+          content: rest.isEmpty
+              ? 'Requested server time.'
+              : 'Requested time for: $rest',
           kind: IrcMessageKind.system,
         );
         unawaited(_persistState());
@@ -1383,7 +1756,9 @@ class ChatSessionController extends ChangeNotifier {
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',
-          content: rest.isEmpty ? 'Requested server version.' : 'Requested version for: $rest',
+          content: rest.isEmpty
+              ? 'Requested server version.'
+              : 'Requested version for: $rest',
           kind: IrcMessageKind.system,
         );
         unawaited(_persistState());
@@ -1394,14 +1769,19 @@ class ChatSessionController extends ChangeNotifier {
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',
-          content: rest.isEmpty ? 'Requested server links.' : 'Requested links for: $rest',
+          content: rest.isEmpty
+              ? 'Requested server links.'
+              : 'Requested links for: $rest',
           kind: IrcMessageKind.system,
         );
         unawaited(_persistState());
         notifyListeners();
         return;
       case 'ison':
-        final nicks = rest.split(RegExp(r'\s+')).where((nick) => nick.trim().isNotEmpty).toList(growable: false);
+        final nicks = rest
+            .split(RegExp(r'\s+'))
+            .where((nick) => nick.trim().isNotEmpty)
+            .toList(growable: false);
         if (nicks.isNotEmpty) {
           await _ircService.sendIson(nicks);
           _appendMessage(
@@ -1415,7 +1795,10 @@ class ChatSessionController extends ChangeNotifier {
           return;
         }
       case 'userhost':
-        final nicks = rest.split(RegExp(r'\s+')).where((nick) => nick.trim().isNotEmpty).toList(growable: false);
+        final nicks = rest
+            .split(RegExp(r'\s+'))
+            .where((nick) => nick.trim().isNotEmpty)
+            .toList(growable: false);
         if (nicks.isNotEmpty) {
           await _ircService.sendUserhost(nicks);
           _appendMessage(
@@ -1559,12 +1942,17 @@ class ChatSessionController extends ChangeNotifier {
         }
       case 'topic':
         if (activeTab.type == ChatTabType.channel) {
-          await _ircService.sendTopic(channel: activeTab.name, topic: rest.isEmpty ? null : rest);
+          await _ircService.sendTopic(
+            channel: activeTab.name,
+            topic: rest.isEmpty ? null : rest,
+          );
           return;
         }
       case 'mode':
         if (rest.isNotEmpty) {
-          final args = activeTab.type == ChatTabType.channel ? '${activeTab.name} $rest' : rest;
+          final args = activeTab.type == ChatTabType.channel
+              ? '${activeTab.name} $rest'
+              : rest;
           await _ircService.sendMode(args);
           return;
         }
@@ -1632,6 +2020,7 @@ class ChatSessionController extends ChangeNotifier {
       case '374':
       case '375':
       case '376':
+      case '422':
       case '391':
         _appendMessage(
           tabId: _serverTabId(network.id),
@@ -1639,6 +2028,9 @@ class ChatSessionController extends ChangeNotifier {
           content: frame.trailing ?? frame.params.join(' '),
           kind: IrcMessageKind.system,
         );
+        if (frame.command == '376' || frame.command == '422') {
+          unawaited(_autoJoinConfiguredChannels());
+        }
       case '005':
         _handleIsupport(frame);
       case '221':
@@ -1747,9 +2139,10 @@ class ChatSessionController extends ChangeNotifier {
           final tab = _ensureChannelTab(channel);
           final createdText = createdAt == null
               ? frame.params[2]
-              : DateTime.fromMillisecondsSinceEpoch(createdAt * 1000, isUtc: true)
-                  .toLocal()
-                  .toString();
+              : DateTime.fromMillisecondsSinceEpoch(
+                  createdAt * 1000,
+                  isUtc: true,
+                ).toLocal().toString();
           _appendMessage(
             tabId: tab.id,
             sender: '*',
@@ -1833,7 +2226,8 @@ class ChatSessionController extends ChangeNotifier {
           frame,
           frame.trailing == null
               ? frame.raw
-              : 'WHOIS away: ${frame.params.length > 1 ? frame.params[1] : ''} ${frame.trailing!}'.trim(),
+              : 'WHOIS away: ${frame.params.length > 1 ? frame.params[1] : ''} ${frame.trailing!}'
+                    .trim(),
         );
       case '307':
       case '313':
@@ -1876,7 +2270,8 @@ class ChatSessionController extends ChangeNotifier {
       case '318':
         _appendWhoisMessage(
           frame,
-          'End of WHOIS for ${frame.params.length > 1 ? frame.params[1] : ''}'.trim(),
+          'End of WHOIS for ${frame.params.length > 1 ? frame.params[1] : ''}'
+              .trim(),
         );
       case '314':
         _appendWhoisMessage(
@@ -1925,7 +2320,8 @@ class ChatSessionController extends ChangeNotifier {
       case '369':
         _appendWhoisMessage(
           frame,
-          'End of WHOWAS for ${frame.params.length > 1 ? frame.params[1] : ''}'.trim(),
+          'End of WHOWAS for ${frame.params.length > 1 ? frame.params[1] : ''}'
+              .trim(),
         );
       case '353':
         if (frame.params.length >= 3 && frame.trailing != null) {
@@ -1937,9 +2333,9 @@ class ChatSessionController extends ChangeNotifier {
               .map(_parseNamesEntry)
               .where((entry) => entry.nick.isNotEmpty)
               .toList(growable: false);
-          _channelUsers.putIfAbsent(tab.id, () => <String>{}).addAll(
-            entries.map((entry) => entry.nick),
-          );
+          _channelUsers
+              .putIfAbsent(tab.id, () => <String>{})
+              .addAll(entries.map((entry) => entry.nick));
           for (final entry in entries) {
             _rememberNickState(
               entry.nick,
@@ -1966,7 +2362,9 @@ class ChatSessionController extends ChangeNotifier {
           final mask = frame.params[2];
           final setBy = frame.params.length > 3 ? frame.params[3] : null;
           final tab = _ensureChannelTab(channel);
-          final details = setBy == null ? 'Ban: $mask' : 'Ban: $mask set by $setBy';
+          final details = setBy == null
+              ? 'Ban: $mask'
+              : 'Ban: $mask set by $setBy';
           _appendMessage(
             tabId: tab.id,
             sender: '*',
@@ -1977,7 +2375,8 @@ class ChatSessionController extends ChangeNotifier {
       case '730':
       case '731':
         final isOnline = frame.command == '730';
-        final rawTargets = frame.trailing ?? (frame.params.length > 1 ? frame.params[1] : '');
+        final rawTargets =
+            frame.trailing ?? (frame.params.length > 1 ? frame.params[1] : '');
         final nicknames = rawTargets
             .split(',')
             .map((entry) => entry.trim())
@@ -1987,16 +2386,22 @@ class ChatSessionController extends ChangeNotifier {
           tabId: _serverTabId(network.id),
           sender: '*',
           content: nicknames.isEmpty
-              ? (isOnline ? 'MONITOR online update.' : 'MONITOR offline update.')
+              ? (isOnline
+                    ? 'MONITOR online update.'
+                    : 'MONITOR offline update.')
               : 'MONITOR ${isOnline ? 'online' : 'offline'}: ${nicknames.join(', ')}',
           kind: IrcMessageKind.system,
         );
       case '732':
-        final entries = (frame.trailing ?? (frame.params.length > 1 ? frame.params[1] : '')).trim();
+        final entries =
+            (frame.trailing ?? (frame.params.length > 1 ? frame.params[1] : ''))
+                .trim();
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',
-          content: entries.isEmpty ? 'MONITOR list is empty.' : 'MONITOR list: $entries',
+          content: entries.isEmpty
+              ? 'MONITOR list is empty.'
+              : 'MONITOR list: $entries',
           kind: IrcMessageKind.system,
         );
       case '733':
@@ -2045,7 +2450,9 @@ class ChatSessionController extends ChangeNotifier {
       case '729':
         _handleChannelListEnd(frame);
       case 'INVITE':
-        final channel = frame.trailing ?? (frame.params.length > 1 ? frame.params[1] : null);
+        final channel =
+            frame.trailing ??
+            (frame.params.length > 1 ? frame.params[1] : null);
         if (channel != null) {
           final inviter = frame.senderNick ?? '*';
           final invitee = frame.params.isNotEmpty ? frame.params.first : null;
@@ -2068,9 +2475,11 @@ class ChatSessionController extends ChangeNotifier {
           final nick = frame.senderNick ?? '*';
           _channelUsers.putIfAbsent(tab.id, () => <String>{}).add(nick);
           final identity = _senderIdentity(frame);
-          final extendedJoinAccount =
-              frame.params.length > 1 ? frame.params[1] : null;
-          final extendedJoinRealname = frame.trailing ??
+          final extendedJoinAccount = frame.params.length > 1
+              ? frame.params[1]
+              : null;
+          final extendedJoinRealname =
+              frame.trailing ??
               (frame.params.length > 2 ? frame.params[2] : null);
           _rememberNickState(
             nick,
@@ -2103,7 +2512,9 @@ class ChatSessionController extends ChangeNotifier {
         if (channel != null) {
           final tab = _ensureChannelTab(channel);
           final partingNick = frame.senderNick ?? '';
-          _channelUsers.putIfAbsent(tab.id, () => <String>{}).remove(partingNick);
+          _channelUsers
+              .putIfAbsent(tab.id, () => <String>{})
+              .remove(partingNick);
           if (_isSelfNick(partingNick)) {
             _autoHistoryRequestedChannels.remove(channel.toLowerCase());
           }
@@ -2120,7 +2531,9 @@ class ChatSessionController extends ChangeNotifier {
           final channel = frame.params[0];
           final kickedNick = frame.params[1];
           final tab = _ensureChannelTab(channel);
-          _channelUsers.putIfAbsent(tab.id, () => <String>{}).remove(kickedNick);
+          _channelUsers
+              .putIfAbsent(tab.id, () => <String>{})
+              .remove(kickedNick);
           if (_isSelfNick(kickedNick)) {
             _autoHistoryRequestedChannels.remove(channel.toLowerCase());
           }
@@ -2413,7 +2826,10 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     final target = frame.params.first;
-    final modeText = [...frame.params.skip(1), if (frame.trailing != null) frame.trailing!].join(' ');
+    final modeText = [
+      ...frame.params.skip(1),
+      if (frame.trailing != null) frame.trailing!,
+    ].join(' ');
     final tabId = target.startsWith('#')
         ? _ensureChannelTab(target).id
         : _serverTabId(network.id);
@@ -2487,7 +2903,9 @@ class ChatSessionController extends ChangeNotifier {
       '728' => 'Quiet',
       _ => 'List entry',
     };
-    final details = setBy == null ? '$label: $mask' : '$label: $mask set by $setBy';
+    final details = setBy == null
+        ? '$label: $mask'
+        : '$label: $mask set by $setBy';
     _appendMessage(
       tabId: tab.id,
       sender: '*',
@@ -2552,16 +2970,14 @@ class ChatSessionController extends ChangeNotifier {
   void _handleChgHost(IrcMessageFrame frame) {
     final nick = frame.senderNick ?? 'unknown';
     final newIdent = frame.params.isNotEmpty ? frame.params[0] : null;
-    final newHost = frame.params.length > 1 ? frame.params[1] : frame.trailing ?? '';
+    final newHost = frame.params.length > 1
+        ? frame.params[1]
+        : frame.trailing ?? '';
     if (newHost.isEmpty) {
       return;
     }
 
-    _rememberNickState(
-      nick,
-      ident: newIdent,
-      host: newHost,
-    );
+    _rememberNickState(nick, ident: newIdent, host: newHost);
 
     _appendMessage(
       tabId: _serverTabId(network.id),
@@ -2635,17 +3051,19 @@ class ChatSessionController extends ChangeNotifier {
     final existingMessages = _messages.remove(tab.id);
     if (existingMessages != null) {
       _messages[renamedTab.id] = existingMessages
-          .map((message) => IrcMessage(
-                id: message.id,
-                tabId: renamedTab.id,
-                sender: message.sender,
-                content: message.content,
-                timestamp: message.timestamp,
-                tags: message.tags,
-                isPlayback: message.isPlayback,
-                isOwn: message.isOwn,
-                kind: message.kind,
-              ))
+          .map(
+            (message) => IrcMessage(
+              id: message.id,
+              tabId: renamedTab.id,
+              sender: message.sender,
+              content: message.content,
+              timestamp: message.timestamp,
+              tags: message.tags,
+              isPlayback: message.isPlayback,
+              isOwn: message.isOwn,
+              kind: message.kind,
+            ),
+          )
           .toList(growable: true);
     }
 
@@ -2725,10 +3143,7 @@ class ChatSessionController extends ChangeNotifier {
         sender: existing.sender,
         content: '[message deleted]',
         timestamp: existing.timestamp,
-        tags: {
-          ...existing.tags,
-          'redacted': 'true',
-        },
+        tags: {...existing.tags, 'redacted': 'true'},
         isPlayback: existing.isPlayback,
         isOwn: existing.isOwn,
         kind: existing.kind,
@@ -2770,7 +3185,10 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   void _recordReaction(String msgid, String emoji, String nick) {
-    final emojiUsers = _messageReactions.putIfAbsent(msgid, () => <String, Set<String>>{});
+    final emojiUsers = _messageReactions.putIfAbsent(
+      msgid,
+      () => <String, Set<String>>{},
+    );
     emojiUsers.putIfAbsent(emoji, () => <String>{}).add(nick);
   }
 
@@ -2800,7 +3218,10 @@ class ChatSessionController extends ChangeNotifier {
     return content;
   }
 
-  Future<void> _requestAutoHistoryOnJoin(String channel, {int limit = 50}) async {
+  Future<void> _requestAutoHistoryOnJoin(
+    String channel, {
+    int limit = 50,
+  }) async {
     final normalizedChannel = channel.trim();
     if (normalizedChannel.isEmpty || !_ircService.supportsChatHistory) {
       return;
@@ -2830,7 +3251,11 @@ class ChatSessionController extends ChangeNotifier {
 
     final latestTimestamp = _messages[tabId]
         ?.map((message) => message.timestamp.millisecondsSinceEpoch)
-        .fold<int?>(null, (current, value) => current == null || value > current ? value : current);
+        .fold<int?>(
+          null,
+          (current, value) =>
+              current == null || value > current ? value : current,
+        );
 
     final success = await _ircService.sendReadMarker(
       target: target,
@@ -2856,7 +3281,8 @@ class ChatSessionController extends ChangeNotifier {
       _appendMessage(
         tabId: _serverTabId(network.id),
         sender: '*',
-        content: 'BATCH start: $type${frame.params.length > 2 ? ' ${frame.params.skip(2).join(' ')}' : ''}',
+        content:
+            'BATCH start: $type${frame.params.length > 2 ? ' ${frame.params.skip(2).join(' ')}' : ''}',
         timestamp: _timestampForFrame(frame),
         tags: frame.tags,
         kind: IrcMessageKind.system,
@@ -2871,8 +3297,10 @@ class ChatSessionController extends ChangeNotifier {
       final summary = switch (type) {
         'chathistory' || 'history' || 'znc.in/playback' =>
           'Playback batch completed: ${batch?.messageCount ?? 0} messages',
-        'netsplit' => 'Netsplit batch completed: ${batch?.messageCount ?? 0} events',
-        'netjoin' => 'Netjoin batch completed: ${batch?.messageCount ?? 0} events',
+        'netsplit' =>
+          'Netsplit batch completed: ${batch?.messageCount ?? 0} events',
+        'netjoin' =>
+          'Netjoin batch completed: ${batch?.messageCount ?? 0} events',
         _ => 'BATCH end: $type (${batch?.messageCount ?? 0} messages)',
       };
       _appendMessage(
@@ -2982,11 +3410,13 @@ class ChatSessionController extends ChangeNotifier {
   }) {
     DccSession? session;
     for (final candidate in _dccSessions.values) {
-      final tokenMatches = (candidate.token ?? '').trim() == (offer.token ?? '').trim() ||
+      final tokenMatches =
+          (candidate.token ?? '').trim() == (offer.token ?? '').trim() ||
           (offer.token ?? '').trim().isEmpty;
       if (candidate.peerNick.toLowerCase() == senderNick.toLowerCase() &&
           candidate.type == DccSessionType.send &&
-          (candidate.filename ?? '').toLowerCase() == (offer.filename ?? '').toLowerCase() &&
+          (candidate.filename ?? '').toLowerCase() ==
+              (offer.filename ?? '').toLowerCase() &&
           candidate.port == offer.port &&
           tokenMatches) {
         session = candidate;
@@ -2997,7 +3427,9 @@ class ChatSessionController extends ChangeNotifier {
       return null;
     }
 
-    final updated = session.copyWith(resumeOffset: offer.offset ?? session.resumeOffset);
+    final updated = session.copyWith(
+      resumeOffset: offer.offset ?? session.resumeOffset,
+    );
     _dccSessions[session.tabId] = updated;
     final content = offer.command == 'RESUME'
         ? '$senderNick requested DCC RESUME for ${offer.filename ?? 'file'} at offset ${offer.offset ?? 0}.'
@@ -3032,7 +3464,11 @@ class ChatSessionController extends ChangeNotifier {
     _markActivityIfInactive(tabId);
   }
 
-  Future<void> _respondToCtcpRequest(String from, String command, String? args) async {
+  Future<void> _respondToCtcpRequest(
+    String from,
+    String command,
+    String? args,
+  ) async {
     switch (command) {
       case 'VERSION':
         await _ircService.sendCtcpReply(
@@ -3103,12 +3539,16 @@ class ChatSessionController extends ChangeNotifier {
       final offer = parseDccOffer('DCC ${args ?? ''}');
       if (offer != null) {
         return switch (offer.command) {
-          'CHAT' => 'DCC CHAT request from $from: ${offer.host ?? '?'}:${offer.port ?? 0}',
-          'SEND' => offer.isReverseSend
-              ? 'Reverse DCC SEND offer from $from: ${offer.filename ?? 'file'} (${offer.size ?? 0} bytes) token ${offer.token ?? '?'}'
-              : 'DCC SEND offer from $from: ${offer.filename ?? 'file'} (${offer.size ?? 0} bytes) ${offer.host ?? '?'}:${offer.port ?? 0}',
-          'RESUME' => 'DCC RESUME request from $from: ${offer.filename ?? 'file'} at ${offer.offset ?? 0}',
-          'ACCEPT' => 'DCC ACCEPT reply from $from: ${offer.filename ?? 'file'} at ${offer.offset ?? 0}',
+          'CHAT' =>
+            'DCC CHAT request from $from: ${offer.host ?? '?'}:${offer.port ?? 0}',
+          'SEND' =>
+            offer.isReverseSend
+                ? 'Reverse DCC SEND offer from $from: ${offer.filename ?? 'file'} (${offer.size ?? 0} bytes) token ${offer.token ?? '?'}'
+                : 'DCC SEND offer from $from: ${offer.filename ?? 'file'} (${offer.size ?? 0} bytes) ${offer.host ?? '?'}:${offer.port ?? 0}',
+          'RESUME' =>
+            'DCC RESUME request from $from: ${offer.filename ?? 'file'} at ${offer.offset ?? 0}',
+          'ACCEPT' =>
+            'DCC ACCEPT reply from $from: ${offer.filename ?? 'file'} at ${offer.offset ?? 0}',
           _ => 'CTCP DCC request from $from: ${args ?? ''}',
         };
       }
@@ -3190,10 +3630,7 @@ class ChatSessionController extends ChangeNotifier {
     return tab;
   }
 
-  ChatTab _ensureDccTab({
-    required String sessionId,
-    required String name,
-  }) {
+  ChatTab _ensureDccTab({required String sessionId, required String name}) {
     final tabId = _dccTabId(network.id, sessionId);
     final existing = _findTab(tabId);
     if (existing != null) {
@@ -3225,22 +3662,26 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     final content = switch (next.status) {
-      DccSessionStatus.offering => next.type == DccSessionType.chat
-          ? 'DCC CHAT offer created for ${next.peerNick}.'
-          : 'DCC SEND offer created for ${next.peerNick}.',
-      DccSessionStatus.connecting => next.type == DccSessionType.chat
-          ? 'Connecting DCC CHAT session...'
-          : 'Connecting DCC SEND transfer...',
-      DccSessionStatus.connected => next.type == DccSessionType.chat
-          ? 'DCC CHAT connected.'
-          : next.direction == 'outgoing'
-              ? 'DCC SEND transfer started for ${next.filename ?? 'file'}.'
-              : 'Receiving ${next.filename ?? 'file'} to ${next.filePath ?? 'temporary storage'}.',
-      DccSessionStatus.closed => next.type == DccSessionType.chat
-          ? 'DCC CHAT session closed.'
-          : next.direction == 'outgoing'
-              ? 'DCC SEND finished (${next.bytesTransferred} bytes sent).'
-              : 'DCC SEND finished (${next.bytesTransferred} bytes saved to ${next.filePath ?? 'temporary storage'}).',
+      DccSessionStatus.offering =>
+        next.type == DccSessionType.chat
+            ? 'DCC CHAT offer created for ${next.peerNick}.'
+            : 'DCC SEND offer created for ${next.peerNick}.',
+      DccSessionStatus.connecting =>
+        next.type == DccSessionType.chat
+            ? 'Connecting DCC CHAT session...'
+            : 'Connecting DCC SEND transfer...',
+      DccSessionStatus.connected =>
+        next.type == DccSessionType.chat
+            ? 'DCC CHAT connected.'
+            : next.direction == 'outgoing'
+            ? 'DCC SEND transfer started for ${next.filename ?? 'file'}.'
+            : 'Receiving ${next.filename ?? 'file'} to ${next.filePath ?? 'temporary storage'}.',
+      DccSessionStatus.closed =>
+        next.type == DccSessionType.chat
+            ? 'DCC CHAT session closed.'
+            : next.direction == 'outgoing'
+            ? 'DCC SEND finished (${next.bytesTransferred} bytes sent).'
+            : 'DCC SEND finished (${next.bytesTransferred} bytes saved to ${next.filePath ?? 'temporary storage'}).',
       DccSessionStatus.failed =>
         'DCC ${next.type == DccSessionType.chat ? 'CHAT' : 'SEND'} failed: ${next.error ?? 'unknown error'}',
       DccSessionStatus.pending => null,
@@ -3372,14 +3813,15 @@ class ChatSessionController extends ChangeNotifier {
 
     for (final tab in _tabs) {
       _messages.putIfAbsent(tab.id, () => []);
-        if (tab.type == ChatTabType.channel) {
-          _channelUsers.putIfAbsent(tab.id, () => <String>{});
-          _channelTopics.putIfAbsent(tab.id, () => '');
-          _channelModes.putIfAbsent(tab.id, () => '');
-        }
+      if (tab.type == ChatTabType.channel) {
+        _channelUsers.putIfAbsent(tab.id, () => <String>{});
+        _channelTopics.putIfAbsent(tab.id, () => '');
+        _channelModes.putIfAbsent(tab.id, () => '');
       }
+    }
 
-    if (snapshot.activeTabId.isNotEmpty && _findTab(snapshot.activeTabId) != null) {
+    if (snapshot.activeTabId.isNotEmpty &&
+        _findTab(snapshot.activeTabId) != null) {
       _activeTabId = snapshot.activeTabId;
     }
   }
@@ -3403,7 +3845,9 @@ class ChatSessionController extends ChangeNotifier {
 
   void _appendWhoisMessage(IrcMessageFrame frame, String content) {
     final nick = frame.params.length > 1 ? frame.params[1] : null;
-    final targetTabId = nick == null ? _serverTabId(network.id) : _ensureQueryTab(nick).id;
+    final targetTabId = nick == null
+        ? _serverTabId(network.id)
+        : _ensureQueryTab(nick).id;
     _appendMessage(
       tabId: targetTabId,
       sender: '*',
@@ -3450,12 +3894,17 @@ class ChatSessionController extends ChangeNotifier {
     ].join(' ').trim();
 
     final message = switch (subcommand) {
-      'LS' => 'CAP LS: ${details.isEmpty ? 'no capabilities reported' : details}',
-      'ACK' => 'CAP ACK: ${details.isEmpty ? 'no capabilities acknowledged' : details}',
+      'LS' =>
+        'CAP LS: ${details.isEmpty ? 'no capabilities reported' : details}',
+      'ACK' =>
+        'CAP ACK: ${details.isEmpty ? 'no capabilities acknowledged' : details}',
       'NAK' => 'CAP NAK: ${details.isEmpty ? 'request rejected' : details}',
-      'NEW' => 'CAP NEW: ${details.isEmpty ? 'no new capabilities reported' : details}',
-      'DEL' => 'CAP DEL: ${details.isEmpty ? 'no removed capabilities reported' : details}',
-      'LIST' => 'CAP LIST: ${details.isEmpty ? 'no enabled capabilities reported' : details}',
+      'NEW' =>
+        'CAP NEW: ${details.isEmpty ? 'no new capabilities reported' : details}',
+      'DEL' =>
+        'CAP DEL: ${details.isEmpty ? 'no removed capabilities reported' : details}',
+      'LIST' =>
+        'CAP LIST: ${details.isEmpty ? 'no enabled capabilities reported' : details}',
       _ => 'CAP $subcommand${details.isEmpty ? '' : ': $details'}',
     };
 
@@ -3488,18 +3937,22 @@ class ChatSessionController extends ChangeNotifier {
 
     switch (subcommand) {
       case 'status':
-        final available = _sortedCapabilities(_ircService.availableCapabilities);
+        final available = _sortedCapabilities(
+          _ircService.availableCapabilities,
+        );
         final enabled = _sortedCapabilities(_ircService.enabledCapabilities);
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',
-          content: 'Available capabilities: ${available.isEmpty ? 'none' : available.join(', ')}',
+          content:
+              'Available capabilities: ${available.isEmpty ? 'none' : available.join(', ')}',
           kind: IrcMessageKind.system,
         );
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',
-          content: 'Enabled capabilities: ${enabled.isEmpty ? 'none' : enabled.join(', ')}',
+          content:
+              'Enabled capabilities: ${enabled.isEmpty ? 'none' : enabled.join(', ')}',
           kind: IrcMessageKind.system,
         );
         break;
@@ -3563,7 +4016,10 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   Future<void> _handleMonitorCommand(String rest) async {
-    final segments = rest.split(RegExp(r'\s+')).where((part) => part.trim().isNotEmpty).toList(growable: false);
+    final segments = rest
+        .split(RegExp(r'\s+'))
+        .where((part) => part.trim().isNotEmpty)
+        .toList(growable: false);
     if (segments.isEmpty) {
       _appendMessage(
         tabId: _serverTabId(network.id),
@@ -3578,10 +4034,20 @@ class ChatSessionController extends ChangeNotifier {
 
     final subcommand = segments.first.toUpperCase();
     final nicknameParts = segments.length > 1
-        ? segments.skip(1).join(' ').split(RegExp(r'[\s,]+')).where((nick) => nick.trim().isNotEmpty).toList(growable: false)
+        ? segments
+              .skip(1)
+              .join(' ')
+              .split(RegExp(r'[\s,]+'))
+              .where((nick) => nick.trim().isNotEmpty)
+              .toList(growable: false)
         : const <String>[];
-    await _ircService.sendMonitor(subcommand: subcommand, nicknames: nicknameParts);
-    final detail = nicknameParts.isEmpty ? subcommand : '$subcommand ${nicknameParts.join(', ')}';
+    await _ircService.sendMonitor(
+      subcommand: subcommand,
+      nicknames: nicknameParts,
+    );
+    final detail = nicknameParts.isEmpty
+        ? subcommand
+        : '$subcommand ${nicknameParts.join(', ')}';
     _appendMessage(
       tabId: _serverTabId(network.id),
       sender: '*',
@@ -3617,9 +4083,12 @@ class ChatSessionController extends ChangeNotifier {
       value: value,
     );
     _appendMessage(
-      tabId: _isChannelName(target) ? _ensureChannelTab(target).id : _serverTabId(network.id),
+      tabId: _isChannelName(target)
+          ? _ensureChannelTab(target).id
+          : _serverTabId(network.id),
       sender: '*',
-      content: 'Requested METADATA ${subcommand.toUpperCase()} for $target${key == null ? '' : ' ($key)'}',
+      content:
+          'Requested METADATA ${subcommand.toUpperCase()} for $target${key == null ? '' : ' ($key)'}',
       kind: IrcMessageKind.system,
     );
     unawaited(_persistState());
@@ -3632,7 +4101,8 @@ class ChatSessionController extends ChangeNotifier {
       _appendMessage(
         tabId: _serverTabId(network.id),
         sender: 'error',
-        content: 'Usage: /rename <new-channel-name> [reason] from a channel tab.',
+        content:
+            'Usage: /rename <new-channel-name> [reason] from a channel tab.',
         kind: IrcMessageKind.system,
       );
       unawaited(_persistState());
@@ -3661,7 +4131,8 @@ class ChatSessionController extends ChangeNotifier {
     _appendMessage(
       tabId: activeTab.id,
       sender: '*',
-      content: 'Requested rename from ${activeTab.name} to $newName${(reason ?? '').trim().isEmpty ? '' : ' ($reason)'}',
+      content:
+          'Requested rename from ${activeTab.name} to $newName${(reason ?? '').trim().isEmpty ? '' : ' ($reason)'}',
       kind: IrcMessageKind.system,
     );
     unawaited(_persistState());
@@ -3838,7 +4309,9 @@ class ChatSessionController extends ChangeNotifier {
       return false;
     }
 
-    final index = messages.indexWhere((message) => message.tags['msgid'] == msgid);
+    final index = messages.indexWhere(
+      (message) => message.tags['msgid'] == msgid,
+    );
     if (index == -1) {
       return false;
     }
@@ -3875,7 +4348,8 @@ class ChatSessionController extends ChangeNotifier {
       return false;
     }
 
-    return normalized == (_ircService.currentNick ?? network.nickname).trim().toLowerCase();
+    return normalized ==
+        (_ircService.currentNick ?? network.nickname).trim().toLowerCase();
   }
 
   void _removeUserFromAllChannels(String? nick) {
@@ -3889,7 +4363,10 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   void _renameUserAcrossChannels(String? oldNick, String? newNick) {
-    if (oldNick == null || oldNick.isEmpty || newNick == null || newNick.isEmpty) {
+    if (oldNick == null ||
+        oldNick.isEmpty ||
+        newNick == null ||
+        newNick.isEmpty) {
       return;
     }
 
@@ -3946,13 +4423,15 @@ class ChatSessionController extends ChangeNotifier {
   void _setTabActivity(String tabId, bool hasActivity) {
     _tabs = _tabs
         .map(
-          (tab) => tab.id == tabId ? tab.copyWith(hasActivity: hasActivity) : tab,
+          (tab) =>
+              tab.id == tabId ? tab.copyWith(hasActivity: hasActivity) : tab,
         )
         .toList(growable: false);
   }
 
   @override
   void dispose() {
+    _isDisposed = true;
     _cancelReconnect();
     for (final subscription in _subscriptions) {
       subscription.cancel();
@@ -3965,6 +4444,8 @@ class ChatSessionController extends ChangeNotifier {
 
 String _serverTabId(String networkId) => 'server::$networkId';
 String _noticeTabId(String networkId) => 'notice::$networkId';
-String _channelTabId(String networkId, String name) => 'channel::$networkId::$name';
+String _channelTabId(String networkId, String name) =>
+    'channel::$networkId::$name';
 String _queryTabId(String networkId, String nick) => 'query::$networkId::$nick';
-String _dccTabId(String networkId, String sessionId) => 'dcc::$networkId::$sessionId';
+String _dccTabId(String networkId, String sessionId) =>
+    'dcc::$networkId::$sessionId';

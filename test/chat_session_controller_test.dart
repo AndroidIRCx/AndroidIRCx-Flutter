@@ -4,21 +4,26 @@ import 'dart:typed_data';
 
 import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
+import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/dcc/services/dcc_service.dart';
 import 'package:androidircx/dcc/services/dcc_socket_backend.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
+import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeTransport implements IrcTransport {
-  final StreamController<String> _controller = StreamController<String>.broadcast();
+  final StreamController<String> _controller =
+      StreamController<String>.broadcast();
   final List<String> sentLines = <String>[];
+  int closeCount = 0;
 
   @override
   Stream<String> get lines => _controller.stream;
@@ -27,9 +32,16 @@ class _FakeTransport implements IrcTransport {
     _controller.add(line);
   }
 
+  void emitError(Object error) {
+    _controller.addError(error);
+  }
+
   @override
   Future<void> close() async {
-    await _controller.close();
+    closeCount += 1;
+    if (!_controller.isClosed) {
+      await _controller.close();
+    }
   }
 
   @override
@@ -39,7 +51,8 @@ class _FakeTransport implements IrcTransport {
 }
 
 class _FakeDccConnection implements DccSocketConnection {
-  final StreamController<List<int>> _controller = StreamController<List<int>>.broadcast();
+  final StreamController<List<int>> _controller =
+      StreamController<List<int>>.broadcast();
   final List<List<int>> sentPackets = <List<int>>[];
 
   @override
@@ -65,7 +78,8 @@ class _FakeDccServer implements DccSocketServer {
   String get address => '127.0.0.1';
 
   @override
-  Stream<DccSocketConnection> get connections => Stream<DccSocketConnection>.value(connection);
+  Stream<DccSocketConnection> get connections =>
+      Stream<DccSocketConnection>.value(connection);
 
   @override
   int get port => 5001;
@@ -106,11 +120,258 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  group('reconnect lifecycle', () {
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.example.test',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+    );
+
+    ChatSessionController controllerFor(IrcService service) {
+      return ChatSessionController(
+        network: network,
+        ircService: service,
+        reconnectBaseDelay: const Duration(milliseconds: 1),
+        reconnectMaxDelay: const Duration(milliseconds: 4),
+        reconnectJitterFactor: 0,
+        maxReconnectAttempts: 2,
+      );
+    }
+
+    test('manual disconnect cancels pending reconnect', () async {
+      final transports = <_FakeTransport>[];
+      final service = IrcService(
+        transportConnector: (_) async {
+          final transport = _FakeTransport();
+          transports.add(transport);
+          return transport;
+        },
+      );
+      final controller = controllerFor(service);
+
+      await controller.start();
+      transports.single.emit(':server 001 AndroidIRCX :Welcome');
+      await Future<void>.delayed(Duration.zero);
+      await transports.single.close();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.isReconnectScheduled, isTrue);
+      expect(controller.connection.phase, ConnectionPhase.reconnecting);
+
+      await controller.disconnect();
+      expect(controller.isReconnectScheduled, isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(transports, hasLength(1));
+
+      controller.dispose();
+    });
+
+    test('dispose cancels reconnect timer and subscriptions', () async {
+      final transports = <_FakeTransport>[];
+      final service = IrcService(
+        transportConnector: (_) async {
+          final transport = _FakeTransport();
+          transports.add(transport);
+          return transport;
+        },
+      );
+      final controller = controllerFor(service);
+
+      await controller.start();
+      transports.single.emit(':server 001 AndroidIRCX :Welcome');
+      await Future<void>.delayed(Duration.zero);
+      await transports.single.close();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.isReconnectScheduled, isTrue);
+
+      controller.dispose();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(transports, hasLength(1));
+      expect(transports.single.closeCount, greaterThanOrEqualTo(1));
+    });
+
+    test('error schedules bounded reconnect attempts', () async {
+      var attempts = 0;
+      final service = IrcService(
+        transportConnector: (_) async {
+          attempts += 1;
+          throw StateError('socket failed');
+        },
+      );
+      final controller = controllerFor(service);
+
+      await controller.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.isReconnectScheduled, isTrue);
+
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(attempts, 3); // initial + two bounded reconnect attempts.
+      expect(controller.isReconnectScheduled, isFalse);
+
+      controller.dispose();
+    });
+
+    test('successful reconnect resets attempt count', () async {
+      final transports = <_FakeTransport>[];
+      final service = IrcService(
+        transportConnector: (_) async {
+          final transport = _FakeTransport();
+          transports.add(transport);
+          return transport;
+        },
+      );
+      final controller = controllerFor(service);
+
+      await controller.start();
+      transports[0].emit(':server 001 AndroidIRCX :Welcome');
+      await Future<void>.delayed(Duration.zero);
+      await transports[0].close();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(transports, hasLength(2));
+
+      transports[1].emit(':server 001 AndroidIRCX :Welcome back');
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.isReconnectScheduled, isFalse);
+      await transports[1].close();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.pendingReconnectDelay, const Duration(milliseconds: 1));
+
+      controller.dispose();
+    });
+
+    test('socket stream error enters reconnecting state', () async {
+      final transports = <_FakeTransport>[];
+      final service = IrcService(
+        transportConnector: (_) async {
+          final transport = _FakeTransport();
+          transports.add(transport);
+          return transport;
+        },
+      );
+      final controller = controllerFor(service);
+
+      await controller.start();
+      transports.single.emit(':server 001 AndroidIRCX :Welcome');
+      await Future<void>.delayed(Duration.zero);
+
+      transports.single.emitError(StateError('socket read failed'));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.connection.phase, ConnectionPhase.reconnecting);
+      expect(controller.connection.message, contains('Reconnecting'));
+      expect(controller.isReconnectScheduled, isTrue);
+
+      controller.dispose();
+    });
+
+    test(
+      'IRC ERROR enters reconnecting state without waiting for socket close',
+      () async {
+        final transports = <_FakeTransport>[];
+        final service = IrcService(
+          transportConnector: (_) async {
+            final transport = _FakeTransport();
+            transports.add(transport);
+            return transport;
+          },
+        );
+        final controller = controllerFor(service);
+
+        await controller.start();
+        transports.single.emit(':server 001 AndroidIRCX :Welcome');
+        await Future<void>.delayed(Duration.zero);
+
+        transports.single.emit(
+          'ERROR :Closing Link: AndroidIRCX (Ping timeout)',
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(controller.connection.phase, ConnectionPhase.reconnecting);
+        expect(controller.isReconnectScheduled, isTrue);
+        expect(
+          controller
+              .messagesForTab(controller.activeTabId)
+              .any((message) => message.content.contains('Ping timeout')),
+          isTrue,
+        );
+
+        controller.dispose();
+      },
+    );
+
+    test('reconnect delay applies bounded jitter', () async {
+      final service = IrcService(
+        transportConnector: (_) async => throw StateError('socket failed'),
+      );
+      final controller = ChatSessionController(
+        network: network,
+        ircService: service,
+        reconnectBaseDelay: const Duration(milliseconds: 100),
+        reconnectMaxDelay: const Duration(milliseconds: 500),
+        reconnectJitterFactor: 0.5,
+        reconnectJitterSampler: () => 1,
+        maxReconnectAttempts: 1,
+      );
+
+      await controller.start();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        controller.pendingReconnectDelay,
+        const Duration(milliseconds: 150),
+      );
+      expect(controller.connection.phase, ConnectionPhase.reconnecting);
+      expect(controller.connection.message, contains('150ms'));
+
+      controller.dispose();
+    });
+  });
+
+  test(
+    'app lifecycle pause flushes message history without reconnecting',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      const network = NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      );
+      final controller = ChatSessionController(
+        network: network,
+        ircService: service,
+        reconnectJitterFactor: 0,
+      );
+
+      await controller.start();
+      transport.emit(':server 001 AndroidIRCX :Welcome');
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(':Alice!a@example PRIVMSG AndroidIRCX :hello from pause');
+      await Future<void>.delayed(Duration.zero);
+
+      await controller.handleAppLifecycleState(AppLifecycleState.paused);
+
+      final snapshot = await ChatSessionPersistence().load(network.id);
+      expect(snapshot, isNotNull);
+      expect(
+        snapshot!.messagesByTab.values
+            .expand((messages) => messages)
+            .any((message) => message.content == 'hello from pause'),
+        isTrue,
+      );
+      expect(controller.connection.phase, ConnectionPhase.connected);
+      expect(controller.isReconnectScheduled, isFalse);
+
+      controller.dispose();
+    },
+  );
+
   test('routes SASL/auth numerics into server messages', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -126,7 +387,9 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':server 900 AndroidIRCX alice!ident@example :You are now logged in as alice');
+    transport.emit(
+      ':server 900 AndroidIRCX alice!ident@example :You are now logged in as alice',
+    );
     transport.emit(':server 903 AndroidIRCX :SASL authentication successful');
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
@@ -147,11 +410,178 @@ void main() {
     controller.dispose();
   });
 
+  test('auto-joins configured channels once after MOTD ends', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        autoJoinChannels: ['#androidircx', 'flutter', '#androidircx'],
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    transport.emit(':server 001 AndroidIRCX :Welcome');
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      transport.sentLines.where((line) => line.startsWith('JOIN ')),
+      isEmpty,
+    );
+
+    transport.emit(':server 376 AndroidIRCX :End of /MOTD command.');
+    transport.emit(':server 376 AndroidIRCX :End of /MOTD command again.');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      transport.sentLines.where((line) => line == 'JOIN #androidircx'),
+      hasLength(1),
+    );
+    expect(
+      transport.sentLines.where((line) => line == 'JOIN #flutter'),
+      hasLength(1),
+    );
+    expect(
+      controller.tabs.any(
+        (tab) => tab.type == ChatTabType.channel && tab.name == '#androidircx',
+      ),
+      isTrue,
+    );
+
+    controller.dispose();
+  });
+
+  test('auto-joins configured channels after no-MOTD numeric', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        autoJoinChannels: ['#nomotd'],
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    transport.emit(':server 001 AndroidIRCX :Welcome');
+    transport.emit(':server 422 AndroidIRCX :MOTD File is missing');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(transport.sentLines, contains('JOIN #nomotd'));
+
+    controller.dispose();
+  });
+
+  test('auto-joins keyed channels without duplicating case variants', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        autoJoinChannels: ['secret', '#SECRET', '#public'],
+        autoJoinChannelKeys: {'#secret': 'opensesame'},
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    transport.emit(':server 001 AndroidIRCX :Welcome');
+    transport.emit(':server 376 AndroidIRCX :End of /MOTD command.');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      transport.sentLines.where((line) => line == 'JOIN #secret opensesame'),
+      hasLength(1),
+    );
+    expect(
+      transport.sentLines.where((line) => line == 'JOIN #public'),
+      hasLength(1),
+    );
+    expect(
+      transport.sentLines.where((line) => line.startsWith('JOIN #SECRET')),
+      isEmpty,
+    );
+
+    controller.dispose();
+  });
+
+  test('suggests composer nick and channel completions', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    await controller.joinChannel(
+      const JoinChannelRequest(channel: '#androidircx'),
+    );
+    transport.emit(':server 353 AndroidIRCX = #room :@alice bob carol');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+    );
+
+    final nickSuggestions = controller.autocompleteSuggestionsForComposer(
+      'hello al',
+    );
+    expect(nickSuggestions.map((item) => item.text), contains('alice'));
+    expect(
+      controller.applyComposerAutocompleteSuggestion(
+        'hello al there',
+        nickSuggestions.firstWhere((item) => item.text == 'alice'),
+      ),
+      'hello alice there',
+    );
+
+    final channelSuggestions = controller.autocompleteSuggestionsForComposer(
+      '/msg #and',
+    );
+    expect(
+      channelSuggestions.map((item) => item.text),
+      contains('#androidircx'),
+    );
+    expect(
+      controller.applyComposerAutocompleteSuggestion(
+        '/msg #and hello',
+        channelSuggestions.firstWhere((item) => item.text == '#androidircx'),
+      ),
+      '/msg #androidircx hello',
+    );
+
+    expect(controller.autocompleteSuggestionsForComposer('/n'), isEmpty);
+
+    controller.dispose();
+  });
+
   test('sends IRC service commands through private messages', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -168,10 +598,7 @@ void main() {
     await controller.handleComposerSubmit('/ns identify secret');
     await controller.handleComposerSubmit('/cs op #androidircx AndroidIRCX');
 
-    expect(
-      transport.sentLines,
-      contains('PRIVMSG NickServ :identify secret'),
-    );
+    expect(transport.sentLines, contains('PRIVMSG NickServ :identify secret'));
     expect(
       transport.sentLines,
       contains('PRIVMSG ChanServ :op #androidircx AndroidIRCX'),
@@ -189,14 +616,12 @@ void main() {
       transport.sentLines,
       contains('PRIVMSG MemoServ :send AndroidIRCX hello'),
     );
-    expect(
-      transport.sentLines,
-      contains('PRIVMSG BotServ :botlist'),
-    );
+    expect(transport.sentLines, contains('PRIVMSG BotServ :botlist'));
     expect(controller.activeTab.name, 'BotServ');
     expect(
       controller.activeMessages.any(
-        (message) => message.sender == 'AndroidIRCX' && message.content == 'botlist',
+        (message) =>
+            message.sender == 'AndroidIRCX' && message.content == 'botlist',
       ),
       isTrue,
     );
@@ -204,70 +629,85 @@ void main() {
     controller.dispose();
   });
 
-  test('routes incoming IRC service notices and messages into service tabs', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'routes incoming IRC service notices and messages into service tabs',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    transport.emit(':NickServ!service@services NOTICE AndroidIRCX :This nickname is registered.');
-    transport.emit(':MemoServ!service@services PRIVMSG AndroidIRCX :You have 2 new memos.');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      transport.emit(
+        ':NickServ!service@services NOTICE AndroidIRCX :This nickname is registered.',
+      );
+      transport.emit(
+        ':MemoServ!service@services PRIVMSG AndroidIRCX :You have 2 new memos.',
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    expect(
-      controller.tabs.any(
-        (tab) => tab.type.name == 'query' && tab.name == 'NickServ',
-      ),
-      isTrue,
-    );
-    expect(
-      controller.tabs.any(
-        (tab) => tab.type.name == 'query' && tab.name == 'MemoServ',
-      ),
-      isTrue,
-    );
+      expect(
+        controller.tabs.any(
+          (tab) => tab.type.name == 'query' && tab.name == 'NickServ',
+        ),
+        isTrue,
+      );
+      expect(
+        controller.tabs.any(
+          (tab) => tab.type.name == 'query' && tab.name == 'MemoServ',
+        ),
+        isTrue,
+      );
 
-    controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'query' && tab.name == 'NickServ').id,
-    );
-    expect(
-      controller.activeMessages.any(
-        (message) => message.sender == 'NickServ' && message.content.contains('registered'),
-      ),
-      isTrue,
-    );
+      controller.selectTab(
+        controller.tabs
+            .firstWhere(
+              (tab) => tab.type.name == 'query' && tab.name == 'NickServ',
+            )
+            .id,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) =>
+              message.sender == 'NickServ' &&
+              message.content.contains('registered'),
+        ),
+        isTrue,
+      );
 
-    controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'query' && tab.name == 'MemoServ').id,
-    );
-    expect(
-      controller.activeMessages.any(
-        (message) => message.sender == 'MemoServ' && message.content.contains('2 new memos'),
-      ),
-      isTrue,
-    );
+      controller.selectTab(
+        controller.tabs
+            .firstWhere(
+              (tab) => tab.type.name == 'query' && tab.name == 'MemoServ',
+            )
+            .id,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) =>
+              message.sender == 'MemoServ' &&
+              message.content.contains('2 new memos'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('tracks outgoing notice commands in the matching tab', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -281,7 +721,9 @@ void main() {
     );
 
     await controller.start();
-    await controller.handleComposerSubmit('/notice NickServ STATUS AndroidIRCX');
+    await controller.handleComposerSubmit(
+      '/notice NickServ STATUS AndroidIRCX',
+    );
 
     expect(
       transport.sentLines,
@@ -301,74 +743,80 @@ void main() {
     controller.dispose();
   });
 
-  test('sends reply-tagged messages through privmsg when reply target is provided', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'sends reply-tagged messages through privmsg when reply target is provided',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    await controller.handleComposerSubmit('reply body', replyTo: 'msg-123');
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      await controller.handleComposerSubmit('reply body', replyTo: 'msg-123');
 
-    expect(
-      transport.sentLines,
-      contains('@+draft/reply=msg-123 PRIVMSG #room :reply body'),
-    );
+      expect(
+        transport.sentLines,
+        contains('@+draft/reply=msg-123 PRIVMSG #room :reply body'),
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
-  test('routes incoming notices to a dedicated notice tab when configured', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-      settingsRepository: _FakeSettingsRepository(
-        const AppSettings(noticeRouting: NoticeRoutingMode.notice),
-      ),
-    );
+  test(
+    'routes incoming notices to a dedicated notice tab when configured',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+        settingsRepository: _FakeSettingsRepository(
+          const AppSettings(noticeRouting: NoticeRoutingMode.notice),
+        ),
+      );
 
-    await controller.start();
-    transport.emit(':services.example NOTICE AndroidIRCX :Maintenance tonight');
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      transport.emit(
+        ':services.example NOTICE AndroidIRCX :Maintenance tonight',
+      );
+      await Future<void>.delayed(Duration.zero);
 
-    final noticeTab = controller.tabs.firstWhere((tab) => tab.type.name == 'notice');
-    controller.selectTab(noticeTab.id);
-    expect(
-      controller.activeMessages.any((message) => message.content == 'Maintenance tonight'),
-      isTrue,
-    );
+      final noticeTab = controller.tabs.firstWhere(
+        (tab) => tab.type.name == 'notice',
+      );
+      controller.selectTab(noticeTab.id);
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content == 'Maintenance tonight',
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('routes incoming notices to the active tab when configured', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -391,7 +839,9 @@ void main() {
 
     expect(controller.activeTab.name, '#room');
     expect(
-      controller.activeMessages.any((message) => message.content == 'Maintenance tonight'),
+      controller.activeMessages.any(
+        (message) => message.content == 'Maintenance tonight',
+      ),
       isTrue,
     );
 
@@ -400,9 +850,7 @@ void main() {
 
   test('routes incoming notices to a private query when configured', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -419,14 +867,20 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':NickServ!service@example NOTICE AndroidIRCX :Identify now');
+    transport.emit(
+      ':NickServ!service@example NOTICE AndroidIRCX :Identify now',
+    );
     await Future<void>.delayed(Duration.zero);
 
-    final queryTab = controller.tabs.firstWhere((tab) => tab.type.name == 'query');
+    final queryTab = controller.tabs.firstWhere(
+      (tab) => tab.type.name == 'query',
+    );
     controller.selectTab(queryTab.id);
     expect(queryTab.name, 'NickServ');
     expect(
-      controller.activeMessages.any((message) => message.content == 'Identify now'),
+      controller.activeMessages.any(
+        (message) => message.content == 'Identify now',
+      ),
       isTrue,
     );
 
@@ -435,9 +889,7 @@ void main() {
 
   test('uses server-time tag as message timestamp and stores tags', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -458,10 +910,17 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'channel' && tab.name == '#room').id,
+      controller.tabs
+          .firstWhere(
+            (tab) => tab.type.name == 'channel' && tab.name == '#room',
+          )
+          .id,
     );
     final message = controller.activeMessages.last;
-    expect(message.timestamp.toUtc(), DateTime.parse('2026-03-17T10:11:12.000Z'));
+    expect(
+      message.timestamp.toUtc(),
+      DateTime.parse('2026-03-17T10:11:12.000Z'),
+    );
     expect(message.tags['+draft/source'], 'test');
 
     controller.dispose();
@@ -469,9 +928,7 @@ void main() {
 
   test('routes self echo direct messages into the target query tab', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -492,7 +949,9 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'query' && tab.name == 'alice').id,
+      controller.tabs
+          .firstWhere((tab) => tab.type.name == 'query' && tab.name == 'alice')
+          .id,
     );
     expect(
       controller.activeMessages.any(
@@ -509,9 +968,7 @@ void main() {
 
   test('filters and exports current tab history', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -531,14 +988,21 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'channel' && tab.name == '#room').id,
+      controller.tabs
+          .firstWhere(
+            (tab) => tab.type.name == 'channel' && tab.name == '#room',
+          )
+          .id,
     );
     final chatOnly = controller.messagesForTab(
       controller.activeTabId,
       query: 'flutter',
       kinds: const <IrcMessageKind>{IrcMessageKind.chat},
     );
-    final export = controller.exportTabHistory(controller.activeTabId, query: 'flutter');
+    final export = controller.exportTabHistory(
+      controller.activeTabId,
+      query: 'flutter',
+    );
 
     expect(chatOnly, hasLength(1));
     expect(chatOnly.single.content, 'hello flutter');
@@ -550,9 +1014,7 @@ void main() {
 
   test('renders draft intent action as an action message', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -566,12 +1028,18 @@ void main() {
     );
 
     await controller.start();
-    transport.emit('@draft/intent=ACTION :alice!user@example PRIVMSG #room :waves');
+    transport.emit(
+      '@draft/intent=ACTION :alice!user@example PRIVMSG #room :waves',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
     controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'channel' && tab.name == '#room').id,
+      controller.tabs
+          .firstWhere(
+            (tab) => tab.type.name == 'channel' && tab.name == '#room',
+          )
+          .id,
     );
     expect(
       controller.activeMessages.any((message) => message.content == '• waves'),
@@ -583,9 +1051,7 @@ void main() {
 
   test('deduplicates messages with the same msgid', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -599,24 +1065,35 @@ void main() {
     );
 
     await controller.start();
-    transport.emit('@msgid=abc123 :alice!user@example PRIVMSG #room :hello once');
-    transport.emit('@msgid=abc123 :alice!user@example PRIVMSG #room :hello once');
+    transport.emit(
+      '@msgid=abc123 :alice!user@example PRIVMSG #room :hello once',
+    );
+    transport.emit(
+      '@msgid=abc123 :alice!user@example PRIVMSG #room :hello once',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
     controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'channel' && tab.name == '#room').id,
+      controller.tabs
+          .firstWhere(
+            (tab) => tab.type.name == 'channel' && tab.name == '#room',
+          )
+          .id,
     );
-    expect(controller.activeMessages.where((message) => message.content == 'hello once'), hasLength(1));
+    expect(
+      controller.activeMessages.where(
+        (message) => message.content == 'hello once',
+      ),
+      hasLength(1),
+    );
 
     controller.dispose();
   });
 
   test('tracks batch start and end with message count', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -631,74 +1108,91 @@ void main() {
 
     await controller.start();
     transport.emit(':server BATCH +batch-1 chathistory #room');
-    transport.emit('@batch=batch-1;msgid=1 :alice!user@example PRIVMSG #room :first history');
+    transport.emit(
+      '@batch=batch-1;msgid=1 :alice!user@example PRIVMSG #room :first history',
+    );
     transport.emit(':server BATCH -batch-1');
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type.name == 'server').id);
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.type.name == 'server').id,
+    );
     expect(
-      controller.activeMessages.any((message) => message.content.contains('BATCH start: chathistory #room')),
+      controller.activeMessages.any(
+        (message) => message.content.contains('BATCH start: chathistory #room'),
+      ),
       isTrue,
     );
     expect(
-      controller.activeMessages.any((message) => message.content.contains('Playback batch completed: 1 messages')),
+      controller.activeMessages.any(
+        (message) =>
+            message.content.contains('Playback batch completed: 1 messages'),
+      ),
       isTrue,
     );
 
     controller.dispose();
   });
 
-  test('shows playback batch summary and labeled response match in server tab', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'shows playback batch summary and labeled response match in server tab',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    transport.emit(':server CAP * ACK :labeled-response');
-    await Future<void>.delayed(Duration.zero);
-    final label = await service.sendRawLabeled('WHOIS alice alice');
-    transport.emit(':server BATCH +batch-2 znc.in/playback #room');
-    transport.emit('@batch=batch-2;msgid=2 :alice!user@example PRIVMSG #room :older line');
-    transport.emit(':server BATCH -batch-2');
-    transport.emit('@label=$label :server 318 AndroidIRCX alice :End of /WHOIS list.');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      transport.emit(':server CAP * ACK :labeled-response');
+      await Future<void>.delayed(Duration.zero);
+      final label = await service.sendRawLabeled('WHOIS alice alice');
+      transport.emit(':server BATCH +batch-2 znc.in/playback #room');
+      transport.emit(
+        '@batch=batch-2;msgid=2 :alice!user@example PRIVMSG #room :older line',
+      );
+      transport.emit(':server BATCH -batch-2');
+      transport.emit(
+        '@label=$label :server 318 AndroidIRCX alice :End of /WHOIS list.',
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type.name == 'server').id);
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('Playback batch completed: 1 messages'),
-      ),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('Labeled response matched: WHOIS alice alice'),
-      ),
-      isTrue,
-    );
+      controller.selectTab(
+        controller.tabs.firstWhere((tab) => tab.type.name == 'server').id,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) =>
+              message.content.contains('Playback batch completed: 1 messages'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains(
+            'Labeled response matched: WHOIS alice alice',
+          ),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('requests chathistory for the active channel when supported', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -719,10 +1213,14 @@ void main() {
     await controller.handleComposerSubmit('/chathistory 25');
 
     expect(
-      transport.sentLines.any((line) => line.contains('CHATHISTORY LATEST #room * 25')),
+      transport.sentLines.any(
+        (line) => line.contains('CHATHISTORY LATEST #room * 25'),
+      ),
       isTrue,
     );
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type.name == 'server').id);
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.type.name == 'server').id,
+    );
     expect(
       controller.activeMessages.any(
         (message) => message.content.contains(
@@ -735,45 +1233,46 @@ void main() {
     controller.dispose();
   });
 
-  test('uses latest known msgid for /chathistory before when omitted', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'uses latest known msgid for /chathistory before when omitted',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit('@msgid=abc123 :alice!user@example PRIVMSG #room :hello');
-    transport.emit(':server CAP * ACK :chathistory labeled-response');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit('@msgid=abc123 :alice!user@example PRIVMSG #room :hello');
+      transport.emit(':server CAP * ACK :chathistory labeled-response');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    await controller.handleComposerSubmit('/chathistory before 20');
+      await controller.handleComposerSubmit('/chathistory before 20');
 
-    expect(
-      transport.sentLines.any((line) => line.contains('CHATHISTORY BEFORE #room abc123 20')),
-      isTrue,
-    );
+      expect(
+        transport.sentLines.any(
+          (line) => line.contains('CHATHISTORY BEFORE #room abc123 20'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('marks playback messages from chathistory batch', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -788,94 +1287,108 @@ void main() {
 
     await controller.start();
     transport.emit(':server BATCH +hist chathistory #room');
-    transport.emit('@batch=hist;msgid=1 :alice!user@example PRIVMSG #room :older line');
+    transport.emit(
+      '@batch=hist;msgid=1 :alice!user@example PRIVMSG #room :older line',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
     controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'channel' && tab.name == '#room').id,
+      controller.tabs
+          .firstWhere(
+            (tab) => tab.type.name == 'channel' && tab.name == '#room',
+          )
+          .id,
     );
     expect(controller.activeMessages.single.isPlayback, isTrue);
 
     controller.dispose();
   });
 
-  test('requests recent history for the active tab through controller API', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'requests recent history for the active tab through controller API',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit(':server CAP * ACK :chathistory labeled-response');
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit(':server CAP * ACK :chathistory labeled-response');
+      await Future<void>.delayed(Duration.zero);
 
-    expect(await controller.requestRecentHistory(limit: 25), isTrue);
-    expect(
-      transport.sentLines.any((line) => line.contains('CHATHISTORY LATEST #room * 25')),
-      isTrue,
-    );
+      expect(await controller.requestRecentHistory(limit: 25), isTrue);
+      expect(
+        transport.sentLines.any(
+          (line) => line.contains('CHATHISTORY LATEST #room * 25'),
+        ),
+        isTrue,
+      );
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type.name == 'server').id);
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('Requested recent history for #room (25 messages).'),
-      ),
-      isTrue,
-    );
+      controller.selectTab(
+        controller.tabs.firstWhere((tab) => tab.type.name == 'server').id,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains(
+            'Requested recent history for #room (25 messages).',
+          ),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
-  test('auto-requests channel history after end of names when supported', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'auto-requests channel history after end of names when supported',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    transport.emit(':server CAP * ACK :draft/chathistory labeled-response');
-    transport.emit(':AndroidIRCX!user@example JOIN #room');
-    transport.emit(':server 366 AndroidIRCX #room :End of /NAMES list.');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      transport.emit(':server CAP * ACK :draft/chathistory labeled-response');
+      transport.emit(':AndroidIRCX!user@example JOIN #room');
+      transport.emit(':server 366 AndroidIRCX #room :End of /NAMES list.');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    expect(
-      transport.sentLines.where((line) => line.contains('CHATHISTORY LATEST #room * 50')).length,
-      1,
-    );
+      expect(
+        transport.sentLines
+            .where((line) => line.contains('CHATHISTORY LATEST #room * 50'))
+            .length,
+        1,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('auto-history is only requested once per join burst', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -897,83 +1410,91 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     expect(
-      transport.sentLines.where((line) => line.contains('CHATHISTORY LATEST #room * 50')).length,
+      transport.sentLines
+          .where((line) => line.contains('CHATHISTORY LATEST #room * 50'))
+          .length,
       1,
     );
 
     controller.dispose();
   });
 
-  test('does not auto-request channel history when capability is missing', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'does not auto-request channel history when capability is missing',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    transport.emit(':AndroidIRCX!user@example JOIN #room');
-    transport.emit(':server 366 AndroidIRCX #room :End of /NAMES list.');
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      transport.emit(':AndroidIRCX!user@example JOIN #room');
+      transport.emit(':server 366 AndroidIRCX #room :End of /NAMES list.');
+      await Future<void>.delayed(Duration.zero);
 
-    expect(
-      transport.sentLines.any((line) => line.contains('CHATHISTORY LATEST #room')),
-      isFalse,
-    );
+      expect(
+        transport.sentLines.any(
+          (line) => line.contains('CHATHISTORY LATEST #room'),
+        ),
+        isFalse,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
-  test('sends read marker when selecting a non-server tab and capability is enabled', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'sends read marker when selecting a non-server tab and capability is enabled',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit(':server CAP * ACK :draft/read-marker');
-    transport.emit('@msgid=msg-1 :alice!user@example PRIVMSG #room :hello');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit(':server CAP * ACK :draft/read-marker');
+      transport.emit('@msgid=msg-1 :alice!user@example PRIVMSG #room :hello');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.name == '#room').id);
-    await Future<void>.delayed(Duration.zero);
+      controller.selectTab(
+        controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+      );
+      await Future<void>.delayed(Duration.zero);
 
-    expect(
-      transport.sentLines.any((line) => line.startsWith('MARKREAD #room timestamp=')),
-      isTrue,
-    );
+      expect(
+        transport.sentLines.any(
+          (line) => line.startsWith('MARKREAD #room timestamp='),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('redacts a message in-place when a REDACT command arrives', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -988,12 +1509,16 @@ void main() {
 
     await controller.start();
     await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit('@msgid=gone-1 :alice!user@example PRIVMSG #room :soon deleted');
+    transport.emit(
+      '@msgid=gone-1 :alice!user@example PRIVMSG #room :soon deleted',
+    );
     transport.emit(':mod!user@example REDACT #room gone-1');
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.name == '#room').id);
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+    );
     expect(
       controller.activeMessages.any(
         (message) =>
@@ -1013,45 +1538,48 @@ void main() {
     controller.dispose();
   });
 
-  test('sends redact command for message actions when capability is enabled', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'sends redact command for message actions when capability is enabled',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit(':server CAP * ACK :draft/message-redaction');
-    transport.emit('@msgid=del-1 :alice!user@example PRIVMSG #room :delete me');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit(':server CAP * ACK :draft/message-redaction');
+      transport.emit(
+        '@msgid=del-1 :alice!user@example PRIVMSG #room :delete me',
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    final targetMessage = controller
-        .messagesForTab(controller.tabs.firstWhere((tab) => tab.name == '#room').id)
-        .firstWhere((message) => message.tags['msgid'] == 'del-1');
-    expect(await controller.redactMessage(targetMessage), isTrue);
+      final targetMessage = controller
+          .messagesForTab(
+            controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+          )
+          .firstWhere((message) => message.tags['msgid'] == 'del-1');
+      expect(await controller.redactMessage(targetMessage), isTrue);
 
-    expect(transport.sentLines, contains('REDACT #room del-1'));
+      expect(transport.sentLines, contains('REDACT #room del-1'));
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('assembles draft multiline messages into a single chat entry', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1075,8 +1603,12 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.name == '#room').id);
-    final assembled = controller.activeMessages.firstWhere((message) => message.tags['msgid'] == 'multi-1');
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+    );
+    final assembled = controller.activeMessages.firstWhere(
+      (message) => message.tags['msgid'] == 'multi-1',
+    );
     expect(assembled.content, 'first line\nsecond line');
 
     controller.dispose();
@@ -1084,9 +1616,7 @@ void main() {
 
   test('tracks incoming typing indicators from TAGMSG', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1104,7 +1634,9 @@ void main() {
     transport.emit('@+typing=active :alice!user@example TAGMSG #room');
     await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.name == '#room').id);
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+    );
     expect(controller.activeTypingUsers, contains('alice'));
 
     transport.emit('@+typing=done :alice!user@example TAGMSG #room');
@@ -1116,9 +1648,7 @@ void main() {
 
   test('records reactions from TAGMSG react tags', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1134,23 +1664,28 @@ void main() {
     await controller.start();
     await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
     transport.emit('@msgid=react-1 :alice!user@example PRIVMSG #room :Hello');
-    transport.emit('@+draft/react=react-1\\::thumbsup: :bob!user@example TAGMSG #room');
+    transport.emit(
+      '@+draft/react=react-1\\::thumbsup: :bob!user@example TAGMSG #room',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
     final message = controller
-        .messagesForTab(controller.tabs.firstWhere((tab) => tab.name == '#room').id)
+        .messagesForTab(
+          controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+        )
         .firstWhere((item) => item.tags['msgid'] == 'react-1');
-    expect(controller.reactionsForMessage(message), containsPair(':thumbsup:', 1));
+    expect(
+      controller.reactionsForMessage(message),
+      containsPair(':thumbsup:', 1),
+    );
 
     controller.dispose();
   });
 
   test('handles account away host and setname user-state frames', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1170,47 +1705,68 @@ void main() {
     transport.emit(':alice!ident@example SETNAME :Alice Realname');
     await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type.name == 'server').id);
-    expect(controller.activeMessages.any((m) => m.content.contains('logged in as aliceAccount')), isTrue);
-    expect(controller.activeMessages.any((m) => m.content.contains('is now away: be right back')), isTrue);
-    expect(controller.activeMessages.any((m) => m.content.contains('changed host to new.host.example')), isTrue);
-    expect(controller.activeMessages.any((m) => m.content.contains('changed realname to: Alice Realname')), isTrue);
-
-    controller.dispose();
-  });
-
-  test('supports setname command from composer when capability is enabled', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.type.name == 'server').id,
     );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
+    expect(
+      controller.activeMessages.any(
+        (m) => m.content.contains('logged in as aliceAccount'),
       ),
-      ircService: service,
+      isTrue,
+    );
+    expect(
+      controller.activeMessages.any(
+        (m) => m.content.contains('is now away: be right back'),
+      ),
+      isTrue,
+    );
+    expect(
+      controller.activeMessages.any(
+        (m) => m.content.contains('changed host to new.host.example'),
+      ),
+      isTrue,
+    );
+    expect(
+      controller.activeMessages.any(
+        (m) => m.content.contains('changed realname to: Alice Realname'),
+      ),
+      isTrue,
     );
 
-    await controller.start();
-    transport.emit(':server CAP * ACK :setname');
-    await Future<void>.delayed(Duration.zero);
-
-    await controller.handleComposerSubmit('/setname AndroidIRCx Flutter');
-
-    expect(transport.sentLines, contains('SETNAME :AndroidIRCx Flutter'));
     controller.dispose();
   });
+
+  test(
+    'supports setname command from composer when capability is enabled',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      transport.emit(':server CAP * ACK :setname');
+      await Future<void>.delayed(Duration.zero);
+
+      await controller.handleComposerSubmit('/setname AndroidIRCx Flutter');
+
+      expect(transport.sentLines, contains('SETNAME :AndroidIRCx Flutter'));
+      controller.dispose();
+    },
+  );
 
   test('formats DCC CTCP requests into readable system messages', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1224,12 +1780,18 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC SEND "movie.mkv" 127001 5000 42\u0001');
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC SEND "movie.mkv" 127001 5000 42\u0001',
+    );
     await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type == ChatTabType.dcc).id);
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.type == ChatTabType.dcc).id,
+    );
     expect(
-      controller.activeMessages.any((m) => m.content.contains('DCC SEND offer from alice: movie.mkv')),
+      controller.activeMessages.any(
+        (m) => m.content.contains('DCC SEND offer from alice: movie.mkv'),
+      ),
       isTrue,
     );
 
@@ -1238,9 +1800,7 @@ void main() {
 
   test('creates a dedicated DCC tab for incoming offers', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final dccBackend = _FakeDccBackend();
     final controller = ChatSessionController(
       network: const NetworkConfig(
@@ -1256,22 +1816,29 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC CHAT chat 127001 5001\u0001');
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC CHAT chat 127001 5001\u0001',
+    );
     await Future<void>.delayed(Duration.zero);
 
-    final dccTab = controller.tabs.firstWhere((tab) => tab.type == ChatTabType.dcc);
+    final dccTab = controller.tabs.firstWhere(
+      (tab) => tab.type == ChatTabType.dcc,
+    );
     expect(dccTab.name, 'DCC CHAT alice');
     controller.selectTab(dccTab.id);
-    expect(controller.activeMessages.any((m) => m.content.contains('DCC CHAT request from alice')), isTrue);
+    expect(
+      controller.activeMessages.any(
+        (m) => m.content.contains('DCC CHAT request from alice'),
+      ),
+      isTrue,
+    );
 
     controller.dispose();
   });
 
   test('accepting dcc chat enables local dcc chat composer flow', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final dccBackend = _FakeDccBackend();
     final controller = ChatSessionController(
       network: const NetworkConfig(
@@ -1287,16 +1854,22 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC CHAT chat 127001 5001\u0001');
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC CHAT chat 127001 5001\u0001',
+    );
     await Future<void>.delayed(Duration.zero);
 
-    final dccTab = controller.tabs.firstWhere((tab) => tab.type == ChatTabType.dcc);
+    final dccTab = controller.tabs.firstWhere(
+      (tab) => tab.type == ChatTabType.dcc,
+    );
     controller.selectTab(dccTab.id);
     await controller.acceptActiveDccSession();
     await controller.handleComposerSubmit('Hello over DCC');
 
     expect(
-      controller.activeMessages.any((m) => m.content == 'Hello over DCC' && m.isOwn),
+      controller.activeMessages.any(
+        (m) => m.content == 'Hello over DCC' && m.isOwn,
+      ),
       isTrue,
     );
     expect(
@@ -1309,9 +1882,7 @@ void main() {
 
   test('dcc send tabs reject composer messages with a clear error', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1325,173 +1896,209 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC SEND "movie.mkv" 127001 5000 42\u0001');
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC SEND "movie.mkv" 127001 5000 42\u0001',
+    );
     await Future<void>.delayed(Duration.zero);
 
-    final dccTab = controller.tabs.firstWhere((tab) => tab.type == ChatTabType.dcc);
+    final dccTab = controller.tabs.firstWhere(
+      (tab) => tab.type == ChatTabType.dcc,
+    );
     controller.selectTab(dccTab.id);
     await controller.handleComposerSubmit('this should fail');
 
     expect(
-      controller.activeMessages.any((m) => m.content.contains('DCC SEND tabs do not support chat messages')),
+      controller.activeMessages.any(
+        (m) => m.content.contains('DCC SEND tabs do not support chat messages'),
+      ),
       isTrue,
     );
 
     controller.dispose();
   });
 
-  test('starts outgoing dcc chat offers and sends ctcp payload to target nick', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final dccBackend = _FakeDccBackend();
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-      dccService: DccService(backend: dccBackend),
-    );
+  test(
+    'starts outgoing dcc chat offers and sends ctcp payload to target nick',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final dccBackend = _FakeDccBackend();
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+        dccService: DccService(backend: dccBackend),
+      );
 
-    await controller.start();
-    await controller.handleComposerSubmit('/dccchat alice');
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.handleComposerSubmit('/dccchat alice');
+      await Future<void>.delayed(Duration.zero);
 
-    final dccTab = controller.tabs.firstWhere((tab) => tab.type == ChatTabType.dcc);
-    controller.selectTab(dccTab.id);
+      final dccTab = controller.tabs.firstWhere(
+        (tab) => tab.type == ChatTabType.dcc,
+      );
+      controller.selectTab(dccTab.id);
 
-    expect(dccTab.name, 'DCC CHAT alice');
-    expect(
-      transport.sentLines.any(
-        (line) => line.startsWith('PRIVMSG alice :\u0001DCC CHAT chat '),
-      ),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('Offering DCC CHAT to alice')),
-      isTrue,
-    );
+      expect(dccTab.name, 'DCC CHAT alice');
+      expect(
+        transport.sentLines.any(
+          (line) => line.startsWith('PRIVMSG alice :\u0001DCC CHAT chat '),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('Offering DCC CHAT to alice'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
-  test('starts outgoing dcc send offers and sends ctcp payload to target nick', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final dccBackend = _FakeDccBackend();
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-      dccService: DccService(backend: dccBackend),
-    );
-    final file = File.fromUri(
-      Directory.systemTemp.uri.resolve('androidircx-dcc-test.txt'),
-    );
-    await file.writeAsString('hello dcc');
+  test(
+    'starts outgoing dcc send offers and sends ctcp payload to target nick',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final dccBackend = _FakeDccBackend();
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+        dccService: DccService(backend: dccBackend),
+      );
+      final file = File.fromUri(
+        Directory.systemTemp.uri.resolve('androidircx-dcc-test.txt'),
+      );
+      await file.writeAsString('hello dcc');
 
-    await controller.start();
-    await controller.handleComposerSubmit('/dccsend alice ${file.path}');
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.handleComposerSubmit('/dccsend alice ${file.path}');
+      await Future<void>.delayed(Duration.zero);
 
-    final dccTab = controller.tabs.firstWhere((tab) => tab.type == ChatTabType.dcc);
-    controller.selectTab(dccTab.id);
+      final dccTab = controller.tabs.firstWhere(
+        (tab) => tab.type == ChatTabType.dcc,
+      );
+      controller.selectTab(dccTab.id);
 
-    expect(dccTab.name, 'DCC SEND alice');
-    expect(
-      transport.sentLines.any(
-        (line) => line.startsWith('PRIVMSG alice :\u0001DCC SEND "androidircx-dcc-test.txt" '),
-      ),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('Offering DCC SEND to alice')),
-      isTrue,
-    );
+      expect(dccTab.name, 'DCC SEND alice');
+      expect(
+        transport.sentLines.any(
+          (line) => line.startsWith(
+            'PRIVMSG alice :\u0001DCC SEND "androidircx-dcc-test.txt" ',
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('Offering DCC SEND to alice'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
-  test('routes invite kick and extended whois numerics into chat state', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'routes invite kick and extended whois numerics into chat state',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit(':server 341 AndroidIRCX bob #room');
-    transport.emit(':carol!user@example INVITE AndroidIRCX :#room');
-    transport.emit(':alice!user@example JOIN :#room');
-    transport.emit(':carol!user@example KICK #room alice :cleanup');
-    transport.emit(':server 301 AndroidIRCX bob :is away');
-    transport.emit(':server 671 AndroidIRCX bob :is using a secure connection');
-    transport.emit(':server 328 AndroidIRCX #room :https://example.com/room');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit(':server 341 AndroidIRCX bob #room');
+      transport.emit(':carol!user@example INVITE AndroidIRCX :#room');
+      transport.emit(':alice!user@example JOIN :#room');
+      transport.emit(':carol!user@example KICK #room alice :cleanup');
+      transport.emit(':server 301 AndroidIRCX bob :is away');
+      transport.emit(
+        ':server 671 AndroidIRCX bob :is using a secure connection',
+      );
+      transport.emit(':server 328 AndroidIRCX #room :https://example.com/room');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
-    controller.selectTab(roomTab.id);
+      final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(roomTab.id);
 
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('Invitation sent to bob for #room')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('carol invited you to #room')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('alice was kicked from #room by carol')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('Channel URL: https://example.com/room')),
-      isTrue,
-    );
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.name == 'bob').id);
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('WHOIS away: bob is away')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('secure connection')),
-      isTrue,
-    );
+      expect(
+        controller.activeMessages.any(
+          (message) =>
+              message.content.contains('Invitation sent to bob for #room'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('carol invited you to #room'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) =>
+              message.content.contains('alice was kicked from #room by carol'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) =>
+              message.content.contains('Channel URL: https://example.com/room'),
+        ),
+        isTrue,
+      );
+      controller.selectTab(
+        controller.tabs.firstWhere((tab) => tab.name == 'bob').id,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('WHOIS away: bob is away'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('secure connection'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('sends monitor ison and userhost commands from composer', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1516,67 +2123,78 @@ void main() {
     controller.dispose();
   });
 
-  test('routes monitor ison and userhost numerics into server messages', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'routes monitor ison and userhost numerics into server messages',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    transport.emit(':server 303 AndroidIRCX :alice bob');
-    transport.emit(':server 302 AndroidIRCX :alice=+user@host');
-    transport.emit(':server 730 AndroidIRCX :alice,bob');
-    transport.emit(':server 731 AndroidIRCX :carol');
-    transport.emit(':server 732 AndroidIRCX :alice,bob');
-    transport.emit(':server 733 AndroidIRCX :End of MONITOR list');
-    transport.emit(':server 734 AndroidIRCX :Monitor list is full');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      transport.emit(':server 303 AndroidIRCX :alice bob');
+      transport.emit(':server 302 AndroidIRCX :alice=+user@host');
+      transport.emit(':server 730 AndroidIRCX :alice,bob');
+      transport.emit(':server 731 AndroidIRCX :carol');
+      transport.emit(':server 732 AndroidIRCX :alice,bob');
+      transport.emit(':server 733 AndroidIRCX :End of MONITOR list');
+      transport.emit(':server 734 AndroidIRCX :Monitor list is full');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('ISON online: alice bob')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('USERHOST: alice=+user@host')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('MONITOR online: alice, bob')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('MONITOR offline: carol')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('MONITOR list: alice,bob')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('Monitor list is full')),
-      isTrue,
-    );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('ISON online: alice bob'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('USERHOST: alice=+user@host'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('MONITOR online: alice, bob'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('MONITOR offline: carol'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('MONITOR list: alice,bob'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('Monitor list is full'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('routes incoming notices to the server tab when configured', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final settingsRepository = _FakeSettingsRepository(
       const AppSettings(noticeRouting: NoticeRoutingMode.server),
     );
@@ -1598,180 +2216,212 @@ void main() {
     transport.emit(':alice!user@example NOTICE #room :server-routed');
     await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type == ChatTabType.server).id);
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.type == ChatTabType.server).id,
+    );
     expect(
-      controller.activeMessages.any((message) => message.content.contains('server-routed')),
+      controller.activeMessages.any(
+        (message) => message.content.contains('server-routed'),
+      ),
       isTrue,
     );
 
     controller.dispose();
   });
 
-  test('enriches channel nick details from extended-join, names and user-state updates', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'enriches channel nick details from extended-join, names and user-state updates',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    transport.emit(':alice!ident@example JOIN #room aliceAccount :Alice Example');
-    transport.emit(':server 353 AndroidIRCX = #room :@alice!ident@example');
-    transport.emit(':alice!ident@example AWAY :coffee');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      transport.emit(
+        ':alice!ident@example JOIN #room aliceAccount :Alice Example',
+      );
+      transport.emit(':server 353 AndroidIRCX = #room :@alice!ident@example');
+      transport.emit(':alice!ident@example AWAY :coffee');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
-    controller.selectTab(roomTab.id);
-    final entry = controller.activeChannelUserDetails.firstWhere((item) => item.nick == 'alice');
-    expect(entry.details, contains('account: aliceAccount'));
-    expect(entry.details, contains('realname: Alice Example'));
-    expect(entry.details, contains('ident@example'));
-    expect(entry.details, contains('away: coffee'));
+      final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(roomTab.id);
+      final entry = controller.activeChannelUserDetails.firstWhere(
+        (item) => item.nick == 'alice',
+      );
+      expect(entry.details, contains('account: aliceAccount'));
+      expect(entry.details, contains('realname: Alice Example'));
+      expect(entry.details, contains('ident@example'));
+      expect(entry.details, contains('away: coffee'));
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
-  test('uses account-tag and channel-context tags to update state and route messages', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'uses account-tag and channel-context tags to update state and route messages',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    transport.emit('@account=aliceAccount;+draft/channel-context=#room :alice!ident@example PRIVMSG AndroidIRCX :context hello');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      transport.emit(
+        '@account=aliceAccount;+draft/channel-context=#room :alice!ident@example PRIVMSG AndroidIRCX :context hello',
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
-    controller.selectTab(roomTab.id);
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('context hello')),
-      isTrue,
-    );
-    final entry = controller.activeChannelUserDetails.firstWhere((item) => item.nick == 'alice');
-    expect(entry.details, contains('account: aliceAccount'));
-    expect(entry.details, contains('ident@example'));
+      final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(roomTab.id);
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('context hello'),
+        ),
+        isTrue,
+      );
+      final entry = controller.activeChannelUserDetails.firstWhere(
+        (item) => item.nick == 'alice',
+      );
+      expect(entry.details, contains('account: aliceAccount'));
+      expect(entry.details, contains('ident@example'));
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
-  test('tracks dcc resume and accept control requests on matching send tabs', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final dccBackend = _FakeDccBackend();
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-      dccService: DccService(backend: dccBackend),
-    );
-    final file = File.fromUri(
-      Directory.systemTemp.uri.resolve('androidircx-dcc-resume-test.txt'),
-    );
-    await file.writeAsString('resume me');
+  test(
+    'tracks dcc resume and accept control requests on matching send tabs',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final dccBackend = _FakeDccBackend();
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+        dccService: DccService(backend: dccBackend),
+      );
+      final file = File.fromUri(
+        Directory.systemTemp.uri.resolve('androidircx-dcc-resume-test.txt'),
+      );
+      await file.writeAsString('resume me');
 
-    await controller.start();
-    await controller.handleComposerSubmit('/dccsend alice ${file.path}');
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.handleComposerSubmit('/dccsend alice ${file.path}');
+      await Future<void>.delayed(Duration.zero);
 
-    final dccTab = controller.tabs.firstWhere((tab) => tab.type == ChatTabType.dcc);
-    controller.selectTab(dccTab.id);
-    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC RESUME "androidircx-dcc-resume-test.txt" 5001 2048\u0001');
-    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC ACCEPT "androidircx-dcc-resume-test.txt" 5001 2048\u0001');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      final dccTab = controller.tabs.firstWhere(
+        (tab) => tab.type == ChatTabType.dcc,
+      );
+      controller.selectTab(dccTab.id);
+      transport.emit(
+        ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC RESUME "androidircx-dcc-resume-test.txt" 5001 2048\u0001',
+      );
+      transport.emit(
+        ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC ACCEPT "androidircx-dcc-resume-test.txt" 5001 2048\u0001',
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('requested DCC RESUME')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('acknowledged DCC RESUME')),
-      isTrue,
-    );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('requested DCC RESUME'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('acknowledged DCC RESUME'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
-  test('sends dcc resume and accept control commands from active send tab', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final dccBackend = _FakeDccBackend();
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-      dccService: DccService(backend: dccBackend),
-    );
-    final file = File.fromUri(
-      Directory.systemTemp.uri.resolve('androidircx-dcc-resume-command.txt'),
-    );
-    await file.writeAsString('resume command');
+  test(
+    'sends dcc resume and accept control commands from active send tab',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final dccBackend = _FakeDccBackend();
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+        dccService: DccService(backend: dccBackend),
+      );
+      final file = File.fromUri(
+        Directory.systemTemp.uri.resolve('androidircx-dcc-resume-command.txt'),
+      );
+      await file.writeAsString('resume command');
 
-    await controller.start();
-    await controller.handleComposerSubmit('/dccsend alice ${file.path}');
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.handleComposerSubmit('/dccsend alice ${file.path}');
+      await Future<void>.delayed(Duration.zero);
 
-    final dccTab = controller.tabs.firstWhere((tab) => tab.type == ChatTabType.dcc);
-    controller.selectTab(dccTab.id);
-    await controller.handleComposerSubmit('/dccresume 512');
-    await controller.handleComposerSubmit('/dccaccept 512');
+      final dccTab = controller.tabs.firstWhere(
+        (tab) => tab.type == ChatTabType.dcc,
+      );
+      controller.selectTab(dccTab.id);
+      await controller.handleComposerSubmit('/dccresume 512');
+      await controller.handleComposerSubmit('/dccaccept 512');
 
-    expect(
-      transport.sentLines,
-      contains('PRIVMSG alice :\u0001DCC RESUME "androidircx-dcc-resume-command.txt" 5001 512\u0001'),
-    );
-    expect(
-      transport.sentLines,
-      contains('PRIVMSG alice :\u0001DCC ACCEPT "androidircx-dcc-resume-command.txt" 5001 512\u0001'),
-    );
+      expect(
+        transport.sentLines,
+        contains(
+          'PRIVMSG alice :\u0001DCC RESUME "androidircx-dcc-resume-command.txt" 5001 512\u0001',
+        ),
+      );
+      expect(
+        transport.sentLines,
+        contains(
+          'PRIVMSG alice :\u0001DCC ACCEPT "androidircx-dcc-resume-command.txt" 5001 512\u0001',
+        ),
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('requests older history using the oldest known msgid anchor', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1794,52 +2444,57 @@ void main() {
 
     expect(await controller.requestOlderHistory(limit: 40), isTrue);
     expect(
-      transport.sentLines.any((line) => line.contains('CHATHISTORY BEFORE #room first-1 40')),
-      isTrue,
-    );
-
-    controller.dispose();
-  });
-
-  test('reports missing history anchor when requesting older history too early', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
-
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit(':server CAP * ACK :chathistory labeled-response');
-    await Future<void>.delayed(Duration.zero);
-
-    expect(await controller.requestOlderHistory(limit: 50), isFalse);
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type.name == 'server').id);
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('No history anchor is available yet for #room.'),
+      transport.sentLines.any(
+        (line) => line.contains('CHATHISTORY BEFORE #room first-1 40'),
       ),
       isTrue,
     );
 
     controller.dispose();
   });
+
+  test(
+    'reports missing history anchor when requesting older history too early',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit(':server CAP * ACK :chathistory labeled-response');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(await controller.requestOlderHistory(limit: 50), isFalse);
+      controller.selectTab(
+        controller.tabs.firstWhere((tab) => tab.type.name == 'server').id,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains(
+            'No history anchor is available yet for #room.',
+          ),
+        ),
+        isTrue,
+      );
+
+      controller.dispose();
+    },
+  );
 
   test('requests newer history using the latest known msgid anchor', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1862,73 +2517,8 @@ void main() {
 
     expect(await controller.requestNewerHistory(limit: 40), isTrue);
     expect(
-      transport.sentLines.any((line) => line.contains('CHATHISTORY AFTER #room last-1 40')),
-      isTrue,
-    );
-
-    controller.dispose();
-  });
-
-  test('requests surrounding history around the latest known msgid anchor', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
-
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit('@msgid=mid-1 :alice!user@example PRIVMSG #room :hello');
-    transport.emit(':server CAP * ACK :chathistory labeled-response');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
-
-    expect(await controller.requestAroundLatestHistory(limit: 30), isTrue);
-    expect(
-      transport.sentLines.any((line) => line.contains('CHATHISTORY AROUND #room mid-1 30')),
-      isTrue,
-    );
-
-    controller.dispose();
-  });
-
-  test('reports missing recent anchor when requesting newer history too early', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
-
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit(':server CAP * ACK :chathistory labeled-response');
-    await Future<void>.delayed(Duration.zero);
-
-    expect(await controller.requestNewerHistory(limit: 50), isFalse);
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type.name == 'server').id);
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('No recent history anchor is available yet for #room.'),
+      transport.sentLines.any(
+        (line) => line.contains('CHATHISTORY AFTER #room last-1 40'),
       ),
       isTrue,
     );
@@ -1936,43 +2526,121 @@ void main() {
     controller.dispose();
   });
 
-  test('shows unsupported chathistory error when capability is missing', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'requests surrounding history around the latest known msgid anchor',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    await controller.handleComposerSubmit('/chathistory');
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit('@msgid=mid-1 :alice!user@example PRIVMSG #room :hello');
+      transport.emit(':server CAP * ACK :chathistory labeled-response');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type.name == 'server').id);
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('CHATHISTORY is not supported by this server.'),
-      ),
-      isTrue,
-    );
+      expect(await controller.requestAroundLatestHistory(limit: 30), isTrue);
+      expect(
+        transport.sentLines.any(
+          (line) => line.contains('CHATHISTORY AROUND #room mid-1 30'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
+
+  test(
+    'reports missing recent anchor when requesting newer history too early',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit(':server CAP * ACK :chathistory labeled-response');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(await controller.requestNewerHistory(limit: 50), isFalse);
+      controller.selectTab(
+        controller.tabs.firstWhere((tab) => tab.type.name == 'server').id,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains(
+            'No recent history anchor is available yet for #room.',
+          ),
+        ),
+        isTrue,
+      );
+
+      controller.dispose();
+    },
+  );
+
+  test(
+    'shows unsupported chathistory error when capability is missing',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      await controller.handleComposerSubmit('/chathistory');
+
+      controller.selectTab(
+        controller.tabs.firstWhere((tab) => tab.type.name == 'server').id,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains(
+            'CHATHISTORY is not supported by this server.',
+          ),
+        ),
+        isTrue,
+      );
+
+      controller.dispose();
+    },
+  );
 
   test('routes CTCP requests and sends CTCP replies', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -1986,7 +2654,9 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :\u0001VERSION\u0001');
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001VERSION\u0001',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
@@ -1995,11 +2665,14 @@ void main() {
       contains('NOTICE alice :\u0001VERSION AndroidIRCx Flutter 1.0.0\u0001'),
     );
     controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'query' && tab.name == 'alice').id,
+      controller.tabs
+          .firstWhere((tab) => tab.type.name == 'query' && tab.name == 'alice')
+          .id,
     );
     expect(
       controller.activeMessages.any(
-        (message) => message.content.contains('CTCP VERSION request from alice'),
+        (message) =>
+            message.content.contains('CTCP VERSION request from alice'),
       ),
       isTrue,
     );
@@ -2009,9 +2682,7 @@ void main() {
 
   test('routes CTCP replies into the matching query tab', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2025,16 +2696,21 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':alice!user@example NOTICE AndroidIRCX :\u0001PING 12345\u0001');
+    transport.emit(
+      ':alice!user@example NOTICE AndroidIRCX :\u0001PING 12345\u0001',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
     controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.type.name == 'query' && tab.name == 'alice').id,
+      controller.tabs
+          .firstWhere((tab) => tab.type.name == 'query' && tab.name == 'alice')
+          .id,
     );
     expect(
       controller.activeMessages.any(
-        (message) => message.content.contains('CTCP PING reply from alice: 12345'),
+        (message) =>
+            message.content.contains('CTCP PING reply from alice: 12345'),
       ),
       isTrue,
     );
@@ -2044,9 +2720,7 @@ void main() {
 
   test('sends CTCP commands from the composer', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2079,9 +2753,7 @@ void main() {
 
   test('handles CAP commands from the composer', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2104,7 +2776,9 @@ void main() {
     expect(transport.sentLines, contains('CAP END'));
     expect(
       controller.activeMessages.any(
-        (message) => message.content.contains('Requested capabilities: message-tags echo-message'),
+        (message) => message.content.contains(
+          'Requested capabilities: message-tags echo-message',
+        ),
       ),
       isTrue,
     );
@@ -2118,65 +2792,66 @@ void main() {
     controller.dispose();
   });
 
-  test('shows capability status and CAP frame updates in server messages', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-        saslAccount: 'alice',
-        saslPassword: 'secret',
-      ),
-      ircService: service,
-    );
+  test(
+    'shows capability status and CAP frame updates in server messages',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+          saslAccount: 'alice',
+          saslPassword: 'secret',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    transport.emit(':server CAP * LS :multi-prefix sasl message-tags');
-    await Future<void>.delayed(Duration.zero);
-    transport.emit(':server CAP * ACK :sasl message-tags');
-    await Future<void>.delayed(Duration.zero);
-    await controller.handleComposerSubmit('/cap status');
+      await controller.start();
+      transport.emit(':server CAP * LS :multi-prefix sasl message-tags');
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(':server CAP * ACK :sasl message-tags');
+      await Future<void>.delayed(Duration.zero);
+      await controller.handleComposerSubmit('/cap status');
 
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('CAP LS: multi-prefix sasl message-tags'),
-      ),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('CAP ACK: sasl message-tags'),
-      ),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('Available capabilities:'),
-      ),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any(
-        (message) => message.content.contains('Enabled capabilities:'),
-      ),
-      isTrue,
-    );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains(
+            'CAP LS: multi-prefix sasl message-tags',
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('CAP ACK: sasl message-tags'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('Available capabilities:'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('Enabled capabilities:'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('handles away and back commands from the composer', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2202,7 +2877,9 @@ void main() {
       isTrue,
     );
     expect(
-      controller.activeMessages.where((message) => message.content == 'Away status cleared.'),
+      controller.activeMessages.where(
+        (message) => message.content == 'Away status cleared.',
+      ),
       isNotEmpty,
     );
 
@@ -2211,9 +2888,7 @@ void main() {
 
   test('handles list command and channel list numerics', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2229,7 +2904,9 @@ void main() {
     await controller.start();
     await controller.handleComposerSubmit('/list #android*');
     transport.emit(':server 321 AndroidIRCX Channel :Users Name');
-    transport.emit(':server 322 AndroidIRCX #androidircx 42 :AndroidIRCx official channel');
+    transport.emit(
+      ':server 322 AndroidIRCX #androidircx 42 :AndroidIRCx official channel',
+    );
     transport.emit(':server 323 AndroidIRCX :End of /LIST');
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
@@ -2237,7 +2914,8 @@ void main() {
     expect(transport.sentLines, contains('LIST #android*'));
     expect(
       controller.activeMessages.any(
-        (message) => message.content.contains('Requested channel list for: #android*'),
+        (message) =>
+            message.content.contains('Requested channel list for: #android*'),
       ),
       isTrue,
     );
@@ -2249,7 +2927,9 @@ void main() {
     );
     expect(
       controller.activeMessages.any(
-        (message) => message.content.contains('#androidircx (42 users) - AndroidIRCx official channel'),
+        (message) => message.content.contains(
+          '#androidircx (42 users) - AndroidIRCx official channel',
+        ),
       ),
       isTrue,
     );
@@ -2265,9 +2945,7 @@ void main() {
 
   test('handles server info commands and numerics', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2288,8 +2966,12 @@ void main() {
 
     transport.emit(':server 371 AndroidIRCX :- Welcome to the network');
     transport.emit(':server 374 AndroidIRCX :End of /INFO list');
-    transport.emit(':server 391 AndroidIRCX irc.example.test :2026-03-16 20:15:00');
-    transport.emit(':server 351 AndroidIRCX ircd-seven-1.1 example.test :server version info');
+    transport.emit(
+      ':server 391 AndroidIRCX irc.example.test :2026-03-16 20:15:00',
+    );
+    transport.emit(
+      ':server 351 AndroidIRCX ircd-seven-1.1 example.test :server version info',
+    );
     transport.emit(':server 364 AndroidIRCX hub.example.test 1 :Example hub');
     transport.emit(':server 365 AndroidIRCX :End of /LINKS list');
     await Future<void>.delayed(Duration.zero);
@@ -2326,7 +3008,9 @@ void main() {
     );
     expect(
       controller.activeMessages.any(
-        (message) => message.content.contains('Link: hub.example.test (1) - Example hub'),
+        (message) => message.content.contains(
+          'Link: hub.example.test (1) - Example hub',
+        ),
       ),
       isTrue,
     );
@@ -2342,9 +3026,7 @@ void main() {
 
   test('handles channel admin commands and ban list numerics', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2358,7 +3040,9 @@ void main() {
     );
 
     await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#androidircx'));
+    await controller.joinChannel(
+      const JoinChannelRequest(channel: '#androidircx'),
+    );
     await controller.handleComposerSubmit('/op Alice');
     await controller.handleComposerSubmit('/deop Alice');
     await controller.handleComposerSubmit('/voice Bob');
@@ -2367,8 +3051,12 @@ void main() {
     await controller.handleComposerSubmit('/unban bad!*@*');
     await controller.handleComposerSubmit('/banlist');
 
-    transport.emit(':server 367 AndroidIRCX #androidircx bad!*@* ChanOp 1710000000');
-    transport.emit(':server 368 AndroidIRCX #androidircx :End of channel ban list');
+    transport.emit(
+      ':server 367 AndroidIRCX #androidircx bad!*@* ChanOp 1710000000',
+    );
+    transport.emit(
+      ':server 368 AndroidIRCX #androidircx :End of channel ban list',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
@@ -2382,7 +3070,8 @@ void main() {
 
     expect(
       controller.activeMessages.any(
-        (message) => message.content.contains('Requested ban list for #androidircx'),
+        (message) =>
+            message.content.contains('Requested ban list for #androidircx'),
       ),
       isTrue,
     );
@@ -2404,9 +3093,7 @@ void main() {
 
   test('handles invite exception exception and quiet list numerics', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2420,17 +3107,31 @@ void main() {
     );
 
     await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#androidircx'));
+    await controller.joinChannel(
+      const JoinChannelRequest(channel: '#androidircx'),
+    );
     await controller.handleComposerSubmit('/invitelist');
     await controller.handleComposerSubmit('/exceptlist');
     await controller.handleComposerSubmit('/quietlist');
 
-    transport.emit(':server 346 AndroidIRCX #androidircx invite!*@* ChanOp 1710000000');
-    transport.emit(':server 347 AndroidIRCX #androidircx :End of channel invite exception list');
-    transport.emit(':server 348 AndroidIRCX #androidircx except!*@* ChanOp 1710000000');
-    transport.emit(':server 349 AndroidIRCX #androidircx :End of channel exception list');
-    transport.emit(':server 728 AndroidIRCX #androidircx quiet!*@* ChanOp 1710000000');
-    transport.emit(':server 729 AndroidIRCX #androidircx :End of channel quiet list');
+    transport.emit(
+      ':server 346 AndroidIRCX #androidircx invite!*@* ChanOp 1710000000',
+    );
+    transport.emit(
+      ':server 347 AndroidIRCX #androidircx :End of channel invite exception list',
+    );
+    transport.emit(
+      ':server 348 AndroidIRCX #androidircx except!*@* ChanOp 1710000000',
+    );
+    transport.emit(
+      ':server 349 AndroidIRCX #androidircx :End of channel exception list',
+    );
+    transport.emit(
+      ':server 728 AndroidIRCX #androidircx quiet!*@* ChanOp 1710000000',
+    );
+    transport.emit(
+      ':server 729 AndroidIRCX #androidircx :End of channel quiet list',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
@@ -2439,23 +3140,37 @@ void main() {
     expect(transport.sentLines, contains('MODE #androidircx +q'));
 
     expect(
-      controller.activeMessages.any((message) => message.content.contains('Requested invite list for #androidircx')),
+      controller.activeMessages.any(
+        (message) =>
+            message.content.contains('Requested invite list for #androidircx'),
+      ),
       isTrue,
     );
     expect(
-      controller.activeMessages.any((message) => message.content.contains('Invite exception: invite!*@* set by ChanOp')),
+      controller.activeMessages.any(
+        (message) => message.content.contains(
+          'Invite exception: invite!*@* set by ChanOp',
+        ),
+      ),
       isTrue,
     );
     expect(
-      controller.activeMessages.any((message) => message.content.contains('Exception: except!*@* set by ChanOp')),
+      controller.activeMessages.any(
+        (message) =>
+            message.content.contains('Exception: except!*@* set by ChanOp'),
+      ),
       isTrue,
     );
     expect(
-      controller.activeMessages.any((message) => message.content.contains('Quiet: quiet!*@* set by ChanOp')),
+      controller.activeMessages.any(
+        (message) => message.content.contains('Quiet: quiet!*@* set by ChanOp'),
+      ),
       isTrue,
     );
     expect(
-      controller.activeMessages.any((message) => message.content.contains('End of channel quiet list')),
+      controller.activeMessages.any(
+        (message) => message.content.contains('End of channel quiet list'),
+      ),
       isTrue,
     );
 
@@ -2464,9 +3179,7 @@ void main() {
 
   test('routes isupport and user status numerics into server messages', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2480,184 +3193,229 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':server 005 AndroidIRCX CHANTYPES=# PREFIX=(ov)@+ NETWORK=DBase :are supported by this server');
+    transport.emit(
+      ':server 005 AndroidIRCX CHANTYPES=# PREFIX=(ov)@+ NETWORK=DBase :are supported by this server',
+    );
     transport.emit(':server 221 AndroidIRCX +iw');
     transport.emit(':server 381 AndroidIRCX :You are now an IRC operator');
-    transport.emit(':server 396 AndroidIRCX hidden.example :is now your displayed host');
-    transport.emit(':server 263 AndroidIRCX WHO :Server load is temporarily too heavy');
+    transport.emit(
+      ':server 396 AndroidIRCX hidden.example :is now your displayed host',
+    );
+    transport.emit(
+      ':server 263 AndroidIRCX WHO :Server load is temporarily too heavy',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
     expect(
-      controller.activeMessages.any((message) => message.content.contains('NETWORK=DBase')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('User modes: +iw')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('You are now an IRC operator')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('displayed host')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('temporarily too heavy')),
-      isTrue,
-    );
-
-    controller.dispose();
-  });
-
-  test('uses PREFIX and userhost-in-names data to normalize nick list entries', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
+      controller.activeMessages.any(
+        (message) => message.content.contains('NETWORK=DBase'),
       ),
-      ircService: service,
+      isTrue,
     );
-
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '&staff'));
-    transport.emit(':server 005 AndroidIRCX CHANTYPES=#& PREFIX=(qaohv)~&@%+ :supported');
-    transport.emit(':server 353 AndroidIRCX = &staff :@alice!ident@host +bob!user@host');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
-
-    final staffTab = controller.tabs.firstWhere((tab) => tab.name == '&staff');
-    controller.selectTab(staffTab.id);
-    expect(controller.activeChannelUsers, containsAll(<String>['alice', 'bob']));
-
-    controller.dispose();
-  });
-
-  test('routes standard replies into the target channel or server tab', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
+    expect(
+      controller.activeMessages.any(
+        (message) => message.content.contains('User modes: +iw'),
       ),
-      ircService: service,
-    );
-
-    await controller.start();
-    transport.emit(':server FAIL #room INVALID_TARGET :Channel is unavailable');
-    transport.emit(':server WARN * RATE_LIMIT :Slow down a little');
-    transport.emit(':server NOTE #room HELLO :This is a note');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
-
-    final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
-    controller.selectTab(roomTab.id);
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('Channel is unavailable')),
       isTrue,
     );
     expect(
-      controller.activeMessages.any((message) => message.content.contains('This is a note')),
-      isTrue,
-    );
-
-    controller.selectTab(controller.tabs.firstWhere((tab) => tab.type == ChatTabType.server).id);
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('Slow down a little')),
-      isTrue,
-    );
-
-    controller.dispose();
-  });
-
-  test('shows invite-notify target nick when invite is not for the local user', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
+      controller.activeMessages.any(
+        (message) => message.content.contains('You are now an IRC operator'),
       ),
-      ircService: service,
-    );
-
-    await controller.start();
-    transport.emit(':carol!user@example INVITE dave #room');
-    await Future<void>.delayed(Duration.zero);
-
-    final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
-    controller.selectTab(roomTab.id);
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('carol invited dave to #room')),
       isTrue,
     );
-
-    controller.dispose();
-  });
-
-  test('shows extended-join account and realname details in join messages', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
+    expect(
+      controller.activeMessages.any(
+        (message) => message.content.contains('displayed host'),
       ),
-      ircService: service,
-    );
-
-    await controller.start();
-    transport.emit(':alice!user@example JOIN #room aliceAccount :Alice Example');
-    await Future<void>.delayed(Duration.zero);
-
-    final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
-    controller.selectTab(roomTab.id);
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('account: aliceAccount')),
       isTrue,
     );
     expect(
-      controller.activeMessages.any((message) => message.content.contains('realname: Alice Example')),
+      controller.activeMessages.any(
+        (message) => message.content.contains('temporarily too heavy'),
+      ),
       isTrue,
     );
 
     controller.dispose();
   });
+
+  test(
+    'uses PREFIX and userhost-in-names data to normalize nick list entries',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '&staff'));
+      transport.emit(
+        ':server 005 AndroidIRCX CHANTYPES=#& PREFIX=(qaohv)~&@%+ :supported',
+      );
+      transport.emit(
+        ':server 353 AndroidIRCX = &staff :@alice!ident@host +bob!user@host',
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      final staffTab = controller.tabs.firstWhere(
+        (tab) => tab.name == '&staff',
+      );
+      controller.selectTab(staffTab.id);
+      expect(
+        controller.activeChannelUsers,
+        containsAll(<String>['alice', 'bob']),
+      );
+
+      controller.dispose();
+    },
+  );
+
+  test(
+    'routes standard replies into the target channel or server tab',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      transport.emit(
+        ':server FAIL #room INVALID_TARGET :Channel is unavailable',
+      );
+      transport.emit(':server WARN * RATE_LIMIT :Slow down a little');
+      transport.emit(':server NOTE #room HELLO :This is a note');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(roomTab.id);
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('Channel is unavailable'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('This is a note'),
+        ),
+        isTrue,
+      );
+
+      controller.selectTab(
+        controller.tabs.firstWhere((tab) => tab.type == ChatTabType.server).id,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('Slow down a little'),
+        ),
+        isTrue,
+      );
+
+      controller.dispose();
+    },
+  );
+
+  test(
+    'shows invite-notify target nick when invite is not for the local user',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      transport.emit(':carol!user@example INVITE dave #room');
+      await Future<void>.delayed(Duration.zero);
+
+      final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(roomTab.id);
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('carol invited dave to #room'),
+        ),
+        isTrue,
+      );
+
+      controller.dispose();
+    },
+  );
+
+  test(
+    'shows extended-join account and realname details in join messages',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      transport.emit(
+        ':alice!user@example JOIN #room aliceAccount :Alice Example',
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(roomTab.id);
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('account: aliceAccount'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('realname: Alice Example'),
+        ),
+        isTrue,
+      );
+
+      controller.dispose();
+    },
+  );
 
   test('sends metadata and rename commands from composer', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2672,59 +3430,71 @@ void main() {
 
     await controller.start();
     await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    await controller.handleComposerSubmit('/metadata #room set topic-info colorful');
+    await controller.handleComposerSubmit(
+      '/metadata #room set topic-info colorful',
+    );
     await controller.handleComposerSubmit('/rename #room2 moved');
 
-    expect(transport.sentLines, contains('METADATA #room SET topic-info :colorful'));
+    expect(
+      transport.sentLines,
+      contains('METADATA #room SET topic-info :colorful'),
+    );
     expect(transport.sentLines, contains('RENAME #room #room2 :moved'));
 
     controller.dispose();
   });
 
-  test('routes metadata numerics and channel rename into channel state', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'routes metadata numerics and channel rename into channel state',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
-    transport.emit(':server 761 AndroidIRCX #room topic-info :colorful');
-    transport.emit(':server 766 AndroidIRCX #room :End of metadata');
-    transport.emit(':chanserv!service@example RENAME #room #room2 :migration');
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit(':server 761 AndroidIRCX #room topic-info :colorful');
+      transport.emit(':server 766 AndroidIRCX #room :End of metadata');
+      transport.emit(
+        ':chanserv!service@example RENAME #room #room2 :migration',
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
-    final renamedTab = controller.tabs.firstWhere((tab) => tab.name == '#room2');
-    controller.selectTab(renamedTab.id);
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('METADATA #room')),
-      isTrue,
-    );
-    expect(
-      controller.activeMessages.any((message) => message.content.contains('renamed #room to #room2')),
-      isTrue,
-    );
+      final renamedTab = controller.tabs.firstWhere(
+        (tab) => tab.name == '#room2',
+      );
+      controller.selectTab(renamedTab.id);
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('METADATA #room'),
+        ),
+        isTrue,
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('renamed #room to #room2'),
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('routes away numerics into server messages', () async {
     final transport = _FakeTransport();
-    final service = IrcService(
-      transportConnector: (_) async => transport,
-    );
+    final service = IrcService(transportConnector: (_) async => transport);
     final controller = ChatSessionController(
       network: const NetworkConfig(
         id: 'dbase',
@@ -2738,8 +3508,12 @@ void main() {
     );
 
     await controller.start();
-    transport.emit(':server 306 AndroidIRCX :You have been marked as being away');
-    transport.emit(':server 305 AndroidIRCX :You are no longer marked as being away');
+    transport.emit(
+      ':server 306 AndroidIRCX :You have been marked as being away',
+    );
+    transport.emit(
+      ':server 305 AndroidIRCX :You are no longer marked as being away',
+    );
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 

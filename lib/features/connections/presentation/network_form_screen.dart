@@ -12,6 +12,9 @@ class NetworkFormResult {
     this.webSocketPort,
     this.webSocketPath,
     required this.autoConnect,
+    required this.autoJoinChannels,
+    this.profileLabel,
+    this.profileGroup,
     required this.saslMechanism,
     this.saslAccount,
     this.saslPassword,
@@ -26,16 +29,16 @@ class NetworkFormResult {
   final int? webSocketPort;
   final String? webSocketPath;
   final bool autoConnect;
+  final List<String> autoJoinChannels;
+  final String? profileLabel;
+  final String? profileGroup;
   final SaslMechanism saslMechanism;
   final String? saslAccount;
   final String? saslPassword;
 }
 
 class NetworkFormScreen extends StatefulWidget {
-  const NetworkFormScreen({
-    super.key,
-    this.initialValue,
-  });
+  const NetworkFormScreen({super.key, this.initialValue});
 
   final NetworkConfig? initialValue;
 
@@ -52,6 +55,9 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
   late final TextEditingController _webSocketPathController;
   late final TextEditingController _nicknameController;
   late final TextEditingController _altNicknameController;
+  late final TextEditingController _autoJoinChannelsController;
+  late final TextEditingController _profileLabelController;
+  late final TextEditingController _profileGroupController;
   late final TextEditingController _saslAccountController;
   late final TextEditingController _saslPasswordController;
   late bool _useTls;
@@ -79,8 +85,21 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _altNicknameController = TextEditingController(
       text: initial?.altNickname ?? 'AndroidIRCX_',
     );
-    _saslAccountController = TextEditingController(text: initial?.saslAccount ?? '');
-    _saslPasswordController = TextEditingController(text: initial?.saslPassword ?? '');
+    _autoJoinChannelsController = TextEditingController(
+      text: initial?.autoJoinChannels.join(', ') ?? '',
+    );
+    _profileLabelController = TextEditingController(
+      text: initial?.profileLabel ?? '',
+    );
+    _profileGroupController = TextEditingController(
+      text: initial?.profileGroup ?? '',
+    );
+    _saslAccountController = TextEditingController(
+      text: initial?.saslAccount ?? '',
+    );
+    _saslPasswordController = TextEditingController(
+      text: initial?.saslPassword ?? '',
+    );
     _useTls = initial?.useTls ?? true;
     _autoConnect = initial?.autoConnect ?? false;
     _saslMechanism = initial?.saslMechanism ?? SaslMechanism.plain;
@@ -95,6 +114,9 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _webSocketPathController.dispose();
     _nicknameController.dispose();
     _altNicknameController.dispose();
+    _autoJoinChannelsController.dispose();
+    _profileLabelController.dispose();
+    _profileGroupController.dispose();
     _saslAccountController.dispose();
     _saslPasswordController.dispose();
     super.dispose();
@@ -104,7 +126,9 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.initialValue == null ? 'Add network' : 'Edit network'),
+        title: Text(
+          widget.initialValue == null ? 'Add network' : 'Edit network',
+        ),
       ),
       body: SafeArea(
         child: Padding(
@@ -147,7 +171,8 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     labelText: 'WebSocket port',
-                    helperText: 'Optional. Used by Flutter Web instead of raw IRC port.',
+                    helperText:
+                        'Optional. Used by Flutter Web instead of raw IRC port.',
                   ),
                   validator: (value) {
                     if ((value ?? '').trim().isEmpty) {
@@ -164,7 +189,8 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                   controller: _webSocketPathController,
                   decoration: const InputDecoration(
                     labelText: 'WebSocket path',
-                    helperText: 'Optional. Example: /irc or /websocket. Leave empty for root path.',
+                    helperText:
+                        'Optional. Example: /irc or /websocket. Leave empty for root path.',
                   ),
                   validator: (value) {
                     final trimmed = (value ?? '').trim();
@@ -244,16 +270,48 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Use TLS'),
-                  subtitle: const Text('Enabled by default for modern IRC servers.'),
+                  subtitle: const Text(
+                    'Enabled by default for modern IRC servers.',
+                  ),
                   value: _useTls,
                   onChanged: (value) => setState(() => _useTls = value),
                 ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Auto connect'),
-                  subtitle: const Text('Start this network automatically on app launch.'),
+                  subtitle: const Text(
+                    'Start this network automatically on app launch.',
+                  ),
                   value: _autoConnect,
                   onChanged: (value) => setState(() => _autoConnect = value),
+                ),
+                TextFormField(
+                  controller: _autoJoinChannelsController,
+                  decoration: const InputDecoration(
+                    labelText: 'Auto-join channels',
+                    helperText:
+                        'Optional comma-separated list, e.g. #androidircx, #flutter.',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  key: const Key('network-form-profile-label'),
+                  controller: _profileLabelController,
+                  decoration: const InputDecoration(
+                    labelText: 'Profile label',
+                    helperText:
+                        'Optional display label for this connection profile.',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  key: const Key('network-form-profile-group'),
+                  controller: _profileGroupController,
+                  decoration: const InputDecoration(
+                    labelText: 'Profile group',
+                    helperText:
+                        'Optional group/category, e.g. general, tech, gaming.',
+                  ),
                 ),
                 const SizedBox(height: 24),
                 FilledButton(
@@ -294,10 +352,36 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
             : int.parse(_webSocketPortController.text.trim()),
         webSocketPath: _webSocketPathController.text.trim(),
         autoConnect: _autoConnect,
+        autoJoinChannels: _parseAutoJoinChannels(
+          _autoJoinChannelsController.text,
+        ),
+        profileLabel: _optionalText(_profileLabelController.text),
+        profileGroup: _optionalText(_profileGroupController.text),
         saslMechanism: _saslMechanism,
         saslAccount: _saslAccountController.text.trim(),
         saslPassword: _saslPasswordController.text,
       ),
     );
+  }
+
+  List<String> _parseAutoJoinChannels(String value) {
+    final seen = <String>{};
+    final result = <String>[];
+    for (final item in value.split(',')) {
+      final trimmed = item.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      final channel = trimmed.startsWith('#') ? trimmed : '#$trimmed';
+      if (seen.add(channel.toLowerCase())) {
+        result.add(channel);
+      }
+    }
+    return result;
+  }
+
+  String? _optionalText(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
   }
 }
