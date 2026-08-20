@@ -2215,6 +2215,7 @@ class _ConnectionBanner extends StatelessWidget {
     final snapshot = controller.connection;
     final reconnectDelay = controller.pendingReconnectDelay;
     final theme = Theme.of(context);
+    final statusColor = _colorForPhase(context, snapshot.phase);
 
     if (snapshot.phase == ConnectionPhase.connected &&
         reconnectDelay == null &&
@@ -2227,20 +2228,16 @@ class _ConnectionBanner extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+        color: Color.lerp(statusColor, theme.colorScheme.surface, 0.88),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: statusColor.withValues(alpha: 0.24)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(
-                _iconForPhase(snapshot.phase),
-                size: 18,
-                color: theme.colorScheme.primary,
-              ),
+              Icon(_iconForPhase(snapshot.phase), size: 18, color: statusColor),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -2253,28 +2250,39 @@ class _ConnectionBanner extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             '${network.host}:${network.port} • ${network.useTls ? 'TLS' : 'Plain TCP'}',
-            style: theme.textTheme.bodySmall,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
             'Current nick: ${controller.currentNick}',
-            style: theme.textTheme.bodySmall,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           if ((snapshot.message ?? '').isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text(snapshot.message!, style: theme.textTheme.bodySmall),
+            Text(
+              snapshot.message!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
           ],
           if (snapshot.phase == ConnectionPhase.error ||
               snapshot.phase == ConnectionPhase.disconnected) ...[
             const SizedBox(height: 10),
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 FilledButton.tonal(
                   onPressed: controller.reconnectNow,
                   child: const Text('Reconnect now'),
                 ),
                 if (reconnectDelay != null) ...[
-                  const SizedBox(width: 8),
                   Text(
                     'Auto retry in ${reconnectDelay.inSeconds}s',
                     style: theme.textTheme.bodySmall,
@@ -2286,6 +2294,26 @@ class _ConnectionBanner extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Color _colorForPhase(BuildContext context, ConnectionPhase phase) {
+    final scheme = Theme.of(context).colorScheme;
+    final ircTheme = context.ircUiTheme;
+    return switch (phase) {
+      ConnectionPhase.idle => scheme.onSurfaceVariant,
+      ConnectionPhase.connecting ||
+      ConnectionPhase.registering ||
+      ConnectionPhase.authenticating ||
+      ConnectionPhase.reconnecting => scheme.primary,
+      ConnectionPhase.connected => scheme.primary,
+      ConnectionPhase.disconnecting ||
+      ConnectionPhase.disconnected => scheme.tertiary,
+      ConnectionPhase.error => Color.lerp(
+        scheme.error,
+        ircTheme.messageError,
+        0.2,
+      )!,
+    };
   }
 
   String _titleForPhase(ConnectionSnapshot snapshot, Duration? reconnectDelay) {

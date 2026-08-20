@@ -546,9 +546,10 @@ class _EmptyState extends StatelessWidget {
             const SizedBox(height: 16),
             Text('No networks configured', style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
-            const Text(
-              'Sprint 1 starts with network management and IRC foundation.',
+            Text(
+              'Add an IRC network, enable auto-connect if you want persistent sessions, then join channels from the chat screen.',
               textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium,
             ),
             const SizedBox(height: 18),
             FilledButton(
