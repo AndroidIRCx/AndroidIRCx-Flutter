@@ -8,6 +8,7 @@ import 'package:androidircx/features/connections/application/network_list_contro
 import 'package:androidircx/features/connections/presentation/profiles_screen.dart';
 import 'package:androidircx/features/connections/presentation/server_directory_picker.dart';
 import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
+import 'package:androidircx/features/settings/presentation/backup_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -413,6 +414,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         onTap: () => Navigator.of(context).push<void>(
                           MaterialPageRoute<void>(
                             builder: (_) => const DataPrivacyScreen(),
+                          ),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.backup_outlined),
+                        title: const Text('Backup & restore'),
+                        subtitle: const Text(
+                          'Export or import networks, settings, and profiles.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const BackupScreen(),
                           ),
                         ),
                       ),
