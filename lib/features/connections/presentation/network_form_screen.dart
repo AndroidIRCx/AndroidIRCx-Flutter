@@ -1,4 +1,8 @@
+import 'dart:async';
+
+import 'package:androidircx/core/models/identity_profile.dart';
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/storage/identity_profile_repository.dart';
 import 'package:flutter/material.dart';
 
 class NetworkFormResult {
@@ -26,6 +30,11 @@ class NetworkFormResult {
     this.proxyPort,
     this.proxyUsername,
     this.proxyPassword,
+    this.identityProfileId,
+    this.useClientCertificate = false,
+    this.clientCertificatePem,
+    this.clientPrivateKeyPem,
+    this.clientKeyPassphrase,
   });
 
   final String name;
@@ -51,12 +60,21 @@ class NetworkFormResult {
   final int? proxyPort;
   final String? proxyUsername;
   final String? proxyPassword;
+  final String? identityProfileId;
+  final bool useClientCertificate;
+  final String? clientCertificatePem;
+  final String? clientPrivateKeyPem;
+  final String? clientKeyPassphrase;
 }
 
 class NetworkFormScreen extends StatefulWidget {
-  const NetworkFormScreen({super.key, this.initialValue});
+  const NetworkFormScreen({super.key, this.initialValue, this.profileRepository});
 
   final NetworkConfig? initialValue;
+
+  /// Source of identity profiles for the attach-profile picker; defaults to
+  /// shared-prefs storage.
+  final IdentityProfileRepository? profileRepository;
 
   @override
   State<NetworkFormScreen> createState() => _NetworkFormScreenState();
@@ -87,11 +105,22 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
   late SaslMechanism _saslMechanism;
   late ServiceAuthFallback _serviceAuthFallback;
   late IrcProxyType _proxyType;
+  late final IdentityProfileRepository _profileRepository;
+  List<IdentityProfile> _profiles = const [IdentityProfile.defaultProfile];
+  String? _identityProfileId;
+  late final TextEditingController _clientCertController;
+  late final TextEditingController _clientKeyController;
+  late final TextEditingController _clientKeyPassphraseController;
+  late bool _useClientCertificate;
 
   @override
   void initState() {
     super.initState();
     final initial = widget.initialValue;
+    _profileRepository =
+        widget.profileRepository ?? SharedPrefsIdentityProfileRepository();
+    _identityProfileId = initial?.identityProfileId;
+    unawaited(_loadProfiles());
     _nameController = TextEditingController(text: initial?.name ?? '');
     _hostController = TextEditingController(text: initial?.host ?? '');
     _portController = TextEditingController(
@@ -142,12 +171,30 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _proxyPasswordController = TextEditingController(
       text: initial?.proxyPassword ?? '',
     );
+    _clientCertController = TextEditingController();
+    _clientKeyController = TextEditingController();
+    _clientKeyPassphraseController = TextEditingController();
+    _useClientCertificate = initial?.useClientCertificate ?? false;
     _useTls = initial?.useTls ?? true;
     _autoConnect = initial?.autoConnect ?? false;
     _saslMechanism = initial?.saslMechanism ?? SaslMechanism.plain;
     _serviceAuthFallback =
         initial?.serviceAuthFallback ?? ServiceAuthFallback.disabled;
     _proxyType = initial?.proxyType ?? IrcProxyType.none;
+  }
+
+  Future<void> _loadProfiles() async {
+    final profiles = await _profileRepository.loadProfiles();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _profiles = profiles;
+      if (_identityProfileId != null &&
+          !profiles.any((profile) => profile.id == _identityProfileId)) {
+        _identityProfileId = null;
+      }
+    });
   }
 
   @override
@@ -170,6 +217,9 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _proxyPortController.dispose();
     _proxyUsernameController.dispose();
     _proxyPasswordController.dispose();
+    _clientCertController.dispose();
+    _clientKeyController.dispose();
+    _clientKeyPassphraseController.dispose();
     super.dispose();
   }
 
@@ -268,6 +318,68 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                     helperText: 'Used when the primary nick is already taken.',
                   ),
                   validator: _requiredValidator,
+                ),
+                const SizedBox(height: 16),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Client certificate (SASL EXTERNAL)'),
+                  subtitle: const Text(
+                    'Present a stored client cert in the TLS handshake.',
+                  ),
+                  value: _useClientCertificate,
+                  onChanged: (value) =>
+                      setState(() => _useClientCertificate = value),
+                ),
+                if (_useClientCertificate) ...[
+                  TextFormField(
+                    controller: _clientCertController,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Client certificate PEM',
+                      helperText:
+                          'Paste -----BEGIN CERTIFICATE-----; leave empty to keep the stored one.',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _clientKeyController,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Private key PEM',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _clientKeyPassphraseController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Private key passphrase (optional)',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                DropdownButtonFormField<String?>(
+                  initialValue: _identityProfileId,
+                  decoration: const InputDecoration(
+                    labelText: 'Identity profile',
+                    helperText:
+                        'Attach a saved identity; overrides nick/realname on connect.',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      child: Text('Use this network\'s identity'),
+                    ),
+                    for (final profile in _profiles)
+                      if (profile.id != IdentityProfile.defaultProfileId)
+                        DropdownMenuItem<String?>(
+                          value: profile.id,
+                          child: Text('${profile.name} (${profile.nick})'),
+                        ),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => _identityProfileId = value),
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
@@ -550,6 +662,11 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
             : null,
         proxyUsername: _optionalText(_proxyUsernameController.text),
         proxyPassword: _proxyPasswordController.text,
+        identityProfileId: _identityProfileId,
+        useClientCertificate: _useClientCertificate,
+        clientCertificatePem: _clientCertController.text,
+        clientPrivateKeyPem: _clientKeyController.text,
+        clientKeyPassphrase: _clientKeyPassphraseController.text,
       ),
     );
   }

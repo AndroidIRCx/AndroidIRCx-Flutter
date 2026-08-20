@@ -5,6 +5,7 @@ import 'package:androidircx/app/app.dart';
 import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
+import 'package:androidircx/core/presets/server_preset_service.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/core/storage/in_memory_network_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_network_repository.dart';
@@ -242,6 +243,46 @@ void main() {
     expect(find.text('Active nick: AndroidIRCX'), findsOneWidget);
     expect(find.text('Status: Idle'), findsOneWidget);
     expect(find.textContaining('Activity:'), findsNothing);
+
+    registry.dispose();
+    controller.dispose();
+  });
+
+  testWidgets('adds a network from the server directory', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final controller = NetworkListController(
+      repository: InMemoryNetworkRepository(const []),
+    );
+    final registry = SessionRegistry();
+    await controller.load();
+
+    const payload =
+        '{"data":[{"network_name":"Libera","average_users":30000,'
+        '"server_list":[{"hostname":"irc.libera.chat","port":6697,'
+        '"use_ssl":true}]}]}';
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NetworkListScreen(
+          controller: controller,
+          sessionRegistry: registry,
+          presetService: ServerPresetService(httpGet: (_) async => payload),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Browse server directory'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Server directory'), findsOneWidget);
+    expect(find.text('Libera'), findsOneWidget);
+
+    await tester.tap(find.text('Libera'));
+    await tester.pumpAndSettle();
+
+    expect(controller.networks.any((network) => network.name == 'Libera'),
+        isTrue);
 
     registry.dispose();
     controller.dispose();

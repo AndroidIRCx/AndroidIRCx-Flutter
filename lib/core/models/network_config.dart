@@ -23,6 +23,7 @@ class NetworkConfig {
     this.saslAccount,
     this.saslPassword,
     this.saslMechanism = SaslMechanism.plain,
+    this.useClientCertificate = false,
     this.serviceAuthFallback = ServiceAuthFallback.disabled,
     this.serviceAuthTarget = 'NickServ',
     this.autoConnect = false,
@@ -35,6 +36,7 @@ class NetworkConfig {
     this.proxyPassword,
     this.profileLabel,
     this.profileGroup,
+    this.identityProfileId,
   });
 
   final String id;
@@ -52,6 +54,11 @@ class NetworkConfig {
   final String? saslAccount;
   final String? saslPassword;
   final SaslMechanism saslMechanism;
+
+  /// Whether this network authenticates with a stored client certificate
+  /// (SASL EXTERNAL / CertFP). The certificate and private key themselves live
+  /// in secure storage, never in this config.
+  final bool useClientCertificate;
   final ServiceAuthFallback serviceAuthFallback;
   final String serviceAuthTarget;
   final bool autoConnect;
@@ -64,6 +71,10 @@ class NetworkConfig {
   final String? proxyPassword;
   final String? profileLabel;
   final String? profileGroup;
+
+  /// Optional id of the attached [IdentityProfile] whose nick/realname/ident/
+  /// SASL account override this network's identity on connect.
+  final String? identityProfileId;
 
   NetworkConfig copyWith({
     String? id,
@@ -81,6 +92,7 @@ class NetworkConfig {
     String? saslAccount,
     String? saslPassword,
     SaslMechanism? saslMechanism,
+    bool? useClientCertificate,
     ServiceAuthFallback? serviceAuthFallback,
     String? serviceAuthTarget,
     bool? autoConnect,
@@ -93,6 +105,7 @@ class NetworkConfig {
     String? proxyPassword,
     String? profileLabel,
     String? profileGroup,
+    String? identityProfileId,
   }) {
     return NetworkConfig(
       id: id ?? this.id,
@@ -110,6 +123,7 @@ class NetworkConfig {
       saslAccount: saslAccount ?? this.saslAccount,
       saslPassword: saslPassword ?? this.saslPassword,
       saslMechanism: saslMechanism ?? this.saslMechanism,
+      useClientCertificate: useClientCertificate ?? this.useClientCertificate,
       serviceAuthFallback: serviceAuthFallback ?? this.serviceAuthFallback,
       serviceAuthTarget: serviceAuthTarget ?? this.serviceAuthTarget,
       autoConnect: autoConnect ?? this.autoConnect,
@@ -122,6 +136,7 @@ class NetworkConfig {
       proxyPassword: proxyPassword ?? this.proxyPassword,
       profileLabel: profileLabel ?? this.profileLabel,
       profileGroup: profileGroup ?? this.profileGroup,
+      identityProfileId: identityProfileId ?? this.identityProfileId,
     );
   }
 
@@ -142,6 +157,7 @@ class NetworkConfig {
       'saslAccount': saslAccount,
       'saslPassword': saslPassword,
       'saslMechanism': saslMechanism.name,
+      'useClientCertificate': useClientCertificate,
       'serviceAuthFallback': serviceAuthFallback.name,
       'serviceAuthTarget': serviceAuthTarget,
       'autoConnect': autoConnect,
@@ -154,6 +170,7 @@ class NetworkConfig {
       'proxyPassword': proxyPassword,
       'profileLabel': profileLabel,
       'profileGroup': profileGroup,
+      'identityProfileId': identityProfileId,
     };
   }
 
@@ -187,6 +204,7 @@ class NetworkConfig {
         json['saslMechanism'],
         SaslMechanism.plain,
       ),
+      useClientCertificate: (json['useClientCertificate'] as bool?) ?? false,
       serviceAuthFallback: _enumByName(
         ServiceAuthFallback.values,
         json['serviceAuthFallback'],
@@ -208,6 +226,7 @@ class NetworkConfig {
       proxyPassword: json['proxyPassword'] as String?,
       profileLabel: _nonEmptyString(json['profileLabel']),
       profileGroup: _nonEmptyString(json['profileGroup']),
+      identityProfileId: _nonEmptyString(json['identityProfileId']),
     );
   }
 

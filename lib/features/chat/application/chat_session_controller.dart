@@ -15,6 +15,8 @@ import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
+import 'package:androidircx/core/security/certificate_store.dart';
+import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
 import 'package:androidircx/irc/parser/ctcp.dart';
 import 'package:androidircx/irc/parser/dcc_parser.dart';
@@ -42,6 +44,8 @@ class ComposerAutocompleteSuggestion {
   final int tokenEnd;
 }
 
+enum ChannelUserAction { whois, query, op, deop, voice, devoice, kick, ban }
+
 class ChatSessionController extends ChangeNotifier {
   static const _ctcpVersionReply = 'AndroidIRCx Flutter 1.0.0';
   static const _ctcpClientInfoReply =
@@ -63,7 +67,11 @@ class ChatSessionController extends ChangeNotifier {
     Duration reconnectMaxDelay = const Duration(seconds: 60),
     double reconnectJitterFactor = 0.2,
     double Function()? reconnectJitterSampler,
-  }) : _ircService = ircService ?? IrcService(),
+  }) : _ircService =
+           ircService ??
+           IrcService(
+             certificateStore: CertificateStore(FlutterSecureSecretStorage()),
+           ),
        _dccService = dccService ?? DccService(),
        _persistence = persistence ?? ChatSessionPersistence(),
        _settingsRepository =
@@ -1353,6 +1361,58 @@ class ChatSessionController extends ChangeNotifier {
     await start();
   }
 
+  /// Announces a detected bouncer (ZNC/soju) once registration completes so the
+  /// user knows playback/network-management semantics apply. Silent on generic
+  /// servers.
+  void _announceBouncerCompatibility() {
+    final report = detectBouncerCompatibility(
+      availableCapabilities: _ircService.availableCapabilities,
+      enabledCapabilities: _ircService.enabledCapabilities,
+      serverName: network.host,
+      networkName: _serverSupport.networkName,
+    );
+    if (report.family == IrcBouncerFamily.generic) {
+      return;
+    }
+    _appendMessage(
+      tabId: _serverTabId(network.id),
+      sender: '*',
+      content: 'Bouncer: ${report.summary}',
+      kind: IrcMessageKind.system,
+    );
+  }
+
+  /// Runs a user-list action against [nick] using the existing command paths so
+  /// op/kick/ban resolve against the currently active channel and WHOIS/query
+  /// behave exactly as their typed slash commands do.
+  Future<void> performChannelUserAction(
+    String nick,
+    ChannelUserAction action,
+  ) async {
+    final bare = _stripModePrefix(nick).trim();
+    if (bare.isEmpty) {
+      return;
+    }
+    switch (action) {
+      case ChannelUserAction.whois:
+        await handleComposerSubmit('/whois $bare');
+      case ChannelUserAction.query:
+        await handleComposerSubmit('/query $bare');
+      case ChannelUserAction.op:
+        await handleComposerSubmit('/op $bare');
+      case ChannelUserAction.deop:
+        await handleComposerSubmit('/deop $bare');
+      case ChannelUserAction.voice:
+        await handleComposerSubmit('/voice $bare');
+      case ChannelUserAction.devoice:
+        await handleComposerSubmit('/devoice $bare');
+      case ChannelUserAction.kick:
+        await handleComposerSubmit('/kick $bare');
+      case ChannelUserAction.ban:
+        await handleComposerSubmit('/ban $bare');
+    }
+  }
+
   Future<void> handleNetworkAvailabilityChanged(bool isOnline) async {
     if (_isDisposed || _isNetworkAvailable == isOnline) {
       return;
@@ -1718,6 +1778,10 @@ class ChatSessionController extends ChangeNotifier {
     _reconnectTimer = null;
     _pendingReconnectDelay = null;
   }
+
+  final List<String> _ignoreMasks = <String>[];
+  final List<String> _messageFilters = <String>[];
+  final Map<String, Timer> _commandTimers = <String, Timer>{};
 
   Future<void> _handleSlashCommand(String commandLine) async {
     final parts = commandLine.split(' ');
@@ -2326,6 +2390,61 @@ class ChatSessionController extends ChangeNotifier {
         }
         closeTab(activeTab.id);
         return;
+      case 'echo':
+        _appendMessage(
+          tabId: activeTab.id,
+          sender: rest.isEmpty ? 'error' : '*',
+          content: rest.isEmpty ? 'Usage: /echo <message>' : rest,
+          kind: IrcMessageKind.system,
+        );
+        unawaited(_persistState());
+        notifyListeners();
+        return;
+      case 'help':
+        _handleHelpCommand(rest);
+        return;
+      case 'ignore':
+        _handleIgnoreCommand(rest);
+        return;
+      case 'unignore':
+        _handleUnignoreCommand(rest);
+        return;
+      case 'amsg':
+        await _handleAllChannelsMessage(rest, asAction: false);
+        return;
+      case 'ame':
+        await _handleAllChannelsMessage(rest, asAction: true);
+        return;
+      case 'dns':
+        await _handleDnsCommand(rest);
+        return;
+      case 'clones':
+      case 'detectclones':
+      case 'clonesdetect':
+        _handleClonesCommand(rest);
+        return;
+      case 'reconnect':
+        _appendMessage(
+          tabId: activeTab.id,
+          sender: '*',
+          content: 'Reconnecting to ${network.name}…',
+          kind: IrcMessageKind.system,
+        );
+        notifyListeners();
+        await reconnectNow();
+        return;
+      case 'filter':
+        _handleFilterCommand(rest);
+        return;
+      case 'unfilter':
+        _handleUnfilterCommand(rest);
+        return;
+      case 'window':
+        await _handleWindowCommand(rest);
+        return;
+      case 'timer':
+        _handleTimerCommand(rest);
+        return;
       case 'quit':
       case 'disconnect':
         await _ircService.disconnect(rest.isEmpty ? null : rest);
@@ -2334,6 +2453,509 @@ class ChatSessionController extends ChangeNotifier {
         await _ircService.sendRaw(commandLine);
         return;
     }
+  }
+
+  void _handleHelpCommand(String rest) {
+    final requested = rest.trim();
+    if (requested.isNotEmpty) {
+      final name = requested.split(RegExp(r'\s+')).first.toLowerCase();
+      final command = _commandService.getCommand(name);
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: command == null ? 'error' : '*',
+        content: command == null
+            ? 'No help available for /$name'
+            : 'Help /${command.name}: ${command.usage} — ${command.description}',
+        kind: IrcMessageKind.system,
+      );
+    } else {
+      final names =
+          _commandService.commands.map((command) => '/${command.name}').join(' ');
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: 'Commands: $names',
+        kind: IrcMessageKind.system,
+      );
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: 'Use /help <command> for details.',
+        kind: IrcMessageKind.system,
+      );
+    }
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  void _handleIgnoreCommand(String rest) {
+    final mask = rest.trim();
+    if (mask.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: _ignoreMasks.isEmpty
+            ? 'Ignore list is empty.'
+            : 'Ignoring: ${_ignoreMasks.join(', ')}',
+        kind: IrcMessageKind.system,
+      );
+    } else {
+      final normalized = mask.toLowerCase();
+      final alreadyIgnored = _ignoreMasks.contains(normalized);
+      if (!alreadyIgnored) {
+        _ignoreMasks.add(normalized);
+      }
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: alreadyIgnored ? 'Already ignoring $mask' : 'Now ignoring $mask',
+        kind: IrcMessageKind.system,
+      );
+    }
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  void _handleUnignoreCommand(String rest) {
+    final mask = rest.trim();
+    if (mask.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'Usage: /unignore <mask>',
+        kind: IrcMessageKind.system,
+      );
+    } else {
+      final removed = _ignoreMasks.remove(mask.toLowerCase());
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: removed ? 'No longer ignoring $mask' : 'Not ignoring $mask',
+        kind: IrcMessageKind.system,
+      );
+    }
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  Future<void> _handleAllChannelsMessage(
+    String rest, {
+    required bool asAction,
+  }) async {
+    final text = rest.trim();
+    if (text.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: asAction ? 'Usage: /ame <action>' : 'Usage: /amsg <message>',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    final channelTabs = tabs
+        .where((tab) => tab.type == ChatTabType.channel)
+        .toList(growable: false);
+    if (channelTabs.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'No channels joined for this network.',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    final echoEnabled =
+        _ircService.enabledCapabilities.contains('echo-message');
+    for (final tab in channelTabs) {
+      if (asAction) {
+        await _ircService.sendAction(target: tab.name, text: text);
+      } else {
+        await _ircService.sendPrivmsg(target: tab.name, text: text);
+      }
+      if (!echoEnabled) {
+        _appendMessage(
+          tabId: tab.id,
+          sender: _ircService.currentNick ?? network.nickname,
+          content: asAction ? '• $text' : text,
+          isOwn: true,
+        );
+      }
+    }
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  Future<void> _handleDnsCommand(String rest) async {
+    final nick = rest.trim().isEmpty
+        ? ''
+        : rest.trim().split(RegExp(r'\s+')).first;
+    if (nick.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'Usage: /dns <nick>',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    final host = _nickHosts[nick.toLowerCase()];
+    if (host != null && host.isNotEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: '$nick resolves to $host',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+      return;
+    }
+
+    _appendMessage(
+      tabId: activeTab.id,
+      sender: '*',
+      content: 'Looking up host for $nick…',
+      kind: IrcMessageKind.system,
+    );
+    notifyListeners();
+    await _ircService.sendRaw('USERHOST $nick');
+  }
+
+  void _handleClonesCommand(String rest) {
+    final requested = rest.trim().isEmpty
+        ? (activeTab.type == ChatTabType.channel ? activeTab.name : null)
+        : rest.trim().split(RegExp(r'\s+')).first;
+    if (requested == null || !_isChannelName(requested)) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'Usage: /clones <channel>',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    ChatTab? channelTab;
+    for (final tab in tabs) {
+      if (tab.type == ChatTabType.channel &&
+          tab.name.toLowerCase() == requested.toLowerCase()) {
+        channelTab = tab;
+        break;
+      }
+    }
+    final users = channelTab == null ? null : _channelUsers[channelTab.id];
+    if (users == null || users.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: 'No known users to scan in $requested',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    final byHost = <String, List<String>>{};
+    for (final entry in users) {
+      final bare = _stripModePrefix(entry);
+      final host = _nickHosts[bare.toLowerCase()];
+      if (host == null || host.isEmpty) {
+        continue;
+      }
+      byHost.putIfAbsent(host, () => <String>[]).add(bare);
+    }
+    final clones = byHost.entries.where((entry) => entry.value.length > 1).toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+
+    if (clones.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: 'No clones detected in $requested',
+        kind: IrcMessageKind.system,
+      );
+    } else {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: 'Clones detected in $requested:',
+        kind: IrcMessageKind.system,
+      );
+      for (final entry in clones) {
+        _appendMessage(
+          tabId: activeTab.id,
+          sender: '*',
+          content: '  ${entry.key}: ${(entry.value..sort()).join(', ')}',
+          kind: IrcMessageKind.system,
+        );
+      }
+    }
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  static String _stripModePrefix(String nick) {
+    const prefixes = '@+%~&';
+    var index = 0;
+    while (index < nick.length && prefixes.contains(nick[index])) {
+      index++;
+    }
+    return nick.substring(index);
+  }
+
+  /// Whether an incoming frame comes from a sender matched by the ignore list.
+  ///
+  /// Masks may be nick-only (matched against the sender nick) or full
+  /// `nick!user@host` globs with `*`/`?` wildcards. Self-echo is never ignored.
+  bool _shouldIgnoreSender(IrcMessageFrame frame) {
+    if (_ignoreMasks.isEmpty || _isSelfEcho(frame.senderNick)) {
+      return false;
+    }
+    for (final mask in _ignoreMasks) {
+      if (_matchesIgnoreMask(mask, prefix: frame.prefix, nick: frame.senderNick)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static bool _matchesIgnoreMask(
+    String mask, {
+    String? prefix,
+    String? nick,
+  }) {
+    final hasHostMask = mask.contains('!') || mask.contains('@');
+    final target = hasHostMask ? (prefix ?? nick) : (nick ?? prefix);
+    if (target == null || target.isEmpty) {
+      return false;
+    }
+    return _globToRegExp(mask).hasMatch(target);
+  }
+
+  static RegExp _globToRegExp(String glob) {
+    final buffer = StringBuffer('^');
+    for (final rune in glob.runes) {
+      final char = String.fromCharCode(rune);
+      if (char == '*') {
+        buffer.write('.*');
+      } else if (char == '?') {
+        buffer.write('.');
+      } else {
+        buffer.write(RegExp.escape(char));
+      }
+    }
+    buffer.write(r'$');
+    return RegExp(buffer.toString(), caseSensitive: false);
+  }
+
+  void _handleFilterCommand(String rest) {
+    final trimmed = rest.trim();
+    // `-g` (global) is accepted for RN parity; filtering here is per-session.
+    final text = trimmed.startsWith('-g') ? trimmed.substring(2).trim() : trimmed;
+    if (text.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: _messageFilters.isEmpty
+            ? 'No message filters set.'
+            : 'Filtering: ${_messageFilters.join(', ')}',
+        kind: IrcMessageKind.system,
+      );
+    } else {
+      final normalized = text.toLowerCase();
+      final already = _messageFilters.contains(normalized);
+      if (!already) {
+        _messageFilters.add(normalized);
+      }
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: already
+            ? 'Already filtering "$text"'
+            : 'Now filtering messages containing "$text"',
+        kind: IrcMessageKind.system,
+      );
+    }
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  void _handleUnfilterCommand(String rest) {
+    final text = rest.trim();
+    if (text.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'Usage: /unfilter <text>',
+        kind: IrcMessageKind.system,
+      );
+    } else {
+      final removed = _messageFilters.remove(text.toLowerCase());
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content:
+            removed ? 'No longer filtering "$text"' : 'Not filtering "$text"',
+        kind: IrcMessageKind.system,
+      );
+    }
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  Future<void> _handleWindowCommand(String rest) async {
+    final parts = rest
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .toList(growable: false);
+    if (parts.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'Usage: /window [-a] <name>',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    if (parts.first == '-a') {
+      if (parts.length < 2) {
+        _appendMessage(
+          tabId: activeTab.id,
+          sender: 'error',
+          content: 'Usage: /window -a <name>',
+          kind: IrcMessageKind.system,
+        );
+        notifyListeners();
+        return;
+      }
+      final name = parts[1];
+      ChatTab? match;
+      for (final tab in tabs) {
+        if (tab.name.toLowerCase() == name.toLowerCase()) {
+          match = tab;
+          break;
+        }
+      }
+      if (match == null) {
+        _appendMessage(
+          tabId: activeTab.id,
+          sender: 'error',
+          content: 'No window named $name',
+          kind: IrcMessageKind.system,
+        );
+        notifyListeners();
+        return;
+      }
+      selectTab(match.id);
+      return;
+    }
+
+    final name = parts.first;
+    if (_isChannelName(name)) {
+      await joinChannel(JoinChannelRequest(channel: name));
+      return;
+    }
+    final tab = _ensureQueryTab(name);
+    _activeTabId = tab.id;
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  void _handleTimerCommand(String rest) {
+    final parts = rest
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .toList(growable: false);
+
+    if (parts.length == 2 && parts[1].toLowerCase() == 'off') {
+      final name = parts[0];
+      final cancelled = _commandTimers.remove(name);
+      cancelled?.cancel();
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: cancelled == null ? 'error' : '*',
+        content: cancelled == null
+            ? 'No timer named $name'
+            : 'Timer "$name" cancelled',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    if (parts.length < 4) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'Usage: /timer <name> <delay_ms> <repetitions> <command>',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    final name = parts[0];
+    final delayMs = int.tryParse(parts[1]);
+    final repetitions = int.tryParse(parts[2]);
+    final command = parts.skip(3).join(' ');
+    if (delayMs == null || delayMs <= 0 || repetitions == null || repetitions < 0) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'Usage: /timer <name> <delay_ms> <repetitions> <command>',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    _commandTimers.remove(name)?.cancel();
+    var remaining = repetitions;
+    _commandTimers[name] = Timer.periodic(
+      Duration(milliseconds: delayMs),
+      (timer) {
+        unawaited(handleComposerSubmit(command));
+        if (repetitions != 0) {
+          remaining--;
+          if (remaining <= 0) {
+            timer.cancel();
+            _commandTimers.remove(name);
+          }
+        }
+      },
+    );
+    _appendMessage(
+      tabId: activeTab.id,
+      sender: '*',
+      content:
+          'Timer "$name" set: ${delayMs}ms x ${repetitions == 0 ? '∞' : repetitions} → $command',
+      kind: IrcMessageKind.system,
+    );
+    notifyListeners();
+  }
+
+  bool _shouldFilterContent(String content) {
+    if (_messageFilters.isEmpty) {
+      return false;
+    }
+    final lower = content.toLowerCase();
+    for (final filter in _messageFilters) {
+      if (lower.contains(filter)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Future<void> _sendRegisteredRawSlashCommand(String commandLine) async {
@@ -2384,6 +3006,7 @@ class ChatSessionController extends ChangeNotifier {
         );
         if (frame.command == '001') {
           unawaited(_sendServiceAuthFallbackIfNeeded());
+          _announceBouncerCompatibility();
         }
         if (frame.command == '376' || frame.command == '422') {
           unawaited(_runPostRegistrationActions());
@@ -3014,6 +3637,9 @@ class ChatSessionController extends ChangeNotifier {
     if (target == null || content == null) {
       return;
     }
+    if (_shouldIgnoreSender(frame) || _shouldFilterContent(content)) {
+      return;
+    }
 
     _rememberFrameSenderState(frame);
     final contextualTarget = _messageContextTarget(target, frame.tags);
@@ -3048,6 +3674,9 @@ class ChatSessionController extends ChangeNotifier {
     final target = _firstOrNull(frame.params);
     final content = frame.trailing;
     if (target == null || content == null) {
+      return;
+    }
+    if (_shouldIgnoreSender(frame) || _shouldFilterContent(content)) {
       return;
     }
 
@@ -5329,6 +5958,10 @@ class ChatSessionController extends ChangeNotifier {
   void dispose() {
     _isDisposed = true;
     _cancelReconnect();
+    for (final timer in _commandTimers.values) {
+      timer.cancel();
+    }
+    _commandTimers.clear();
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }

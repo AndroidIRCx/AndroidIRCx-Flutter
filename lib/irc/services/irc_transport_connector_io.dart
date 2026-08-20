@@ -4,10 +4,29 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/security/certificate_store.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
 
-Future<IrcTransport> connectDefaultTransport(NetworkConfig network) {
-  return SocketIrcTransport.connect(network);
+Future<IrcTransport> connectDefaultTransport(
+  NetworkConfig network, {
+  ClientCertificate? clientCertificate,
+}) {
+  final context = (clientCertificate != null && network.useTls)
+      ? buildClientSecurityContext(clientCertificate)
+      : null;
+  return SocketIrcTransport.connect(network, securityContext: context);
+}
+
+/// Builds a [SecurityContext] presenting [certificate] as the client cert for
+/// SASL EXTERNAL / CertFP.
+SecurityContext buildClientSecurityContext(ClientCertificate certificate) {
+  final context = SecurityContext(withTrustedRoots: true);
+  context.useCertificateChainBytes(utf8.encode(certificate.certificatePem));
+  context.usePrivateKeyBytes(
+    utf8.encode(certificate.privateKeyPem),
+    password: certificate.privateKeyPassphrase,
+  );
+  return context;
 }
 
 class SocketIrcTransport implements IrcTransport {
@@ -46,11 +65,17 @@ class SocketIrcTransport implements IrcTransport {
   @override
   late final Stream<String> lines;
 
-  static Future<SocketIrcTransport> connect(NetworkConfig network) async {
+  static Future<SocketIrcTransport> connect(
+    NetworkConfig network, {
+    SecurityContext? securityContext,
+  }) async {
     if (network.proxyType == IrcProxyType.socks5) {
       return _connectSocks5(network);
     }
-    final socket = await _connectDirect(network);
+    final socket = await _connectDirect(
+      network,
+      securityContext: securityContext,
+    );
     return SocketIrcTransport._(socket);
   }
 
@@ -69,9 +94,16 @@ class SocketIrcTransport implements IrcTransport {
     await _socket.flush();
   }
 
-  static Future<Socket> _connectDirect(NetworkConfig network) {
+  static Future<Socket> _connectDirect(
+    NetworkConfig network, {
+    SecurityContext? securityContext,
+  }) {
     if (network.useTls) {
-      return SecureSocket.connect(network.host, network.port);
+      return SecureSocket.connect(
+        network.host,
+        network.port,
+        context: securityContext,
+      );
     }
     return Socket.connect(network.host, network.port);
   }

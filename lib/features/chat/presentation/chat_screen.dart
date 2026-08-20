@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:androidircx/app/theme/app_theme.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
@@ -226,9 +228,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                           ? null
                                           : Text(entry.details),
                                       onTap: () {
-                                        _composerController.text =
-                                            '/whois $nick';
                                         Navigator.of(context).pop();
+                                        unawaited(_showChannelUserActions(nick));
                                       },
                                     );
                                   },
@@ -490,6 +491,60 @@ class _ChatScreenState extends State<ChatScreen> {
       MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
     );
     await _controller.reloadSettings();
+  }
+
+  Future<void> _showChannelUserActions(String nick) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        Widget action(String label, IconData icon, ChannelUserAction act) {
+          return ListTile(
+            leading: Icon(icon),
+            title: Text(label),
+            onTap: () {
+              Navigator.of(sheetContext).pop();
+              unawaited(_controller.performChannelUserAction(nick, act));
+            },
+          );
+        }
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: Text(
+                  nick,
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+                subtitle: const Text('Channel user actions'),
+              ),
+              const Divider(height: 1),
+              action('WHOIS', Icons.badge_outlined, ChannelUserAction.whois),
+              action(
+                'Open query',
+                Icons.chat_bubble_outline,
+                ChannelUserAction.query,
+              ),
+              action('Op', Icons.shield_outlined, ChannelUserAction.op),
+              action(
+                'Deop',
+                Icons.remove_moderator_outlined,
+                ChannelUserAction.deop,
+              ),
+              action('Voice', Icons.volume_up_outlined, ChannelUserAction.voice),
+              action(
+                'Devoice',
+                Icons.volume_off_outlined,
+                ChannelUserAction.devoice,
+              ),
+              action('Kick', Icons.logout, ChannelUserAction.kick),
+              action('Ban', Icons.block, ChannelUserAction.ban),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _openHistoryTools() async {

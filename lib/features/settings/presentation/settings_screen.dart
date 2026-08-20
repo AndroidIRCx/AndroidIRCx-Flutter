@@ -1,16 +1,31 @@
 import 'package:androidircx/app/theme/app_theme.dart';
 import 'package:androidircx/core/models/app_settings.dart';
+import 'package:androidircx/core/presets/server_preset_service.dart';
 import 'package:androidircx/core/settings/app_settings_controller.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
+import 'package:androidircx/features/connections/application/network_list_controller.dart';
+import 'package:androidircx/features/connections/presentation/profiles_screen.dart';
+import 'package:androidircx/features/connections/presentation/server_directory_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, this.repository, this.settingsController});
+  const SettingsScreen({
+    super.key,
+    this.repository,
+    this.settingsController,
+    this.networkController,
+    this.presetService,
+  });
 
   final SettingsRepository? repository;
   final AppSettingsController? settingsController;
+
+  /// When provided, Settings surfaces a "Server directory" action that adds a
+  /// network from the online presets API.
+  final NetworkListController? networkController;
+  final ServerPresetService? presetService;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -411,6 +426,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         onTap: () => _showInfoDialog(
                           title: 'Release audit',
                           body: _releaseAuditText,
+                        ),
+                      ),
+                    ],
+                  ),
+                  _SettingsSection(
+                    title: 'Connections',
+                    children: [
+                      if (widget.networkController != null)
+                        ListTile(
+                          leading: const Icon(Icons.public),
+                          title: const Text('Server directory'),
+                          subtitle: const Text(
+                            'Add a network from the online IRC server list.',
+                          ),
+                          onTap: () => showServerDirectoryPicker(
+                            context,
+                            widget.networkController!,
+                            presetService: widget.presetService,
+                          ),
+                        ),
+                      ListTile(
+                        leading: const Icon(Icons.badge_outlined),
+                        title: const Text('Identity profiles'),
+                        subtitle: const Text(
+                          'Reusable nick/realname identities to attach to networks.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const ProfilesScreen(),
+                          ),
                         ),
                       ),
                     ],

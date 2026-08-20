@@ -13,7 +13,10 @@ enum NetworkSecretField {
   password('password'),
   saslPassword('saslPassword'),
   autoJoinChannelKeys('autoJoinChannelKeys'),
-  proxyPassword('proxyPassword');
+  proxyPassword('proxyPassword'),
+  clientCertificate('clientCertificate'),
+  clientPrivateKey('clientPrivateKey'),
+  clientKeyPassphrase('clientKeyPassphrase');
 
   const NetworkSecretField(this.jsonKey);
 

@@ -1,14 +1,22 @@
 import 'dart:math';
 
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/security/certificate_store.dart';
+import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/core/storage/network_repository.dart';
 import 'package:flutter/foundation.dart';
 
 class NetworkListController extends ChangeNotifier {
-  NetworkListController({required NetworkRepository repository})
-    : _repository = repository;
+  NetworkListController({
+    required NetworkRepository repository,
+    CertificateStore? certificateStore,
+  }) : _repository = repository,
+       _certificateStore =
+           certificateStore ??
+           CertificateStore(FlutterSecureSecretStorage());
 
   final NetworkRepository _repository;
+  final CertificateStore _certificateStore;
 
   List<NetworkConfig> _networks = const [];
   bool _isLoading = true;
@@ -48,10 +56,17 @@ class NetworkListController extends ChangeNotifier {
     int? proxyPort,
     String? proxyUsername,
     String? proxyPassword,
+    String? identityProfileId,
+    bool useClientCertificate = false,
+    String? clientCertificatePem,
+    String? clientPrivateKeyPem,
+    String? clientKeyPassphrase,
     String? networkId,
   }) async {
     final network = NetworkConfig(
       id: networkId ?? _createId(name),
+      identityProfileId: _optionalText(identityProfileId),
+      useClientCertificate: useClientCertificate,
       name: name,
       host: host,
       port: port,
@@ -84,6 +99,22 @@ class NetworkListController extends ChangeNotifier {
     );
 
     await _repository.saveNetwork(network);
+
+    final certPem = (clientCertificatePem ?? '').trim();
+    final keyPem = (clientPrivateKeyPem ?? '').trim();
+    if (useClientCertificate && certPem.isNotEmpty && keyPem.isNotEmpty) {
+      await _certificateStore.save(
+        network.id,
+        ClientCertificate(
+          certificatePem: certPem,
+          privateKeyPem: keyPem,
+          privateKeyPassphrase: (clientKeyPassphrase ?? '').trim().isEmpty
+              ? null
+              : clientKeyPassphrase,
+        ),
+      );
+    }
+
     await load();
   }
 

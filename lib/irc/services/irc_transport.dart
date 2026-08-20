@@ -1,4 +1,5 @@
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/security/certificate_store.dart';
 import 'package:androidircx/irc/services/irc_transport_connector_stub.dart'
     if (dart.library.io) 'package:androidircx/irc/services/irc_transport_connector_io.dart'
     if (dart.library.js_interop) 'package:androidircx/irc/services/irc_transport_connector_web.dart'
@@ -10,8 +11,14 @@ abstract class IrcTransport {
   Future<void> close();
 }
 
-Future<IrcTransport> defaultIrcTransportConnector(NetworkConfig network) {
-  return transport_connector.connectDefaultTransport(network);
+Future<IrcTransport> defaultIrcTransportConnector(
+  NetworkConfig network, {
+  ClientCertificate? clientCertificate,
+}) {
+  return transport_connector.connectDefaultTransport(
+    network,
+    clientCertificate: clientCertificate,
+  );
 }
 
 Uri buildWebSocketUri(NetworkConfig network) {

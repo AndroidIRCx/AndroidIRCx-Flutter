@@ -4,6 +4,7 @@ import 'dart:convert';
 
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/security/certificate_store.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
 import 'package:androidircx/irc/parser/ctcp.dart';
 import 'package:androidircx/irc/parser/irc_capability_parser.dart';
@@ -38,9 +39,11 @@ class IrcService {
     'batch',
     'bot',
     'cap-notify',
+    'chathistory',
     'chghost',
     'draft/account-registration',
     'draft/channel-rename',
+    'draft/chathistory',
     'draft/multiline',
     'draft/read-marker',
     'draft/typing',
@@ -60,6 +63,7 @@ class IrcService {
     'typing',
     'userhost-in-names',
     'utf8only',
+    'znc.in/self-message',
   };
   static const int _maxCapReqLineLength = 480;
   static const Set<String> _capSubcommands = <String>{
@@ -75,6 +79,7 @@ class IrcService {
 
   IrcService({
     IrcTransportConnector? transportConnector,
+    CertificateStore? certificateStore,
     String Function()? scramNonceGenerator,
     IrcStsPolicyStore? stsPolicyStore,
     DateTime Function()? now,
@@ -84,6 +89,7 @@ class IrcService {
     Duration sendRateWindow = const Duration(milliseconds: 100),
     int sendRateBurst = 8,
   }) : _transportConnector = transportConnector ?? defaultIrcTransportConnector,
+       _certificateStore = certificateStore,
        _scramNonceGenerator = scramNonceGenerator,
        _stsPolicyStore = stsPolicyStore ?? SharedPrefsIrcStsPolicyStore(),
        _now = now ?? DateTime.now,
@@ -98,6 +104,7 @@ class IrcService {
        );
 
   final IrcTransportConnector _transportConnector;
+  final CertificateStore? _certificateStore;
   final String Function()? _scramNonceGenerator;
   final IrcStsPolicyStore _stsPolicyStore;
   final DateTime Function() _now;
@@ -237,7 +244,7 @@ class IrcService {
 
     Future<IrcTransport>? pendingTransport;
     try {
-      pendingTransport = _transportConnector(effectiveNetwork);
+      pendingTransport = _connectTransport(effectiveNetwork);
       _transport = await _withOptionalTimeout(
         pendingTransport,
         _connectTimeout,
@@ -1168,6 +1175,22 @@ class IrcService {
     _rawEventsController.add(
       '** SASL unavailable: server does not advertise $mechanism',
     );
+  }
+
+  /// Connects the transport, presenting the network's stored client certificate
+  /// in the TLS handshake (SASL EXTERNAL / CertFP) when one is configured.
+  Future<IrcTransport> _connectTransport(NetworkConfig network) async {
+    final store = _certificateStore;
+    if (store != null && network.useClientCertificate && network.useTls) {
+      final certificate = await store.read(network.id);
+      if (certificate != null) {
+        return defaultIrcTransportConnector(
+          network,
+          clientCertificate: certificate,
+        );
+      }
+    }
+    return _transportConnector(network);
   }
 
   List<String> _selectCapabilitiesToRequest() {
