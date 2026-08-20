@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/dcc/services/dcc_service.dart';
 import 'package:androidircx/dcc/services/dcc_socket_backend.dart';
+import 'package:androidircx/irc/parser/ctcp.dart';
+import 'package:androidircx/irc/parser/dcc_parser.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeDccConnection implements DccSocketConnection {
@@ -271,6 +273,62 @@ void main() {
       }
     },
   );
+
+  test('reverse DCC SEND receives data over loopback IO sockets', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'androidircx-dcc-reverse-io-',
+    );
+    final service = DccService(downloadDirectoryPath: directory.path);
+    final offers = <String>[];
+    final session = DccSession(
+      id: 'reverse-send-io',
+      tabId: 'dcc::dbase::reverse-io',
+      peerNick: 'alice',
+      type: DccSessionType.send,
+      status: DccSessionStatus.pending,
+      direction: 'incoming',
+      filename: 'reverse-io.bin',
+      host: '127.0.0.1',
+      port: 0,
+      size: 4,
+      token: 'loopback-token',
+      isReverse: true,
+    );
+    final connected = service.sessions.firstWhere(
+      (event) => event.status == DccSessionStatus.connected,
+    );
+    final closed = service.sessions.firstWhere(
+      (event) => event.status == DccSessionStatus.closed,
+    );
+
+    await service.acceptReverseSend(session: session, onOfferReady: offers.add);
+    final offer = parseDccOffer('DCC ${parseCtcp(offers.single).args ?? ''}');
+    expect(offer, isNotNull);
+    expect(offer!.port, greaterThan(0));
+    expect(offer.token, 'loopback-token');
+
+    final socket = await Socket.connect(
+      InternetAddress.loopbackIPv4,
+      offer.port!,
+    );
+    await connected.timeout(const Duration(seconds: 3));
+    socket.add(<int>[21, 22, 23, 24]);
+    await socket.flush();
+    await socket.close();
+    final completed = await closed.timeout(const Duration(seconds: 3));
+
+    expect(completed.filePath, startsWith(directory.path));
+    expect(completed.bytesTransferred, 4);
+    expect(await File(completed.filePath!).readAsBytes(), <int>[
+      21,
+      22,
+      23,
+      24,
+    ]);
+
+    await service.dispose();
+    await directory.delete(recursive: true);
+  });
 
   test('incoming DCC SEND deletes temp file on socket failure', () async {
     final connection = _FakeDccConnection();
