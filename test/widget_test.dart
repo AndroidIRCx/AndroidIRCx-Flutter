@@ -176,6 +176,29 @@ void main() {
     expect(find.text('Connect'), findsOneWidget);
   });
 
+  testWidgets('applies saved app theme from settings repository', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(
+      AndroidIrcxApp(
+        networkRepository: SharedPrefsNetworkRepository(
+          secretStorage: InMemorySecretStorage(),
+        ),
+        settingsRepository: _FakeSettingsRepository(
+          const AppSettings(themePreset: AppThemePreset.dark),
+        ),
+        foregroundConnectionService: const NoopForegroundConnectionService(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final materialApp = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(materialApp.theme?.brightness, Brightness.dark);
+  });
+
   testWidgets('shows active sessions and auto-connect labels in network list', (
     tester,
   ) async {
@@ -286,6 +309,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-dcc-download-directory')),
+      500,
+    );
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('settings-dcc-download-directory')),
       r'C:\Downloads\IRC',
@@ -305,6 +333,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-media-download-directory')),
+      500,
+    );
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('settings-media-download-directory')),
       r'C:\Downloads\Media',
@@ -315,6 +348,54 @@ void main() {
     final settings = await SharedPrefsSettingsRepository().loadSettings();
 
     expect(settings.mediaDownloadDirectoryPath, r'C:\Downloads\Media');
+  });
+
+  testWidgets('settings saves appearance and theme options', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('settings-theme-preset')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Custom').last);
+    await tester.pumpAndSettle();
+
+    const customJson =
+        '{"brightness":"dark","primary":"#336699","messageDcc":"#224433"}';
+    await tester.enterText(
+      find.byKey(const Key('settings-custom-theme-json')),
+      customJson,
+    );
+    await tester.tap(find.byTooltip('Save custom theme'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-message-density')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Compact').last);
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(ListView), const Offset(0, -350));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('settings-monospace-messages')).first,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(ListView), const Offset(0, -220));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('settings-nick-color-mode')).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Vivid').last);
+    await tester.pumpAndSettle();
+
+    final settings = await SharedPrefsSettingsRepository().loadSettings();
+    expect(settings.themePreset, AppThemePreset.custom);
+    expect(settings.customThemeJson, customJson);
+    expect(settings.messageDensity, MessageDensity.compact);
+    expect(settings.monospaceMessages, isTrue);
+    expect(settings.nickColorMode, NickColorMode.vivid);
   });
 
   testWidgets('shows IRC services quick actions on the server tab', (
@@ -484,6 +565,43 @@ void main() {
     expect(find.text('Older 50'), findsOneWidget);
     expect(find.text('Newer 50'), findsOneWidget);
     expect(find.text('Around latest'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('shows unread badge for inactive tabs in chat drawer', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    transport.emit(':alice!user@example PRIVMSG #room :one');
+    await tester.pump();
+    transport.emit(':bob!user@example PRIVMSG #room :two');
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('#room'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
 
     controller.dispose();
   });

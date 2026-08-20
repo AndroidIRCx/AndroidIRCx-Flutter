@@ -542,6 +542,12 @@ void main() {
           showAttachmentPreviews: false,
           dccDownloadDirectoryPath: r'C:\Downloads\IRC',
           mediaDownloadDirectoryPath: r'C:\Downloads\Media',
+          themePreset: AppThemePreset.dark,
+          customThemeJson: '{"primary":"#123456"}',
+          messageFontScale: 1.2,
+          messageDensity: MessageDensity.compact,
+          monospaceMessages: true,
+          nickColorMode: NickColorMode.vivid,
         ),
       );
       final settings = await repository.loadSettings();
@@ -552,6 +558,12 @@ void main() {
       expect(settings.showAttachmentPreviews, isFalse);
       expect(settings.dccDownloadDirectoryPath, r'C:\Downloads\IRC');
       expect(settings.mediaDownloadDirectoryPath, r'C:\Downloads\Media');
+      expect(settings.themePreset, AppThemePreset.dark);
+      expect(settings.customThemeJson, '{"primary":"#123456"}');
+      expect(settings.messageFontScale, 1.2);
+      expect(settings.messageDensity, MessageDensity.compact);
+      expect(settings.monospaceMessages, isTrue);
+      expect(settings.nickColorMode, NickColorMode.vivid);
     });
 
     test('chat session persistence saves tabs and history', () async {
@@ -561,6 +573,8 @@ void main() {
         name: '#flutter',
         type: ChatTabType.channel,
         networkId: 'dbase',
+        hasActivity: true,
+        unreadCount: 3,
       );
       final message = IrcMessage(
         id: '1',
@@ -591,6 +605,8 @@ void main() {
 
       expect(snapshot, isNotNull);
       expect(snapshot!.tabs.single.name, '#flutter');
+      expect(snapshot.tabs.single.hasActivity, isTrue);
+      expect(snapshot.tabs.single.unreadCount, 3);
       expect(snapshot.activeTabId, tab.id);
       expect(snapshot.messagesByTab[tab.id]!.single.content, 'hello');
       expect(snapshot.messagesByTab[tab.id]!.single.attachments, hasLength(1));

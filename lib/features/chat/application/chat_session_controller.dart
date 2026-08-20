@@ -5139,7 +5139,7 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    _setTabActivity(tabId, true);
+    _setTabActivity(tabId, true, incrementUnread: true);
   }
 
   void _incrementBatchCount(String? batchTag) {
@@ -5159,11 +5159,23 @@ class ChatSessionController extends ChangeNotifier {
     );
   }
 
-  void _setTabActivity(String tabId, bool hasActivity) {
+  void _setTabActivity(
+    String tabId,
+    bool hasActivity, {
+    bool incrementUnread = false,
+  }) {
     _tabs = _tabs
         .map(
-          (tab) =>
-              tab.id == tabId ? tab.copyWith(hasActivity: hasActivity) : tab,
+          (tab) => tab.id == tabId
+              ? tab.copyWith(
+                  hasActivity: hasActivity,
+                  unreadCount: hasActivity
+                      ? (incrementUnread
+                            ? tab.unreadCount + 1
+                            : tab.unreadCount)
+                      : 0,
+                )
+              : tab,
         )
         .toList(growable: false);
   }

@@ -586,6 +586,42 @@ void main() {
     controller.dispose();
   });
 
+  test(
+    'tracks unread counts for inactive tabs and clears on selection',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      transport.emit(':alice!user@example PRIVMSG #room :one');
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(':bob!user@example PRIVMSG #room :two');
+      await Future<void>.delayed(Duration.zero);
+
+      var roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      expect(roomTab.hasActivity, isTrue);
+      expect(roomTab.unreadCount, 2);
+
+      controller.selectTab(roomTab.id);
+      roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      expect(roomTab.hasActivity, isFalse);
+      expect(roomTab.unreadCount, 0);
+
+      controller.dispose();
+    },
+  );
+
   test('sends IRC service commands through private messages', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);

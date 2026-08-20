@@ -1,3 +1,4 @@
+import 'package:androidircx/app/theme/app_theme.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/dcc_session.dart';
@@ -169,18 +170,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               Icon(_iconForTab(tab.type)),
                               if (tab.hasActivity)
                                 Positioned(
-                                  right: -2,
-                                  top: -2,
-                                  child: Container(
-                                    width: 10,
-                                    height: 10,
-                                    decoration: BoxDecoration(
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.primary,
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
+                                  right: -10,
+                                  top: -8,
+                                  child: _UnreadBadge(count: tab.unreadCount),
                                 ),
                             ],
                           ),
@@ -1033,6 +1025,7 @@ class _DccSessionBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final ircTheme = context.ircUiTheme;
     final limitationNote = _dccLimitationNote(session);
     final subtitle = switch (session.type) {
       DccSessionType.chat =>
@@ -1047,8 +1040,9 @@ class _DccSessionBanner extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
+        color: ircTheme.messageDcc,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: ircTheme.messageBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1421,20 +1415,50 @@ class _ChannelTopicBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ircTheme = context.ircUiTheme;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: ircTheme.topic,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+        border: Border.all(color: ircTheme.messageBorder),
       ),
       child: _IrcFormattedText(
         topic,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
         baseStyle: Theme.of(context).textTheme.bodySmall,
+      ),
+    );
+  }
+}
+
+class _UnreadBadge extends StatelessWidget {
+  const _UnreadBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = count > 99 ? '99+' : count.clamp(1, 99).toString();
+    return Container(
+      constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 5),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Theme.of(context).colorScheme.surface),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Theme.of(context).colorScheme.onPrimary,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -1531,8 +1555,25 @@ class _MessageList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ircTheme = context.ircUiTheme;
     if (messages.isEmpty) {
-      return const Center(child: Text('No messages yet.'));
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.forum_outlined,
+              size: 40,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'No messages yet.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      );
     }
 
     return ListView.builder(
@@ -1548,20 +1589,18 @@ class _MessageList extends StatelessWidget {
         final reactions = resolveReactions(message);
         final bubbleColor = switch (message.kind) {
           IrcMessageKind.system ||
-          IrcMessageKind.event => const Color(0xFFF6F8F1),
-          IrcMessageKind.error => const Color(0xFFFFEBEE),
-          IrcMessageKind.dcc => const Color(0xFFEAF7F3),
-          IrcMessageKind.raw => const Color(0xFFF7F7FA),
+          IrcMessageKind.event => ircTheme.messageSystem,
+          IrcMessageKind.error => ircTheme.messageError,
+          IrcMessageKind.dcc => ircTheme.messageDcc,
+          IrcMessageKind.raw => ircTheme.messageRaw,
+          IrcMessageKind.media => ircTheme.messageMedia,
           IrcMessageKind.chat ||
           IrcMessageKind.action ||
-          IrcMessageKind.notice ||
-          IrcMessageKind.media =>
-            message.isOwn
-                ? Theme.of(context).colorScheme.primaryContainer
-                : Colors.white,
+          IrcMessageKind.notice =>
+            message.isOwn ? ircTheme.messageOwn : ircTheme.messageOther,
         };
         return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
+          padding: EdgeInsets.only(bottom: ircTheme.messageSpacing),
           child: Column(
             crossAxisAlignment: align,
             children: [
@@ -1570,7 +1609,11 @@ class _MessageList extends StatelessWidget {
                 children: [
                   Text(
                     message.sender,
-                    style: Theme.of(context).textTheme.labelMedium,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color:
+                          ircTheme.nickColorFor(message.sender) ??
+                          Theme.of(context).textTheme.labelMedium?.color,
+                    ),
                   ),
                   if (message.isPlayback) ...[
                     const SizedBox(width: 8),
@@ -1600,15 +1643,10 @@ class _MessageList extends StatelessWidget {
                         ? bubbleColor.withValues(alpha: 0.88)
                         : bubbleColor,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: Colors.black.withValues(alpha: 0.06),
-                    ),
+                    border: Border.all(color: ircTheme.messageBorder),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
+                    padding: ircTheme.messagePadding,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -1627,12 +1665,19 @@ class _MessageList extends StatelessWidget {
                               ? Theme.of(
                                   context,
                                 ).textTheme.bodyMedium?.copyWith(
+                                  fontSize: ircTheme.messageFontSize,
+                                  fontFamily: ircTheme.messageFontFamily,
                                   fontStyle: FontStyle.italic,
                                   color: Theme.of(
                                     context,
                                   ).colorScheme.onSurfaceVariant,
                                 )
-                              : Theme.of(context).textTheme.bodyMedium,
+                              : Theme.of(
+                                  context,
+                                ).textTheme.bodyMedium?.copyWith(
+                                  fontSize: ircTheme.messageFontSize,
+                                  fontFamily: ircTheme.messageFontFamily,
+                                ),
                         ),
                         if (showAttachmentPreviews && !isRedacted)
                           _MessageAttachments(
@@ -1967,6 +2012,7 @@ class _AttachmentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final ircTheme = context.ircUiTheme;
     final url = attachment.uri;
     final isImage =
         attachment.type == IrcMessageAttachmentType.image && url != null;
@@ -2003,7 +2049,7 @@ class _AttachmentCard extends StatelessWidget {
     final canDownload = _canDownloadAttachment(attachment);
 
     return Material(
-      color: theme.colorScheme.surfaceContainerHighest,
+      color: ircTheme.attachment,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
