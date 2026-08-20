@@ -3,6 +3,7 @@ import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/identity_profile.dart';
 import 'package:androidircx/core/presets/server_preset_service.dart';
 import 'package:androidircx/core/storage/identity_profile_repository.dart';
+import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/presentation/chat_screen.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
@@ -193,7 +194,37 @@ class NetworkListScreen extends StatelessWidget {
     }
     final session = sessionRegistry.obtainSession(resolved);
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => ChatScreen(controller: session)),
+      MaterialPageRoute<void>(builder: (_) => _chatScreenFor(context, session)),
+    );
+  }
+
+  /// Builds a chat screen wired with the in-chat network switcher: it can list
+  /// all saved networks, switch between them, and jump back to this connection
+  /// manager.
+  ChatScreen _chatScreenFor(
+    BuildContext context,
+    ChatSessionController session,
+  ) {
+    return ChatScreen(
+      controller: session,
+      sessionRegistry: sessionRegistry,
+      networkController: controller,
+      onManageNetworks: () => Navigator.of(context).pop(),
+      onSwitchNetwork: (network) => _switchNetwork(context, network),
+    );
+  }
+
+  Future<void> _switchNetwork(
+    BuildContext context,
+    NetworkConfig network,
+  ) async {
+    final resolved = await _effectiveNetwork(network);
+    if (!context.mounted) {
+      return;
+    }
+    final session = sessionRegistry.obtainSession(resolved);
+    await Navigator.of(context).pushReplacement<void, void>(
+      MaterialPageRoute<void>(builder: (_) => _chatScreenFor(context, session)),
     );
   }
 

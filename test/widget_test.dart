@@ -646,6 +646,67 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('lists other networks and switches from the chat drawer', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const netA = NetworkConfig(
+      id: 'a',
+      name: 'NetA',
+      host: 'a.example',
+      port: 6697,
+      nickname: 'X',
+      altNickname: 'X_',
+    );
+    const netB = NetworkConfig(
+      id: 'b',
+      name: 'NetB',
+      host: 'b.example',
+      port: 6697,
+      nickname: 'X',
+      altNickname: 'X_',
+    );
+    final networkController = NetworkListController(
+      repository: InMemoryNetworkRepository(const [netA, netB]),
+    );
+    await networkController.load();
+    final registry = SessionRegistry();
+    final controller = ChatSessionController(
+      network: netA,
+      ircService: IrcService(transportConnector: (_) async => _FakeTransport()),
+    );
+
+    NetworkConfig? switched;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          controller: controller,
+          sessionRegistry: registry,
+          networkController: networkController,
+          onSwitchNetwork: (network) async {
+            switched = network;
+          },
+          onManageNetworks: () {},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    tester.firstState<ScaffoldState>(find.byType(Scaffold)).openDrawer();
+    await tester.pumpAndSettle();
+
+    expect(find.text('NETWORKS'), findsOneWidget);
+    expect(find.text('NetB'), findsOneWidget);
+    expect(find.text('Manage networks'), findsOneWidget);
+
+    await tester.tap(find.text('NetB'));
+    await tester.pumpAndSettle();
+    expect(switched?.id, 'b');
+
+    controller.dispose();
+    registry.dispose();
+  });
+
   testWidgets('shows and applies slash command suggestions in chat composer', (
     tester,
   ) async {

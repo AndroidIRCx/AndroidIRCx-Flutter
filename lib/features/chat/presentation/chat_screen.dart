@@ -9,6 +9,8 @@ import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/dcc/services/dcc_file_picker.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
+import 'package:androidircx/features/chat/application/session_registry.dart';
+import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
 import 'package:androidircx/irc/parser/message_content_parser.dart';
@@ -25,11 +27,29 @@ class ChatScreen extends StatefulWidget {
     required this.controller,
     this.filePicker,
     this.mediaDownloadService,
+    this.sessionRegistry,
+    this.networkController,
+    this.onSwitchNetwork,
+    this.onManageNetworks,
   });
 
   final ChatSessionController controller;
   final DccFilePicker? filePicker;
   final MediaDownloadService? mediaDownloadService;
+
+  /// Live sessions across all networks, used by the in-chat network switcher.
+  final SessionRegistry? sessionRegistry;
+
+  /// All saved networks, so the switcher can list servers you have not
+  /// connected to yet.
+  final NetworkListController? networkController;
+
+  /// Switches the chat to [network] (connecting it if needed). When null the
+  /// network switcher is hidden.
+  final Future<void> Function(NetworkConfig network)? onSwitchNetwork;
+
+  /// Opens the full connection manager (network list).
+  final VoidCallback? onManageNetworks;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -67,7 +87,11 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: _controller,
+      animation: Listenable.merge([
+        _controller,
+        if (widget.sessionRegistry != null) widget.sessionRegistry!,
+        if (widget.networkController != null) widget.networkController!,
+      ]),
       builder: (context, _) {
         final visibleMessages = _messageSearchVisible
             ? _controller.messagesForTab(
@@ -149,8 +173,34 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           drawer: Drawer(
             child: SafeArea(
-              child: Column(
+              child: ListView(
+                padding: EdgeInsets.zero,
                 children: [
+                  if (widget.onSwitchNetwork != null &&
+                      widget.networkController != null) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                      child: Text(
+                        'NETWORKS',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                    for (final network in widget.networkController!.networks)
+                      _buildNetworkSwitchTile(network),
+                    ListTile(
+                      leading: const Icon(Icons.dns_outlined),
+                      title: const Text('Manage networks'),
+                      subtitle: const Text('Add, edit, or browse servers'),
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        widget.onManageNetworks?.call();
+                      },
+                    ),
+                    const Divider(height: 1),
+                  ],
                   ListTile(
                     title: Text(_controller.network.name),
                     subtitle: Text(
@@ -158,42 +208,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const Divider(height: 1),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: _controller.tabs.length,
-                      itemBuilder: (context, index) {
-                        final tab = _controller.tabs[index];
-                        final selected = tab.id == _controller.activeTabId;
-                        return ListTile(
-                          selected: selected,
-                          leading: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              Icon(_iconForTab(tab.type)),
-                              if (tab.hasActivity)
-                                Positioned(
-                                  right: -10,
-                                  top: -8,
-                                  child: _UnreadBadge(count: tab.unreadCount),
-                                ),
-                            ],
-                          ),
-                          title: Text(tab.name),
-                          trailing: tab.type == ChatTabType.server
-                              ? null
-                              : IconButton(
-                                  onPressed: () => _controller.closeTab(tab.id),
-                                  icon: const Icon(Icons.close, size: 18),
-                                  tooltip: 'Close tab',
-                                ),
-                          onTap: () {
-                            _controller.selectTab(tab.id);
-                            Navigator.of(context).pop();
-                          },
-                        );
-                      },
-                    ),
-                  ),
+                  for (final tab in _controller.tabs)
+                    _buildTabTile(context, tab),
                 ],
               ),
             ),
@@ -613,6 +629,63 @@ class _ChatScreenState extends State<ChatScreen> {
       case ConnectionPhase.error:
         return snapshot.message ?? 'Connection error';
     }
+  }
+
+  Widget _buildNetworkSwitchTile(NetworkConfig network) {
+    final isCurrent = network.id == _controller.network.id;
+    final snapshot = widget.sessionRegistry?.connectionFor(network.id);
+    final connected = snapshot?.phase == ConnectionPhase.connected;
+    return ListTile(
+      selected: isCurrent,
+      leading: Icon(
+        connected ? Icons.check_circle : Icons.circle_outlined,
+        size: 20,
+        color: connected ? Theme.of(context).colorScheme.primary : null,
+      ),
+      title: Text(network.name),
+      subtitle: Text(
+        snapshot == null
+            ? '${network.host}:${network.port}'
+            : '${network.host}:${network.port} • ${_statusText(snapshot)}',
+      ),
+      onTap: isCurrent
+          ? () => Navigator.of(context).pop()
+          : () async {
+              Navigator.of(context).pop();
+              await widget.onSwitchNetwork?.call(network);
+            },
+    );
+  }
+
+  Widget _buildTabTile(BuildContext context, ChatTab tab) {
+    final selected = tab.id == _controller.activeTabId;
+    return ListTile(
+      selected: selected,
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(_iconForTab(tab.type)),
+          if (tab.hasActivity)
+            Positioned(
+              right: -10,
+              top: -8,
+              child: _UnreadBadge(count: tab.unreadCount),
+            ),
+        ],
+      ),
+      title: Text(tab.name),
+      trailing: tab.type == ChatTabType.server
+          ? null
+          : IconButton(
+              onPressed: () => _controller.closeTab(tab.id),
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Close tab',
+            ),
+      onTap: () {
+        _controller.selectTab(tab.id);
+        Navigator.of(context).pop();
+      },
+    );
   }
 
   IconData _iconForTab(ChatTabType type) {
