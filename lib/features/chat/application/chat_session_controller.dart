@@ -22,6 +22,7 @@ import 'package:androidircx/irc/parser/irc_formatter.dart';
 import 'package:androidircx/irc/parser/isupport_parser.dart';
 import 'package:androidircx/irc/parser/message_content_parser.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
+import 'package:androidircx/irc/services/irc_service_helpers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleState;
 
@@ -126,6 +127,7 @@ class ChatSessionController extends ChangeNotifier {
   bool _manualDisconnectRequested = false;
   bool _isDisposed = false;
   bool _autoJoinAttempted = false;
+  bool _serviceAuthFallbackAttempted = false;
   int _reconnectAttempt = 0;
   Duration? _pendingReconnectDelay;
   IrcServerSupport _serverSupport = const IrcServerSupport.empty();
@@ -734,6 +736,7 @@ class ChatSessionController extends ChangeNotifier {
 
     _manualDisconnectRequested = false;
     _autoJoinAttempted = false;
+    _serviceAuthFallbackAttempted = false;
     _cancelReconnect();
     await _ircService.connect(network);
   }
@@ -1443,6 +1446,7 @@ class ChatSessionController extends ChangeNotifier {
       _serverSupport = const IrcServerSupport.empty();
       _nickPrefixChars = IrcServerSupport.defaultPrefixMapping.prefixes;
       _channelPrefixChars = IrcServerSupport.defaultChannelTypes;
+      _serviceAuthFallbackAttempted = false;
     }
 
     if (snapshot.phase == ConnectionPhase.connected) {
@@ -1462,8 +1466,83 @@ class ChatSessionController extends ChangeNotifier {
         snapshot.phase == ConnectionPhase.disconnected) {
       _autoHistoryRequestedChannels.clear();
       _autoJoinAttempted = false;
+      _serviceAuthFallbackAttempted = false;
       _scheduleReconnect();
     }
+  }
+
+  Future<void> _runPostRegistrationActions() async {
+    await _sendServiceAuthFallbackIfNeeded();
+    await _autoJoinConfiguredChannels();
+  }
+
+  Future<void> _sendServiceAuthFallbackIfNeeded() async {
+    if (_serviceAuthFallbackAttempted ||
+        network.serviceAuthFallback == ServiceAuthFallback.disabled ||
+        _connection.phase != ConnectionPhase.connected) {
+      return;
+    }
+
+    if (!_shouldSendServiceAuthFallback()) {
+      return;
+    }
+
+    final password = (network.saslPassword ?? '').trim();
+    if (password.isEmpty) {
+      return;
+    }
+
+    _serviceAuthFallbackAttempted = true;
+    final identify = buildNickServIdentifyCommand(
+      account: network.saslAccount,
+      password: password,
+      target: network.serviceAuthTarget,
+    );
+    await _ircService.sendRaw(
+      'PRIVMSG ${identify.target} :${identify.command}',
+      redactedLine: 'PRIVMSG ${identify.target} :${identify.redactedCommand}',
+    );
+    _appendMessage(
+      tabId: _serverTabId(network.id),
+      sender: '*',
+      content:
+          'Sent ${identify.target} fallback identify because SASL ${_saslStatusDescription(_ircService.saslAuthStatus)}.',
+      kind: IrcMessageKind.system,
+    );
+    unawaited(_persistState());
+    notifyListeners();
+  }
+
+  bool _shouldSendServiceAuthFallback() {
+    if (!_ircService.saslConfigured || _ircService.saslSucceeded) {
+      return false;
+    }
+
+    return switch (_ircService.saslAuthStatus) {
+      SaslAuthStatus.pending ||
+      SaslAuthStatus.unavailable ||
+      SaslAuthStatus.mechanismUnavailable ||
+      SaslAuthStatus.requested ||
+      SaslAuthStatus.failed ||
+      SaslAuthStatus.aborted => true,
+      SaslAuthStatus.idle ||
+      SaslAuthStatus.notConfigured ||
+      SaslAuthStatus.authenticating ||
+      SaslAuthStatus.succeeded => false,
+    };
+  }
+
+  String _saslStatusDescription(SaslAuthStatus status) {
+    return switch (status) {
+      SaslAuthStatus.pending => 'did not complete before registration',
+      SaslAuthStatus.unavailable => 'is not advertised',
+      SaslAuthStatus.mechanismUnavailable => 'mechanism is unavailable',
+      SaslAuthStatus.requested =>
+        'request did not complete before registration',
+      SaslAuthStatus.failed => 'failed',
+      SaslAuthStatus.aborted => 'was aborted',
+      _ => 'is unavailable',
+    };
   }
 
   Future<void> _autoJoinConfiguredChannels() async {
@@ -2252,8 +2331,11 @@ class ChatSessionController extends ChangeNotifier {
           content: frame.trailing ?? frame.params.join(' '),
           kind: IrcMessageKind.system,
         );
+        if (frame.command == '001') {
+          unawaited(_sendServiceAuthFallbackIfNeeded());
+        }
         if (frame.command == '376' || frame.command == '422') {
-          unawaited(_autoJoinConfiguredChannels());
+          unawaited(_runPostRegistrationActions());
         }
       case '005':
         _handleIsupport(frame);
@@ -4592,6 +4674,18 @@ class ChatSessionController extends ChangeNotifier {
           sender: '*',
           content:
               'Enabled capabilities: ${enabled.isEmpty ? 'none' : enabled.join(', ')}',
+          kind: IrcMessageKind.system,
+        );
+        final report = detectBouncerCompatibility(
+          availableCapabilities: _ircService.availableCapabilities,
+          enabledCapabilities: _ircService.enabledCapabilities,
+          serverName: network.host,
+          networkName: _serverSupport.networkName,
+        );
+        _appendMessage(
+          tabId: _serverTabId(network.id),
+          sender: '*',
+          content: 'Compatibility: ${report.summary}',
           kind: IrcMessageKind.system,
         );
         break;

@@ -397,6 +397,59 @@ void main() {
     },
   );
 
+  test('tracks SASL unavailable status when capability is missing', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        saslAccount: 'alice',
+        saslPassword: 'secret',
+      ),
+    );
+    expect(service.saslAuthStatus, SaslAuthStatus.pending);
+
+    transport.emit(':server CAP AndroidIRCX LS :server-time');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(service.saslConfigured, isTrue);
+    expect(service.saslAuthStatus, SaslAuthStatus.unavailable);
+    expect(transport.sentLines, contains('CAP REQ :server-time'));
+
+    service.dispose();
+  });
+
+  test('tracks SASL mechanism unavailable status', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        saslAccount: 'alice',
+        saslPassword: 'secret',
+        saslMechanism: SaslMechanism.scramSha256,
+      ),
+    );
+
+    transport.emit(':server CAP AndroidIRCX LS :sasl=PLAIN');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(service.saslAuthStatus, SaslAuthStatus.mechanismUnavailable);
+    expect(transport.sentLines, isNot(contains('AUTHENTICATE SCRAM-SHA-256')));
+
+    service.dispose();
+  });
+
   test(
     'sends SASL PLAIN payload terminator when encoded data is exactly 400 bytes',
     () async {

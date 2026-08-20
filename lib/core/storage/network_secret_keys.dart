@@ -12,7 +12,8 @@ const String networkSecretStoragePrefix = 'androidircx.network';
 enum NetworkSecretField {
   password('password'),
   saslPassword('saslPassword'),
-  autoJoinChannelKeys('autoJoinChannelKeys');
+  autoJoinChannelKeys('autoJoinChannelKeys'),
+  proxyPassword('proxyPassword');
 
   const NetworkSecretField(this.jsonKey);
 
@@ -63,6 +64,12 @@ Map<String, String> networkSecretMigrationValues(NetworkConfig network) {
       jsonEncode(network.autoJoinChannelKeys),
     );
   }
+  _addIfPresent(
+    values,
+    network,
+    NetworkSecretField.proxyPassword,
+    network.proxyPassword,
+  );
   return Map<String, String>.unmodifiable(values);
 }
 

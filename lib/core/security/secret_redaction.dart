@@ -4,6 +4,7 @@ const Set<String> networkSecretJsonKeys = <String>{
   'password',
   'saslPassword',
   'autoJoinChannelKeys',
+  'proxyPassword',
   'serverPassword',
   'clientKey',
   'clientPrivateKey',

@@ -282,17 +282,35 @@ void main() {
 
     await tester.tap(find.text('Open form'));
     await tester.pumpAndSettle();
-    final profileLabelField = find
-        .byKey(const Key('network-form-profile-label'))
+    final formScrollable = find
+        .descendant(
+          of: find.byType(NetworkFormScreen),
+          matching: find.byType(Scrollable),
+        )
         .first;
-    final profileGroupField = find
-        .byKey(const Key('network-form-profile-group'))
-        .first;
-    await tester.drag(find.byType(ListView), const Offset(0, -700));
-    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-profile-label')),
+      500,
+      scrollable: formScrollable,
+    );
+    final profileLabelField = find.byKey(
+      const Key('network-form-profile-label'),
+    );
+    final profileGroupField = find.byKey(
+      const Key('network-form-profile-group'),
+    );
     await tester.enterText(profileLabelField, ' Main profile ');
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-profile-group')),
+      500,
+      scrollable: formScrollable,
+    );
     await tester.enterText(profileGroupField, ' General ');
-    await tester.drag(find.byType(ListView), const Offset(0, -400));
+    await tester.scrollUntilVisible(
+      find.text('Save network'),
+      500,
+      scrollable: formScrollable,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Save network'));
     await tester.pumpAndSettle();
@@ -300,6 +318,118 @@ void main() {
     expect(result, isNotNull);
     expect(result!.profileLabel, 'Main profile');
     expect(result!.profileGroup, 'General');
+  });
+
+  testWidgets('network form edits service fallback channel keys and proxy', (
+    tester,
+  ) async {
+    NetworkFormResult? result;
+    const network = NetworkConfig(
+      id: 'advanced-net',
+      name: 'AdvancedNet',
+      host: 'irc.advanced.test',
+      port: 6697,
+      nickname: 'tester',
+      altNickname: 'tester_',
+      saslAccount: 'alice',
+      saslPassword: 'secret',
+      serviceAuthFallback: ServiceAuthFallback.nickServ,
+      serviceAuthTarget: 'NickServ',
+      autoJoinChannels: ['#secret'],
+      autoJoinChannelKeys: {'#secret': 'old-key'},
+      proxyType: IrcProxyType.socks5,
+      proxyHost: '127.0.0.1',
+      proxyPort: 9050,
+      proxyUsername: 'old-user',
+      proxyPassword: 'old-pass',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              result = await Navigator.of(context).push<NetworkFormResult>(
+                MaterialPageRoute<NetworkFormResult>(
+                  builder: (_) =>
+                      const NetworkFormScreen(initialValue: network),
+                ),
+              );
+            },
+            child: const Text('Open form'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open form'));
+    await tester.pumpAndSettle();
+    final formScrollable = find
+        .descendant(
+          of: find.byType(NetworkFormScreen),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-service-auth-target')),
+      500,
+      scrollable: formScrollable,
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-service-auth-target')),
+      'AuthServ',
+    );
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-auto-join-channel-keys')),
+      500,
+      scrollable: formScrollable,
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-auto-join-channel-keys')),
+      '#secret=new-key\nstaff staff-key',
+    );
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-proxy-host')),
+      500,
+      scrollable: formScrollable,
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-proxy-host')),
+      '10.0.2.2',
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-proxy-port')),
+      '9150',
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-proxy-username')),
+      'proxy-user',
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-proxy-password')),
+      'proxy-pass',
+    );
+    await tester.scrollUntilVisible(
+      find.text('Save network'),
+      500,
+      scrollable: formScrollable,
+    );
+    await tester.tap(find.text('Save network'));
+    await tester.pumpAndSettle();
+
+    expect(result, isNotNull);
+    expect(result!.serviceAuthFallback, ServiceAuthFallback.nickServ);
+    expect(result!.serviceAuthTarget, 'AuthServ');
+    expect(result!.autoJoinChannelKeys, {
+      '#secret': 'new-key',
+      '#staff': 'staff-key',
+    });
+    expect(result!.proxyType, IrcProxyType.socks5);
+    expect(result!.proxyHost, '10.0.2.2');
+    expect(result!.proxyPort, 9150);
+    expect(result!.proxyUsername, 'proxy-user');
+    expect(result!.proxyPassword, 'proxy-pass');
   });
 
   testWidgets('settings saves DCC download folder path', (tester) async {
@@ -396,6 +526,48 @@ void main() {
     expect(settings.messageDensity, MessageDensity.compact);
     expect(settings.monospaceMessages, isTrue);
     expect(settings.nickColorMode, NickColorMode.vivid);
+  });
+
+  testWidgets('settings shows help privacy support and release audit docs', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final settingsScrollable = find.byType(Scrollable).first;
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-help-topic')),
+      500,
+      scrollable: settingsScrollable,
+    );
+    await tester.tap(find.byKey(const Key('settings-help-topic')));
+    await tester.pumpAndSettle();
+    expect(find.text('IRC help'), findsWidgets);
+    expect(find.textContaining('NickServ fallback'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-privacy-topic')));
+    await tester.pumpAndSettle();
+    expect(find.text('Privacy'), findsWidgets);
+    expect(find.textContaining('SecretStorage'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-support-topic')));
+    await tester.pumpAndSettle();
+    expect(find.text('Support'), findsWidgets);
+    expect(find.textContaining('redacted raw server-tab log'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-release-audit-topic')));
+    await tester.pumpAndSettle();
+    expect(find.text('Release audit'), findsWidgets);
+    expect(find.textContaining('com.androidircx.flutter'), findsOneWidget);
   });
 
   testWidgets('shows IRC services quick actions on the server tab', (

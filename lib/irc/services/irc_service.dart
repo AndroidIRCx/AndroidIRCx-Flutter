@@ -16,6 +16,19 @@ import 'package:androidircx/irc/services/irc_transport.dart';
 typedef IrcTransportConnector =
     Future<IrcTransport> Function(NetworkConfig network);
 
+enum SaslAuthStatus {
+  idle,
+  notConfigured,
+  pending,
+  unavailable,
+  mechanismUnavailable,
+  requested,
+  authenticating,
+  succeeded,
+  failed,
+  aborted,
+}
+
 class IrcService {
   static const Set<String> _preferredCapabilities = <String>{
     'account-notify',
@@ -104,6 +117,7 @@ class IrcService {
   bool _capEnded = false;
   bool _stsUpgradeInProgress = false;
   bool _saslInProgress = false;
+  SaslAuthStatus _saslAuthStatus = SaslAuthStatus.idle;
   SaslMechanism? _activeSaslMechanism;
   NetworkConfig? _network;
   String? _primaryNick;
@@ -127,6 +141,9 @@ class IrcService {
   IrcServerSupport get serverSupport => _serverSupport;
   Set<String> get availableSaslMechanisms =>
       parseIrcCapabilityValueList(_capValues['sasl']);
+  SaslAuthStatus get saslAuthStatus => _saslAuthStatus;
+  bool get saslConfigured => _shouldUseSasl(_network);
+  bool get saslSucceeded => _saslAuthStatus == SaslAuthStatus.succeeded;
   Stream<String> get rawEvents => _rawEventsController.stream;
   Stream<IrcMessageFrame> get frames => _framesController.stream;
   Stream<ConnectionSnapshot> get stateStream => _stateController.stream;
@@ -182,6 +199,9 @@ class IrcService {
     _capEnded = false;
     _stsUpgradeInProgress = false;
     _saslInProgress = false;
+    _saslAuthStatus = _shouldUseSasl(effectiveNetwork)
+        ? SaslAuthStatus.pending
+        : SaslAuthStatus.notConfigured;
     _activeSaslMechanism = null;
     _scramSession = null;
     _scramAwaitingServerFinal = false;
@@ -809,6 +829,7 @@ class IrcService {
 
     if (frame.command == '903') {
       _saslInProgress = false;
+      _saslAuthStatus = SaslAuthStatus.succeeded;
       _activeSaslMechanism = null;
       _scramSession = null;
       _scramAwaitingServerFinal = false;
@@ -830,6 +851,7 @@ class IrcService {
         frame.command == '906' ||
         frame.command == '907') {
       _saslInProgress = false;
+      _saslAuthStatus = SaslAuthStatus.failed;
       _activeSaslMechanism = null;
       _scramSession = null;
       _scramAwaitingServerFinal = false;
@@ -857,6 +879,7 @@ class IrcService {
       }
       if (_saslInProgress) {
         _saslInProgress = false;
+        _saslAuthStatus = SaslAuthStatus.mechanismUnavailable;
         _activeSaslMechanism = null;
         _scramSession = null;
         _scramAwaitingServerFinal = false;
@@ -1071,6 +1094,7 @@ class IrcService {
 
   void _requestAvailableCapabilities() {
     final requested = _selectCapabilitiesToRequest();
+    _updateSaslStatusForSelectedCapabilities(requested);
     if (requested.isEmpty) {
       unawaited(_endCapNegotiation());
       return;
@@ -1078,6 +1102,34 @@ class IrcService {
 
     _capRequested.addAll(requested);
     unawaited(_sendCapReqBatches(requested));
+  }
+
+  void _updateSaslStatusForSelectedCapabilities(List<String> requested) {
+    if (!_shouldUseSasl(_network)) {
+      _saslAuthStatus = SaslAuthStatus.notConfigured;
+      return;
+    }
+
+    if (requested.contains('sasl')) {
+      _saslAuthStatus = SaslAuthStatus.requested;
+      return;
+    }
+
+    if (!_capAvailable.contains('sasl')) {
+      _saslAuthStatus = SaslAuthStatus.unavailable;
+      _rawEventsController.add(
+        '** SASL unavailable: server did not advertise sasl capability',
+      );
+      return;
+    }
+
+    _saslAuthStatus = SaslAuthStatus.mechanismUnavailable;
+    final mechanism = _saslMechanismName(
+      _network?.saslMechanism ?? SaslMechanism.plain,
+    );
+    _rawEventsController.add(
+      '** SASL unavailable: server does not advertise $mechanism',
+    );
   }
 
   List<String> _selectCapabilitiesToRequest() {
@@ -1246,6 +1298,9 @@ class IrcService {
     for (final name in names) {
       _capRequested.remove(name);
     }
+    if (names.contains('sasl') && _shouldUseSasl(_network)) {
+      _saslAuthStatus = SaslAuthStatus.failed;
+    }
 
     if (names.isNotEmpty) {
       _rawEventsController.add(
@@ -1266,6 +1321,7 @@ class IrcService {
 
   void _startSaslAuthentication(SaslMechanism mechanism) {
     _saslInProgress = true;
+    _saslAuthStatus = SaslAuthStatus.authenticating;
     _activeSaslMechanism = mechanism;
     _updateState(
       ConnectionSnapshot(
@@ -1421,6 +1477,7 @@ class IrcService {
 
   Future<void> _abortSasl() async {
     _saslInProgress = false;
+    _saslAuthStatus = SaslAuthStatus.aborted;
     _activeSaslMechanism = null;
     _scramSession = null;
     _scramAwaitingServerFinal = false;

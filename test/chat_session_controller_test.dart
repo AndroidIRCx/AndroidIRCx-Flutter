@@ -489,6 +489,59 @@ void main() {
     controller.dispose();
   });
 
+  test(
+    'sends NickServ fallback before keyed auto-join when SASL is unavailable',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          saslAccount: 'alice',
+          saslPassword: 'secret',
+          serviceAuthFallback: ServiceAuthFallback.nickServ,
+          autoJoinChannels: ['#secret'],
+          autoJoinChannelKeys: {'#secret': 'opensesame'},
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      transport.emit(':server CAP * LS :server-time');
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(':server 001 AndroidIRCX :Welcome');
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(':server 376 AndroidIRCX :End of /MOTD command.');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      final identifyIndex = transport.sentLines.indexOf(
+        'PRIVMSG NickServ :IDENTIFY alice secret',
+      );
+      final joinIndex = transport.sentLines.indexOf('JOIN #secret opensesame');
+
+      expect(identifyIndex, isNonNegative);
+      expect(joinIndex, isNonNegative);
+      expect(identifyIndex, lessThan(joinIndex));
+      expect(
+        controller.activeMessages.map((message) => message.content).join('\n'),
+        isNot(contains('alice secret')),
+      );
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('IDENTIFY alice [REDACTED]'),
+        ),
+        isTrue,
+      );
+
+      controller.dispose();
+    },
+  );
+
   test('auto-joins keyed channels without duplicating case variants', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);
