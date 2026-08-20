@@ -1,6 +1,13 @@
 enum DccSessionType { chat, send, unknown }
 
-enum DccSessionStatus { pending, offering, connecting, connected, closed, failed }
+enum DccSessionStatus {
+  pending,
+  offering,
+  connecting,
+  connected,
+  closed,
+  failed,
+}
 
 class DccSession {
   const DccSession({
@@ -17,6 +24,10 @@ class DccSession {
     this.token,
     this.filePath,
     this.bytesTransferred = 0,
+    this.transferStartedAt,
+    this.lastProgressAt,
+    this.bytesPerSecond,
+    this.estimatedRemaining,
     this.resumeOffset = 0,
     this.isReverse = false,
     this.error,
@@ -35,6 +46,10 @@ class DccSession {
   final String? token;
   final String? filePath;
   final int bytesTransferred;
+  final DateTime? transferStartedAt;
+  final DateTime? lastProgressAt;
+  final double? bytesPerSecond;
+  final Duration? estimatedRemaining;
   final int resumeOffset;
   final bool isReverse;
   final String? error;
@@ -53,6 +68,10 @@ class DccSession {
     String? token,
     String? filePath,
     int? bytesTransferred,
+    DateTime? transferStartedAt,
+    DateTime? lastProgressAt,
+    double? bytesPerSecond,
+    Duration? estimatedRemaining,
     int? resumeOffset,
     bool? isReverse,
     String? error,
@@ -71,6 +90,10 @@ class DccSession {
       token: token ?? this.token,
       filePath: filePath ?? this.filePath,
       bytesTransferred: bytesTransferred ?? this.bytesTransferred,
+      transferStartedAt: transferStartedAt ?? this.transferStartedAt,
+      lastProgressAt: lastProgressAt ?? this.lastProgressAt,
+      bytesPerSecond: bytesPerSecond ?? this.bytesPerSecond,
+      estimatedRemaining: estimatedRemaining ?? this.estimatedRemaining,
       resumeOffset: resumeOffset ?? this.resumeOffset,
       isReverse: isReverse ?? this.isReverse,
       error: error ?? this.error,

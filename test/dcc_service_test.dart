@@ -120,6 +120,11 @@ void main() {
     expect(connection.sentPackets.length, greaterThan(1));
     expect(sentBytes, payload.length);
     expect(completed.bytesTransferred, payload.length);
+    expect(completed.transferStartedAt, isNotNull);
+    expect(completed.lastProgressAt, isNotNull);
+    expect(completed.bytesPerSecond, isNotNull);
+    expect(completed.bytesPerSecond!, greaterThan(0));
+    expect(completed.estimatedRemaining, Duration.zero);
 
     await service.dispose();
     await file.delete();
@@ -158,6 +163,114 @@ void main() {
     expect(await File(path).exists(), isFalse);
     await service.dispose();
   });
+
+  test(
+    'incoming DCC SEND writes completed files to configured directory',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'androidircx-dcc-service-',
+      );
+      final connection = _FakeDccConnection();
+      final backend = _FakeDccBackend(incomingConnection: connection);
+      final service = DccService(
+        backend: backend,
+        downloadDirectoryPath: directory.path,
+      );
+      final session = DccSession(
+        id: 'incoming-send-configured-dir',
+        tabId: 'dcc::dbase::incoming-configured-dir',
+        peerNick: 'alice',
+        type: DccSessionType.send,
+        status: DccSessionStatus.pending,
+        direction: 'incoming',
+        filename: 'configured.txt',
+        host: '127.0.0.1',
+        port: 5001,
+        size: 4,
+      );
+      final connected = service.sessions.firstWhere(
+        (event) => event.status == DccSessionStatus.connected,
+      );
+      final closed = service.sessions.firstWhere(
+        (event) => event.status == DccSessionStatus.closed,
+      );
+
+      unawaited(service.accept(session));
+      final active = await connected.timeout(const Duration(seconds: 3));
+      await Future<void>.delayed(Duration.zero);
+      connection.emit([1, 2, 3, 4]);
+      await Future<void>.delayed(Duration.zero);
+      await connection.finish();
+      final completed = await closed.timeout(const Duration(seconds: 3));
+
+      expect(active.filePath, startsWith(directory.path));
+      expect(completed.filePath, startsWith(directory.path));
+      expect(await File(completed.filePath!).readAsBytes(), <int>[1, 2, 3, 4]);
+
+      await service.dispose();
+      if (await File(completed.filePath!).exists()) {
+        await File(completed.filePath!).delete();
+      }
+      await directory.delete(recursive: true);
+    },
+  );
+
+  test(
+    'reverse DCC SEND accepts by opening a listener and preserving token',
+    () async {
+      final connection = _FakeDccConnection();
+      final backend = _FakeDccBackend(incomingConnection: connection);
+      final service = DccService(backend: backend);
+      final offers = <String>[];
+      final session = DccSession(
+        id: 'reverse-send-1',
+        tabId: 'dcc::dbase::reverse',
+        peerNick: 'alice',
+        type: DccSessionType.send,
+        status: DccSessionStatus.pending,
+        direction: 'incoming',
+        filename: 'reverse.bin',
+        host: '127.0.0.1',
+        port: 0,
+        size: 4,
+        token: 'abc123',
+        isReverse: true,
+      );
+      final offering = service.sessions.firstWhere(
+        (event) => event.status == DccSessionStatus.offering,
+      );
+      final connected = service.sessions.firstWhere(
+        (event) => event.status == DccSessionStatus.connected,
+      );
+      final closed = service.sessions.firstWhere(
+        (event) => event.status == DccSessionStatus.closed,
+      );
+
+      await service.acceptReverseSend(
+        session: session,
+        onOfferReady: offers.add,
+      );
+      final offered = await offering.timeout(const Duration(seconds: 3));
+      backend.server!.accept(connection);
+      await connected.timeout(const Duration(seconds: 3));
+      await Future<void>.delayed(Duration.zero);
+      connection.emit([7, 8, 9, 10]);
+      await Future<void>.delayed(Duration.zero);
+      await connection.finish();
+      final completed = await closed.timeout(const Duration(seconds: 3));
+
+      expect(offered.port, 5001);
+      expect(offers.single, contains('DCC SEND "reverse.bin"'));
+      expect(offers.single, endsWith(' 4 abc123\u0001'));
+      expect(completed.bytesTransferred, 4);
+      expect(await File(completed.filePath!).readAsBytes(), <int>[7, 8, 9, 10]);
+
+      await service.dispose();
+      if (await File(completed.filePath!).exists()) {
+        await File(completed.filePath!).delete();
+      }
+    },
+  );
 
   test('incoming DCC SEND deletes temp file on socket failure', () async {
     final connection = _FakeDccConnection();

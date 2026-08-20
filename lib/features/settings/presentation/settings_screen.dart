@@ -11,6 +11,8 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _repository = SharedPrefsSettingsRepository();
+  final _dccDownloadDirectoryController = TextEditingController();
+  final _mediaDownloadDirectoryController = TextEditingController();
   AppSettings _settings = const AppSettings();
   bool _isLoading = true;
 
@@ -21,11 +23,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   @override
+  void dispose() {
+    _dccDownloadDirectoryController.dispose();
+    _mediaDownloadDirectoryController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
-      ),
+      appBar: AppBar(title: const Text('Settings')),
       body: SafeArea(
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
@@ -42,7 +49,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           value: _settings.showRawEvents,
                           onChanged: (value) async {
-                            final next = _settings.copyWith(showRawEvents: value);
+                            final next = _settings.copyWith(
+                              showRawEvents: value,
+                            );
                             setState(() => _settings = next);
                             await _repository.saveSettings(next);
                           },
@@ -55,7 +64,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           value: _settings.showHeaderSearchButton,
                           onChanged: (value) async {
-                            final next = _settings.copyWith(showHeaderSearchButton: value);
+                            final next = _settings.copyWith(
+                              showHeaderSearchButton: value,
+                            );
                             setState(() => _settings = next);
                             await _repository.saveSettings(next);
                           },
@@ -68,10 +79,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           value: _settings.showAttachmentPreviews,
                           onChanged: (value) async {
-                            final next = _settings.copyWith(showAttachmentPreviews: value);
+                            final next = _settings.copyWith(
+                              showAttachmentPreviews: value,
+                            );
                             setState(() => _settings = next);
                             await _repository.saveSettings(next);
                           },
+                        ),
+                        const Divider(height: 1),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                          child: TextField(
+                            key: const Key('settings-dcc-download-directory'),
+                            controller: _dccDownloadDirectoryController,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: _saveDccDownloadDirectory,
+                            decoration: InputDecoration(
+                              labelText: 'DCC download folder',
+                              hintText: 'Default app folder',
+                              prefixIcon: const Icon(Icons.folder_outlined),
+                              suffixIcon: IconButton(
+                                onPressed: () => _saveDccDownloadDirectory(
+                                  _dccDownloadDirectoryController.text,
+                                ),
+                                icon: const Icon(Icons.save_outlined),
+                                tooltip: 'Save DCC folder',
+                              ),
+                            ),
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                          child: TextField(
+                            key: const Key('settings-media-download-directory'),
+                            controller: _mediaDownloadDirectoryController,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: _saveMediaDownloadDirectory,
+                            decoration: InputDecoration(
+                              labelText: 'Media download folder',
+                              hintText: 'Default app folder',
+                              prefixIcon: const Icon(Icons.perm_media_outlined),
+                              suffixIcon: IconButton(
+                                onPressed: () => _saveMediaDownloadDirectory(
+                                  _mediaDownloadDirectoryController.text,
+                                ),
+                                icon: const Icon(Icons.save_outlined),
+                                tooltip: 'Save media folder',
+                              ),
+                            ),
+                          ),
                         ),
                         const Divider(height: 1),
                         ListTile(
@@ -86,7 +143,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 return;
                               }
 
-                              final next = _settings.copyWith(noticeRouting: value);
+                              final next = _settings.copyWith(
+                                noticeRouting: value,
+                              );
                               setState(() => _settings = next);
                               await _repository.saveSettings(next);
                             },
@@ -117,8 +176,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() {
       _settings = settings;
+      _dccDownloadDirectoryController.text = settings.dccDownloadDirectoryPath;
+      _mediaDownloadDirectoryController.text =
+          settings.mediaDownloadDirectoryPath;
       _isLoading = false;
     });
+  }
+
+  Future<void> _saveDccDownloadDirectory(String value) async {
+    final normalized = value.trim();
+    final next = _settings.copyWith(dccDownloadDirectoryPath: normalized);
+    setState(() {
+      _settings = next;
+      _dccDownloadDirectoryController.text = normalized;
+      _dccDownloadDirectoryController.selection = TextSelection.collapsed(
+        offset: normalized.length,
+      );
+    });
+    await _repository.saveSettings(next);
+  }
+
+  Future<void> _saveMediaDownloadDirectory(String value) async {
+    final normalized = value.trim();
+    final next = _settings.copyWith(mediaDownloadDirectoryPath: normalized);
+    setState(() {
+      _settings = next;
+      _mediaDownloadDirectoryController.text = normalized;
+      _mediaDownloadDirectoryController.selection = TextSelection.collapsed(
+        offset: normalized.length,
+      );
+    });
+    await _repository.saveSettings(next);
   }
 
   String _labelForNoticeRouting(NoticeRoutingMode mode) {

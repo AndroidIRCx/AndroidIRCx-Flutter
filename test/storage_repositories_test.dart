@@ -540,6 +540,8 @@ void main() {
           noticeRouting: NoticeRoutingMode.notice,
           showHeaderSearchButton: false,
           showAttachmentPreviews: false,
+          dccDownloadDirectoryPath: r'C:\Downloads\IRC',
+          mediaDownloadDirectoryPath: r'C:\Downloads\Media',
         ),
       );
       final settings = await repository.loadSettings();
@@ -548,6 +550,8 @@ void main() {
       expect(settings.noticeRouting, NoticeRoutingMode.notice);
       expect(settings.showHeaderSearchButton, isFalse);
       expect(settings.showAttachmentPreviews, isFalse);
+      expect(settings.dccDownloadDirectoryPath, r'C:\Downloads\IRC');
+      expect(settings.mediaDownloadDirectoryPath, r'C:\Downloads\Media');
     });
 
     test('chat session persistence saves tabs and history', () async {

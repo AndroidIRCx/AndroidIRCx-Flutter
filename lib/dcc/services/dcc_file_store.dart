@@ -20,8 +20,10 @@ typedef DccSourceFile = ({
   Stream<List<int>> Function() openRead,
 });
 
-Future<DccTempFile> createDccTempFile(String fileName) =>
-    createPlatformDccTempFile(fileName);
+Future<DccTempFile> createDccTempFile(
+  String fileName, {
+  String? directoryPath,
+}) => createPlatformDccTempFile(fileName, directoryPath: directoryPath);
 
 Future<DccSourceFile> openDccSourceFile(String path) =>
     openPlatformDccSourceFile(path);

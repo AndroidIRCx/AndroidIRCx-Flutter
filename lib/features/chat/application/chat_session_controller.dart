@@ -7,6 +7,7 @@ import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/models/app_settings.dart';
+import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/dcc/services/dcc_service.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/message_history_formatter.dart';
@@ -113,6 +114,8 @@ class ChatSessionController extends ChangeNotifier {
   final Map<String, List<String>> _multilineBuffers = {};
   final Map<String, DccSession> _dccSessions = {};
   final List<StreamSubscription<dynamic>> _subscriptions = [];
+  final StreamController<ForegroundUserNotification> _notificationController =
+      StreamController<ForegroundUserNotification>.broadcast(sync: true);
   Timer? _reconnectTimer;
   Future<void>? _startInFlight;
 
@@ -319,6 +322,8 @@ class ChatSessionController extends ChangeNotifier {
   DccSession? get activeDccSession => _dccSessions[activeTabId];
   List<DccSession> get dccSessions =>
       List<DccSession>.unmodifiable(_dccSessions.values);
+  Stream<ForegroundUserNotification> get notifications =>
+      _notificationController.stream;
   String get activeChannelSummary {
     if (activeTab.type != ChatTabType.channel) {
       return '';
@@ -818,11 +823,22 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
     if (session.type == DccSessionType.send && session.isReverse) {
+      await _dccService.acceptReverseSend(
+        session: session,
+        onOfferReady: (ctcpOffer) {
+          unawaited(
+            _ircService.sendRaw('PRIVMSG ${session.peerNick} :$ctcpOffer'),
+          );
+        },
+      );
+      final latest = _dccService.sessionForTab(session.tabId);
+      if (latest != null) {
+        _dccSessions[session.tabId] = latest;
+      }
       _appendMessage(
         tabId: session.tabId,
-        sender: 'error',
-        content:
-            'Reverse DCC SEND is detected, but direct reverse accept is not implemented yet.',
+        sender: '*',
+        content: 'Reverse DCC SEND accept requested.',
         kind: IrcMessageKind.system,
       );
       unawaited(_persistState());
@@ -1357,6 +1373,7 @@ class ChatSessionController extends ChangeNotifier {
 
   Future<void> reloadSettings() async {
     _settings = await _settingsRepository.loadSettings();
+    _applySettingsToServices();
     notifyListeners();
   }
 
@@ -2825,18 +2842,30 @@ class ChatSessionController extends ChangeNotifier {
       case '442':
       case '421':
       case '433':
-        _appendMessage(
+        final message = _appendMessage(
           tabId: _serverTabId(network.id),
           sender: 'error',
           content: frame.trailing ?? frame.raw,
           kind: IrcMessageKind.system,
         );
+        _emitErrorNotification(
+          tabId: _serverTabId(network.id),
+          title: '${network.name} server reply',
+          body: frame.trailing ?? frame.raw,
+          messageId: message?.id,
+        );
       case 'ERROR':
-        _appendMessage(
+        final message = _appendMessage(
           tabId: _serverTabId(network.id),
           sender: 'error',
           content: frame.trailing ?? frame.raw,
           kind: IrcMessageKind.system,
+        );
+        _emitErrorNotification(
+          tabId: _serverTabId(network.id),
+          title: '${network.name} connection error',
+          body: frame.trailing ?? frame.raw,
+          messageId: message?.id,
         );
       default:
         break;
@@ -2868,7 +2897,7 @@ class ChatSessionController extends ChangeNotifier {
       senderNick: frame.senderNick,
     );
 
-    _appendMessage(
+    final message = _appendMessage(
       tabId: tabId,
       sender: frame.senderNick ?? 'notice',
       content: content,
@@ -2878,6 +2907,7 @@ class ChatSessionController extends ChangeNotifier {
       isOwn: _isSelfEcho(frame.senderNick),
       kind: IrcMessageKind.notice,
     );
+    _emitIncomingMessageNotification(message);
     _markActivityIfInactive(tabId);
   }
 
@@ -2899,7 +2929,7 @@ class ChatSessionController extends ChangeNotifier {
         senderNick: frame.senderNick,
         preferServerForDirectMessages: false,
       );
-      _appendMessage(
+      final message = _appendMessage(
         tabId: tabId,
         sender: frame.senderNick ?? target,
         content: '• $content',
@@ -2909,6 +2939,7 @@ class ChatSessionController extends ChangeNotifier {
         isOwn: _isSelfEcho(frame.senderNick),
         kind: IrcMessageKind.action,
       );
+      _emitIncomingMessageNotification(message);
       _markActivityIfInactive(tabId);
       _incrementBatchCount(frame.tags['batch']);
       return;
@@ -2922,7 +2953,7 @@ class ChatSessionController extends ChangeNotifier {
           senderNick: frame.senderNick,
           preferServerForDirectMessages: false,
         );
-        _appendMessage(
+        final message = _appendMessage(
           tabId: tabId,
           sender: frame.senderNick ?? target,
           content: '• ${ctcp.args ?? ''}'.trimRight(),
@@ -2932,6 +2963,7 @@ class ChatSessionController extends ChangeNotifier {
           isOwn: _isSelfEcho(frame.senderNick),
           kind: IrcMessageKind.action,
         );
+        _emitIncomingMessageNotification(message);
         _markActivityIfInactive(tabId);
         _incrementBatchCount(frame.tags['batch']);
         return;
@@ -2955,7 +2987,7 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    _appendMessage(
+    final message = _appendMessage(
       tabId: tabId,
       sender: frame.senderNick ?? target,
       content: assembledContent,
@@ -2964,6 +2996,7 @@ class ChatSessionController extends ChangeNotifier {
       isPlayback: _isPlaybackBatch(frame.tags['batch']),
       isOwn: _isSelfEcho(frame.senderNick),
     );
+    _emitIncomingMessageNotification(message);
     _markActivityIfInactive(tabId);
     _incrementBatchCount(frame.tags['batch']);
   }
@@ -3202,12 +3235,20 @@ class ChatSessionController extends ChangeNotifier {
       if (frame.params.length > 2) frame.params.skip(2).join(' '),
       if (frame.trailing != null) frame.trailing!,
     ].where((part) => part.trim().isNotEmpty).join(' • ');
-    _appendMessage(
+    final message = _appendMessage(
       tabId: tabId,
       sender: severity,
       content: details.isEmpty ? frame.raw : details,
       kind: IrcMessageKind.system,
     );
+    if (frame.command == 'FAIL' || frame.command == 'WARN') {
+      _emitErrorNotification(
+        tabId: tabId,
+        title: '${network.name} ${frame.command}',
+        body: details.isEmpty ? frame.raw : details,
+        messageId: message?.id,
+      );
+    }
   }
 
   void _handleChannelListEntry(IrcMessageFrame frame) {
@@ -3679,7 +3720,7 @@ class ChatSessionController extends ChangeNotifier {
         args: ctcp.args,
       );
       final session = _dccSessions[sessionTabId];
-      _appendMessage(
+      final message = _appendMessage(
         tabId: sessionTabId,
         sender: '*',
         content: _formatIncomingCtcpRequest(senderNick, command, ctcp.args),
@@ -3688,6 +3729,15 @@ class ChatSessionController extends ChangeNotifier {
             ? const <IrcMessageAttachment>[]
             : [_dccAttachmentForSession(session)],
       );
+      if (message != null) {
+        _emitNotification(
+          channelKind: ForegroundNotificationChannelKind.dccTransfers,
+          tabId: sessionTabId,
+          title: 'DCC request from $senderNick',
+          body: _notificationBodyFor(message.content),
+          messageId: message.id,
+        );
+      }
       _activeTabId = sessionTabId;
       _markActivityIfInactive(sessionTabId);
       notifyListeners();
@@ -4128,7 +4178,7 @@ class ChatSessionController extends ChangeNotifier {
     return null;
   }
 
-  void _appendMessage({
+  IrcMessage? _appendMessage({
     required String tabId,
     required String sender,
     required String content,
@@ -4143,7 +4193,7 @@ class ChatSessionController extends ChangeNotifier {
     final list = _messages.putIfAbsent(tabId, () => []);
     final msgid = tags['msgid'];
     if (msgid != null && list.any((item) => item.tags['msgid'] == msgid)) {
-      return;
+      return null;
     }
     final resolvedAttachments =
         attachments ?? _attachmentsForMessageContent(content, kind);
@@ -4171,6 +4221,162 @@ class ChatSessionController extends ChangeNotifier {
         ),
       ),
     );
+    return list.last;
+  }
+
+  void _emitIncomingMessageNotification(IrcMessage? message) {
+    if (message == null || message.isOwn || message.isPlayback) {
+      return;
+    }
+    final tab = _findTab(message.tabId);
+    if (tab == null) {
+      return;
+    }
+
+    final plainContent = _notificationBodyFor(message.content);
+    if (plainContent.isEmpty) {
+      return;
+    }
+
+    final channelKind = _notificationKindForMessage(message, tab);
+    if (channelKind == null) {
+      return;
+    }
+
+    _emitNotification(
+      channelKind: channelKind,
+      tabId: message.tabId,
+      title: _notificationTitleForMessage(message, tab, channelKind),
+      body: '${message.sender}: $plainContent',
+      messageId: message.tags['msgid'] ?? message.id,
+    );
+  }
+
+  void _emitErrorNotification({
+    required String tabId,
+    required String title,
+    required String body,
+    String? messageId,
+  }) {
+    final normalizedBody = _notificationBodyFor(body);
+    if (normalizedBody.isEmpty) {
+      return;
+    }
+    _emitNotification(
+      channelKind: ForegroundNotificationChannelKind.errors,
+      tabId: tabId,
+      title: title,
+      body: normalizedBody,
+      messageId: messageId,
+    );
+  }
+
+  void _emitNotification({
+    required ForegroundNotificationChannelKind channelKind,
+    required String tabId,
+    required String title,
+    required String body,
+    String? messageId,
+  }) {
+    if (_notificationController.isClosed) {
+      return;
+    }
+    final normalizedBody = _truncateNotificationText(body);
+    final normalizedTitle = _truncateNotificationText(title, maxLength: 80);
+    final stableMessageId =
+        (messageId ?? '${DateTime.now().microsecondsSinceEpoch}')
+            .trim()
+            .replaceAll(RegExp(r'\s+'), '-');
+    _notificationController.add(
+      ForegroundUserNotification(
+        id: '${network.id}:$tabId:${channelKind.name}:$stableMessageId',
+        channelKind: channelKind,
+        networkId: network.id,
+        tabId: tabId,
+        title: normalizedTitle,
+        body: normalizedBody,
+      ),
+    );
+  }
+
+  ForegroundNotificationChannelKind? _notificationKindForMessage(
+    IrcMessage message,
+    ChatTab tab,
+  ) {
+    if (tab.type == ChatTabType.channel &&
+        _containsHighlight(message.content)) {
+      return ForegroundNotificationChannelKind.highlights;
+    }
+    if (_hasMediaNotificationAttachment(message)) {
+      return ForegroundNotificationChannelKind.mediaTransfers;
+    }
+    if (tab.type == ChatTabType.query || tab.type == ChatTabType.notice) {
+      return ForegroundNotificationChannelKind.queries;
+    }
+    if (tab.type == ChatTabType.dcc) {
+      return ForegroundNotificationChannelKind.dccTransfers;
+    }
+    return null;
+  }
+
+  String _notificationTitleForMessage(
+    IrcMessage message,
+    ChatTab tab,
+    ForegroundNotificationChannelKind channelKind,
+  ) {
+    return switch (channelKind) {
+      ForegroundNotificationChannelKind.highlights =>
+        '${message.sender} mentioned you in ${tab.name}',
+      ForegroundNotificationChannelKind.queries =>
+        'Message from ${message.sender}',
+      ForegroundNotificationChannelKind.mediaTransfers =>
+        'Media shared in ${tab.name}',
+      ForegroundNotificationChannelKind.dccTransfers => 'DCC activity',
+      ForegroundNotificationChannelKind.errors => '${network.name} error',
+      ForegroundNotificationChannelKind.connection => network.name,
+    };
+  }
+
+  bool _containsHighlight(String content) {
+    final nick = (_ircService.currentNick ?? network.nickname).trim();
+    if (nick.isEmpty) {
+      return false;
+    }
+    final plain = formatIrcPlainText(content).toLowerCase();
+    final normalizedNick = RegExp.escape(nick.toLowerCase());
+    return RegExp(
+      '(^|[^A-Za-z0-9_\\-])$normalizedNick([^A-Za-z0-9_\\-]|\$)',
+    ).hasMatch(plain);
+  }
+
+  bool _hasMediaNotificationAttachment(IrcMessage message) {
+    if (message.kind == IrcMessageKind.media) {
+      return true;
+    }
+    return message.attachments.any((attachment) {
+      return switch (attachment.type) {
+        IrcMessageAttachmentType.image ||
+        IrcMessageAttachmentType.video ||
+        IrcMessageAttachmentType.audio ||
+        IrcMessageAttachmentType.file ||
+        IrcMessageAttachmentType.media => true,
+        IrcMessageAttachmentType.url ||
+        IrcMessageAttachmentType.dccChat ||
+        IrcMessageAttachmentType.dccSend => false,
+      };
+    });
+  }
+
+  String _notificationBodyFor(String content) {
+    return _truncateNotificationText(formatIrcPlainText(content).trim());
+  }
+
+  String _truncateNotificationText(String value, {int maxLength = 180}) {
+    final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.length <= maxLength) {
+      return normalized;
+    }
+    return '${normalized.substring(0, maxLength - 1)}…';
   }
 
   List<IrcMessageAttachment> _attachmentsForMessageContent(
@@ -4215,6 +4421,7 @@ class ChatSessionController extends ChangeNotifier {
 
   Future<void> _loadPersistedState() async {
     _settings = await _settingsRepository.loadSettings();
+    _applySettingsToServices();
     final snapshot = await _persistence.load(network.id);
     if (snapshot == null) {
       return;
@@ -4241,6 +4448,10 @@ class ChatSessionController extends ChangeNotifier {
         _findTab(snapshot.activeTabId) != null) {
       _activeTabId = snapshot.activeTabId;
     }
+  }
+
+  void _applySettingsToServices() {
+    _dccService.updateDownloadDirectory(_settings.dccDownloadDirectoryPath);
   }
 
   Future<void> _persistState() {
@@ -4966,6 +5177,7 @@ class ChatSessionController extends ChangeNotifier {
     }
     _dccService.dispose();
     _ircService.dispose();
+    _notificationController.close();
     super.dispose();
   }
 }

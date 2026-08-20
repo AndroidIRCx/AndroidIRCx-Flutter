@@ -6,24 +6,36 @@ class AppSettings {
     this.noticeRouting = NoticeRoutingMode.server,
     this.showHeaderSearchButton = true,
     this.showAttachmentPreviews = true,
+    this.dccDownloadDirectoryPath = '',
+    this.mediaDownloadDirectoryPath = '',
   });
 
   final bool showRawEvents;
   final NoticeRoutingMode noticeRouting;
   final bool showHeaderSearchButton;
   final bool showAttachmentPreviews;
+  final String dccDownloadDirectoryPath;
+  final String mediaDownloadDirectoryPath;
 
   AppSettings copyWith({
     bool? showRawEvents,
     NoticeRoutingMode? noticeRouting,
     bool? showHeaderSearchButton,
     bool? showAttachmentPreviews,
+    String? dccDownloadDirectoryPath,
+    String? mediaDownloadDirectoryPath,
   }) {
     return AppSettings(
       showRawEvents: showRawEvents ?? this.showRawEvents,
       noticeRouting: noticeRouting ?? this.noticeRouting,
-      showHeaderSearchButton: showHeaderSearchButton ?? this.showHeaderSearchButton,
-      showAttachmentPreviews: showAttachmentPreviews ?? this.showAttachmentPreviews,
+      showHeaderSearchButton:
+          showHeaderSearchButton ?? this.showHeaderSearchButton,
+      showAttachmentPreviews:
+          showAttachmentPreviews ?? this.showAttachmentPreviews,
+      dccDownloadDirectoryPath:
+          dccDownloadDirectoryPath ?? this.dccDownloadDirectoryPath,
+      mediaDownloadDirectoryPath:
+          mediaDownloadDirectoryPath ?? this.mediaDownloadDirectoryPath,
     );
   }
 
@@ -33,6 +45,8 @@ class AppSettings {
       'noticeRouting': noticeRouting.name,
       'showHeaderSearchButton': showHeaderSearchButton,
       'showAttachmentPreviews': showAttachmentPreviews,
+      'dccDownloadDirectoryPath': dccDownloadDirectoryPath,
+      'mediaDownloadDirectoryPath': mediaDownloadDirectoryPath,
     };
   }
 
@@ -44,6 +58,10 @@ class AppSettings {
           : NoticeRoutingMode.server,
       showHeaderSearchButton: (json['showHeaderSearchButton'] as bool?) ?? true,
       showAttachmentPreviews: (json['showAttachmentPreviews'] as bool?) ?? true,
+      dccDownloadDirectoryPath:
+          (json['dccDownloadDirectoryPath'] as String?)?.trim() ?? '',
+      mediaDownloadDirectoryPath:
+          (json['mediaDownloadDirectoryPath'] as String?)?.trim() ?? '',
     );
   }
 }

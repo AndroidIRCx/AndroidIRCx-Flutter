@@ -1,5 +1,8 @@
 package com.androidircx.flutter
 
+import android.app.Notification
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
@@ -55,6 +58,10 @@ class MainActivity : FlutterActivity() {
                         val action = pendingNotificationAction
                         pendingNotificationAction = null
                         result.success(action)
+                    }
+                    "showNotification" -> {
+                        showUserNotification(call.arguments)
+                        result.success(null)
                     }
                     else -> result.notImplemented()
                 }
@@ -179,7 +186,8 @@ class MainActivity : FlutterActivity() {
     private fun updateForegroundService(arguments: Any?) {
         val payload = arguments as? Map<*, *> ?: emptyMap<String, Any?>()
         val activeNetworkCount = payload.intValue("activeNetworkCount")
-        if (activeNetworkCount <= 0) {
+        val activeTransferCount = payload.intValue("activeTransferCount")
+        if (activeNetworkCount <= 0 && activeTransferCount <= 0) {
             stopService(Intent(this, AndroidIrcxForegroundService::class.java))
             return
         }
@@ -204,7 +212,7 @@ class MainActivity : FlutterActivity() {
             errorNetworkCount = payload.intValue("errorNetworkCount"),
             networkNames = networkNames,
             activeTransferCount = maxOf(
-                payload.intValue("activeTransferCount"),
+                activeTransferCount,
                 transferSummaries.size,
             ),
             transferSummaries = transferSummaries,
@@ -247,6 +255,45 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    private fun showUserNotification(arguments: Any?) {
+        AndroidIrcxForegroundService.createNotificationChannels(this)
+        val payload = arguments as? Map<*, *> ?: return
+        val title = (payload["title"] as? String)?.takeIf { it.isNotBlank() }
+            ?: "AndroidIRCx"
+        val body = (payload["body"] as? String)?.takeIf { it.isNotBlank() }
+            ?: return
+        val rawId = (payload["id"] as? String)?.takeIf { it.isNotBlank() }
+            ?: "$title:$body"
+        val channelId = notificationChannelId(payload["channelId"] as? String)
+        val launchIntent =
+            packageManager.getLaunchIntentForPackage(packageName)
+                ?: Intent(this, MainActivity::class.java)
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            REQUEST_USER_NOTIFICATION_OPEN,
+            launchIntent,
+            pendingIntentFlags(),
+        )
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, channelId)
+        } else {
+            Notification.Builder(this)
+        }
+        builder
+            .setSmallIcon(R.drawable.ic_stat_androidircx)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(Notification.BigTextStyle().bigText(body))
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(false)
+            .setCategory(notificationCategory(channelId))
+
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(userNotificationId(rawId), builder.build())
+    }
+
     private fun openBatteryOptimizationSettings(): Boolean {
         val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -269,17 +316,96 @@ class MainActivity : FlutterActivity() {
         return (this[key] as? Number)?.toLong()
     }
 
+    private fun Map<*, *>.doubleValueOrNull(key: String): Double? {
+        return (this[key] as? Number)?.toDouble()
+    }
+
     private fun Map<*, *>.progressSummary(status: String): String {
         val totalBytes = longValueOrNull("totalBytes")
         val bytesTransferred = longValue("bytesTransferred")
+        val parts = ArrayList<String>()
         if (totalBytes != null && totalBytes > 0L) {
             val percent = ((bytesTransferred * 100L) / totalBytes).coerceIn(0L, 100L)
-            return "$percent%"
+            parts.add("$percent%")
+        } else if (bytesTransferred > 0L) {
+            parts.add("$bytesTransferred bytes")
         }
-        if (bytesTransferred > 0L) {
-            return "$bytesTransferred bytes"
+
+        val bytesPerSecond = doubleValueOrNull("bytesPerSecond")
+        if (bytesPerSecond != null && bytesPerSecond.isFinite() && bytesPerSecond > 0.0) {
+            parts.add("${formatByteRate(bytesPerSecond)}/s")
         }
-        return status
+        val etaSeconds = longValueOrNull("estimatedRemainingSeconds")
+        if (etaSeconds != null && etaSeconds > 0L) {
+            parts.add("ETA ${formatDuration(etaSeconds)}")
+        }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: status
+    }
+
+    private fun formatByteRate(bytes: Double): String {
+        var value = bytes
+        val units = arrayOf("B", "KB", "MB", "GB")
+        var unitIndex = 0
+        while (value >= 1024.0 && unitIndex < units.lastIndex) {
+            value /= 1024.0
+            unitIndex += 1
+        }
+        val rounded = if (value >= 10.0 || unitIndex == 0) {
+            value.toLong().toString()
+        } else {
+            String.format("%.1f", value)
+        }
+        return "$rounded ${units[unitIndex]}"
+    }
+
+    private fun formatDuration(seconds: Long): String {
+        if (seconds < 60L) {
+            return "${seconds}s"
+        }
+        val minutes = seconds / 60L
+        val remainingSeconds = seconds % 60L
+        if (minutes < 60L) {
+            return "${minutes}m ${remainingSeconds}s"
+        }
+        val hours = minutes / 60L
+        val remainingMinutes = minutes % 60L
+        return "${hours}h ${remainingMinutes}m"
+    }
+
+    private fun notificationChannelId(channelId: String?): String {
+        return when (channelId) {
+            AndroidIrcxForegroundService.CHANNEL_HIGHLIGHTS,
+            AndroidIrcxForegroundService.CHANNEL_QUERIES,
+            AndroidIrcxForegroundService.CHANNEL_DCC_TRANSFERS,
+            AndroidIrcxForegroundService.CHANNEL_MEDIA_TRANSFERS,
+            AndroidIrcxForegroundService.CHANNEL_ERRORS,
+            AndroidIrcxForegroundService.CHANNEL_CONNECTION -> channelId
+            else -> AndroidIrcxForegroundService.CHANNEL_CONNECTION
+        }
+    }
+
+    private fun notificationCategory(channelId: String): String {
+        return when (channelId) {
+            AndroidIrcxForegroundService.CHANNEL_QUERIES,
+            AndroidIrcxForegroundService.CHANNEL_HIGHLIGHTS -> Notification.CATEGORY_MESSAGE
+            AndroidIrcxForegroundService.CHANNEL_ERRORS -> Notification.CATEGORY_ERROR
+            AndroidIrcxForegroundService.CHANNEL_DCC_TRANSFERS,
+            AndroidIrcxForegroundService.CHANNEL_MEDIA_TRANSFERS -> Notification.CATEGORY_PROGRESS
+            else -> Notification.CATEGORY_STATUS
+        }
+    }
+
+    private fun userNotificationId(rawId: String): Int {
+        return USER_NOTIFICATION_BASE_ID + (rawId.hashCode() and 0x0fffffff)
+    }
+
+    private fun pendingIntentFlags(): Int {
+        return PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
     }
 
     private fun String.keepsForegroundServiceRunning(): Boolean {
@@ -302,5 +428,7 @@ class MainActivity : FlutterActivity() {
             "androidircx/foreground_connection_service"
         private const val DCC_FILE_PICKER_CHANNEL = "androidircx/dcc_file_picker"
         private const val DCC_FILE_PICKER_REQUEST_CODE = 22070
+        private const val REQUEST_USER_NOTIFICATION_OPEN = 22071
+        private const val USER_NOTIFICATION_BASE_ID = 42000
     }
 }

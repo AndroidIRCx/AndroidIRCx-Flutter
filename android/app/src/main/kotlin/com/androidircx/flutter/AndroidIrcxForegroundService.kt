@@ -22,7 +22,8 @@ class AndroidIrcxForegroundService : Service() {
 
         createNotificationChannels(this)
         val activeNetworkCount = intent?.getIntExtra(EXTRA_ACTIVE_NETWORK_COUNT, 0) ?: 0
-        if (activeNetworkCount <= 0) {
+        val activeTransferCount = intent?.getIntExtra(EXTRA_ACTIVE_TRANSFER_COUNT, 0) ?: 0
+        if (activeNetworkCount <= 0 && activeTransferCount <= 0) {
             stopForegroundService()
             return START_NOT_STICKY
         }
@@ -31,7 +32,6 @@ class AndroidIrcxForegroundService : Service() {
         val reconnectingNetworkCount = intent?.getIntExtra(EXTRA_RECONNECTING_NETWORK_COUNT, 0) ?: 0
         val errorNetworkCount = intent?.getIntExtra(EXTRA_ERROR_NETWORK_COUNT, 0) ?: 0
         val networkNames = intent?.getStringArrayListExtra(EXTRA_NETWORK_NAMES).orEmpty()
-        val activeTransferCount = intent?.getIntExtra(EXTRA_ACTIVE_TRANSFER_COUNT, 0) ?: 0
         val transferSummaries = intent?.getStringArrayListExtra(EXTRA_TRANSFER_SUMMARIES).orEmpty()
 
         val notification = buildConnectionNotification(

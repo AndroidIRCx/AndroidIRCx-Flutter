@@ -10,16 +10,23 @@ import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart'
 import 'package:androidircx/irc/parser/irc_formatter.dart';
 import 'package:androidircx/irc/parser/message_content_parser.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
+import 'package:androidircx/media/services/media_download_service.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.controller, this.filePicker});
+  const ChatScreen({
+    super.key,
+    required this.controller,
+    this.filePicker,
+    this.mediaDownloadService,
+  });
 
   final ChatSessionController controller;
   final DccFilePicker? filePicker;
+  final MediaDownloadService? mediaDownloadService;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -38,6 +45,8 @@ class _ChatScreenState extends State<ChatScreen> {
   ChatSessionController get _controller => widget.controller;
   DccFilePicker get _filePicker =>
       widget.filePicker ?? const MethodChannelDccFilePicker();
+  MediaDownloadService get _mediaDownloadService =>
+      widget.mediaDownloadService ?? createMediaDownloadService();
 
   @override
   void initState() {
@@ -294,6 +303,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       _insertIntoComposer(prefix);
                     },
                     onReplyToMessage: _setPendingReply,
+                    onDownloadAttachment: _downloadAttachment,
                   ),
                 ),
                 if (_controller.commandHistory.isNotEmpty)
@@ -389,6 +399,36 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Unable to send DCC file: $error')),
+      );
+    }
+  }
+
+  Future<void> _downloadAttachment(IrcMessageAttachment attachment) async {
+    final url = attachment.uri;
+    if (url == null || url.trim().isEmpty) {
+      return;
+    }
+    try {
+      final result = await _mediaDownloadService.download(
+        url,
+        directoryPath: _controller.settings.mediaDownloadDirectoryPath,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Downloaded ${result.fileName} (${_formatByteCount(result.bytesDownloaded)}).',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to download media: $error')),
       );
     }
   }
@@ -541,10 +581,82 @@ class _ChatScreenState extends State<ChatScreen> {
       DccSessionType.chat =>
         '${session.direction} chat • ${session.host ?? '?'}:${session.port ?? 0} • $status',
       DccSessionType.send =>
-        '${session.direction}${session.isReverse ? ' reverse' : ''} file • ${session.filename ?? 'file'} • ${session.size ?? 0} B • $status',
+        '${session.direction}${session.isReverse ? ' reverse' : ''} file • ${_formatDccTransferProgress(session)} • $status',
       DccSessionType.unknown => '${session.direction} DCC • $status',
     };
   }
+}
+
+String _dccTransferSubtitle(DccSession session) {
+  final parts = <String>[
+    'File: ${session.filename ?? 'file'}',
+    _formatDccTransferProgress(session),
+    session.status.name,
+  ];
+  final speed = session.bytesPerSecond;
+  if (_isActiveDccTransfer(session) && speed != null && speed > 0) {
+    parts.add('${_formatByteRate(speed)}/s');
+  }
+  final eta = session.estimatedRemaining;
+  if (_isActiveDccTransfer(session) && eta != null && eta > Duration.zero) {
+    parts.add('ETA ${_formatDurationShort(eta)}');
+  }
+  if (session.isReverse) {
+    parts.add('reverse');
+  }
+  if (session.resumeOffset > 0) {
+    parts.add('resume ${_formatByteCount(session.resumeOffset)}');
+  }
+  return parts.join(' • ');
+}
+
+String _formatDccTransferProgress(DccSession session) {
+  final transferred = session.bytesTransferred;
+  final total = session.size;
+  if (total != null && total > 0) {
+    final percent = ((transferred / total) * 100).clamp(0, 100);
+    return '${_formatByteCount(transferred)} / ${_formatByteCount(total)} (${percent.toStringAsFixed(0)}%)';
+  }
+  if (transferred > 0) {
+    return _formatByteCount(transferred);
+  }
+  return _formatByteCount(total ?? 0);
+}
+
+String _formatByteCount(num bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var value = bytes.toDouble();
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  final display = value >= 10 || unit == 0
+      ? value.toStringAsFixed(0)
+      : value.toStringAsFixed(1);
+  return '$display ${units[unit]}';
+}
+
+String _formatByteRate(double bytesPerSecond) {
+  return _formatByteCount(bytesPerSecond);
+}
+
+String _formatDurationShort(Duration duration) {
+  final seconds = duration.inSeconds;
+  if (seconds < 60) {
+    return '${seconds}s';
+  }
+  final minutes = duration.inMinutes;
+  if (minutes < 60) {
+    return '${minutes}m ${seconds % 60}s';
+  }
+  return '${duration.inHours}h ${minutes % 60}m';
+}
+
+bool _isActiveDccTransfer(DccSession session) {
+  return session.status == DccSessionStatus.offering ||
+      session.status == DccSessionStatus.connecting ||
+      session.status == DccSessionStatus.connected;
 }
 
 class _ComposerArea extends StatelessWidget {
@@ -917,8 +1029,7 @@ class _DccSessionBanner extends StatelessWidget {
     final subtitle = switch (session.type) {
       DccSessionType.chat =>
         'Peer: ${session.peerNick} • ${session.host ?? '?'}:${session.port ?? 0} • ${session.status.name}',
-      DccSessionType.send =>
-        'File: ${session.filename ?? 'file'} • ${session.size ?? 0} B • ${session.status.name}${session.isReverse ? ' • reverse' : ''}${session.resumeOffset > 0 ? ' • resume ${session.resumeOffset}' : ''}',
+      DccSessionType.send => _dccTransferSubtitle(session),
       DccSessionType.unknown =>
         'Peer: ${session.peerNick} • ${session.status.name}',
     };
@@ -1387,6 +1498,7 @@ class _MessageList extends StatelessWidget {
     required this.onQuoteMessage,
     required this.onReplyWithNick,
     required this.onReplyToMessage,
+    required this.onDownloadAttachment,
   });
 
   final List<IrcMessage> messages;
@@ -1397,6 +1509,8 @@ class _MessageList extends StatelessWidget {
   final ValueChanged<IrcMessage> onQuoteMessage;
   final ValueChanged<IrcMessage> onReplyWithNick;
   final ValueChanged<IrcMessage> onReplyToMessage;
+  final Future<void> Function(IrcMessageAttachment attachment)
+  onDownloadAttachment;
 
   @override
   Widget build(BuildContext context) {
@@ -1504,7 +1618,10 @@ class _MessageList extends StatelessWidget {
                               : Theme.of(context).textTheme.bodyMedium,
                         ),
                         if (showAttachmentPreviews && !isRedacted)
-                          _MessageAttachments(message: message),
+                          _MessageAttachments(
+                            message: message,
+                            onDownloadAttachment: onDownloadAttachment,
+                          ),
                         if (reactions.isNotEmpty) ...[
                           const SizedBox(height: 8),
                           Wrap(
@@ -1779,9 +1896,14 @@ class _IrcFormattedText extends StatelessWidget {
 }
 
 class _MessageAttachments extends StatelessWidget {
-  const _MessageAttachments({required this.message});
+  const _MessageAttachments({
+    required this.message,
+    required this.onDownloadAttachment,
+  });
 
   final IrcMessage message;
+  final Future<void> Function(IrcMessageAttachment attachment)
+  onDownloadAttachment;
 
   @override
   Widget build(BuildContext context) {
@@ -1803,7 +1925,10 @@ class _MessageAttachments extends StatelessWidget {
             .map(
               (attachment) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: _AttachmentCard(attachment: attachment),
+                child: _AttachmentCard(
+                  attachment: attachment,
+                  onDownloadAttachment: onDownloadAttachment,
+                ),
               ),
             )
             .toList(growable: false),
@@ -1813,9 +1938,14 @@ class _MessageAttachments extends StatelessWidget {
 }
 
 class _AttachmentCard extends StatelessWidget {
-  const _AttachmentCard({required this.attachment});
+  const _AttachmentCard({
+    required this.attachment,
+    required this.onDownloadAttachment,
+  });
 
   final IrcMessageAttachment attachment;
+  final Future<void> Function(IrcMessageAttachment attachment)
+  onDownloadAttachment;
 
   @override
   Widget build(BuildContext context) {
@@ -1853,6 +1983,7 @@ class _AttachmentCard extends StatelessWidget {
       IrcMessageAttachmentType.url => Icons.link,
     };
     final subtitle = _attachmentSubtitle(attachment);
+    final canDownload = _canDownloadAttachment(attachment);
 
     return Material(
       color: theme.colorScheme.surfaceContainerHighest,
@@ -1926,9 +2057,17 @@ class _AttachmentCard extends StatelessWidget {
                   ),
                   if (url != null)
                     IconButton(
+                      key: Key('attachment-copy-${attachment.uri}'),
                       onPressed: () => _copyToClipboard(context, url),
                       icon: const Icon(Icons.copy_outlined),
                       tooltip: 'Copy link',
+                    ),
+                  if (canDownload)
+                    IconButton(
+                      key: Key('attachment-download-${attachment.uri}'),
+                      onPressed: () => onDownloadAttachment(attachment),
+                      icon: const Icon(Icons.download_outlined),
+                      tooltip: 'Download file',
                     ),
                 ],
               ),
@@ -1979,6 +2118,27 @@ String _attachmentSubtitle(IrcMessageAttachment attachment) {
     return attachment.type.name;
   }
   return parts.join(' • ');
+}
+
+bool _canDownloadAttachment(IrcMessageAttachment attachment) {
+  final url = attachment.uri;
+  if (url == null || url.trim().isEmpty) {
+    return false;
+  }
+  final uri = Uri.tryParse(url.contains('://') ? url : 'https://$url');
+  if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+    return false;
+  }
+  return switch (attachment.type) {
+    IrcMessageAttachmentType.image ||
+    IrcMessageAttachmentType.video ||
+    IrcMessageAttachmentType.audio ||
+    IrcMessageAttachmentType.file ||
+    IrcMessageAttachmentType.media => true,
+    IrcMessageAttachmentType.url ||
+    IrcMessageAttachmentType.dccChat ||
+    IrcMessageAttachmentType.dccSend => false,
+  };
 }
 
 class _ConnectionBanner extends StatelessWidget {

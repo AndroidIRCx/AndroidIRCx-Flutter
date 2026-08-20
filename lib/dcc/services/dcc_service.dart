@@ -15,8 +15,11 @@ typedef DccMessageEvent = ({
 });
 
 class DccService {
-  DccService({DccSocketBackend? backend})
-    : _backend = backend ?? createDccSocketBackend();
+  DccService({DccSocketBackend? backend, String? downloadDirectoryPath})
+    : _backend = backend ?? createDccSocketBackend(),
+      _downloadDirectoryPath = _normalizeDownloadDirectory(
+        downloadDirectoryPath,
+      );
 
   final DccSocketBackend _backend;
   final Map<String, DccSession> _sessions = <String, DccSession>{};
@@ -34,6 +37,11 @@ class DccService {
   Stream<DccSession> get sessions => _sessionController.stream;
   Stream<DccMessageEvent> get messages => _messageController.stream;
   DccSession? sessionForTab(String tabId) => _sessions[tabId];
+  String? _downloadDirectoryPath;
+
+  void updateDownloadDirectory(String? path) {
+    _downloadDirectoryPath = _normalizeDownloadDirectory(path);
+  }
 
   void _emitSession(DccSession session) {
     if (!_sessionController.isClosed) {
@@ -65,6 +73,69 @@ class DccService {
         );
         _sessions[session.tabId] = failed;
         _emitSession(failed);
+    }
+  }
+
+  Future<void> acceptReverseSend({
+    required DccSession session,
+    required void Function(String ctcpOffer) onOfferReady,
+  }) async {
+    if (session.type != DccSessionType.send || !session.isReverse) {
+      await accept(session);
+      return;
+    }
+
+    final connecting = session.copyWith(status: DccSessionStatus.connecting);
+    _sessions[session.tabId] = connecting;
+    _emitSession(connecting);
+    try {
+      final server = await _backend.bindEphemeral();
+      _servers[session.tabId] = server;
+      final fileName = session.filename ?? 'dcc-download.bin';
+      final offering = connecting.copyWith(
+        status: DccSessionStatus.offering,
+        host: server.address,
+        port: server.port,
+      );
+      _sessions[session.tabId] = offering;
+      _emitSession(offering);
+
+      final ipValue = _ipToInt(server.address);
+      final payloadHost = ipValue == null ? server.address : ipValue.toString();
+      final size = session.size ?? 0;
+      final token = (session.token ?? '').trim();
+      final tokenSuffix = token.isEmpty ? '' : ' $token';
+      onOfferReady(
+        '\u0001DCC SEND "$fileName" $payloadHost ${server.port} $size$tokenSuffix\u0001',
+      );
+
+      unawaited(
+        server.connections.first
+            .then((connection) async {
+              _connections[session.tabId] = connection;
+              await _prepareIncomingSendTransfer(
+                baseSession: offering,
+                connection: connection,
+                fileName: fileName,
+              );
+            })
+            .catchError((Object error) {
+              final failed = offering.copyWith(
+                status: DccSessionStatus.failed,
+                error: error.toString(),
+              );
+              _sessions[session.tabId] = failed;
+              _emitSession(failed);
+            }),
+      );
+    } catch (error) {
+      await _deleteTempFile(session.tabId);
+      final failed = connecting.copyWith(
+        status: DccSessionStatus.failed,
+        error: error.toString(),
+      );
+      _sessions[session.tabId] = failed;
+      _emitSession(failed);
     }
   }
 
@@ -194,27 +265,33 @@ class DccService {
     unawaited(
       server.connections.first.then((connection) async {
         _connections[tabId] = connection;
-        final connected = session.copyWith(status: DccSessionStatus.connected);
-        _sessions[tabId] = connected;
-        _emitSession(connected);
+        final startedAt = DateTime.now();
+        var latest = session.copyWith(
+          status: DccSessionStatus.connected,
+          transferStartedAt: startedAt,
+          lastProgressAt: startedAt,
+        );
+        _sessions[tabId] = latest;
+        _emitSession(latest);
         try {
           var transferred = 0;
           await for (final chunk in sourceFile.openRead()) {
             await connection.sendBytes(chunk);
             transferred += chunk.length;
-            final updated = connected.copyWith(bytesTransferred: transferred);
-            _sessions[tabId] = updated;
-            _emitSession(updated);
+            latest = _withTransferProgress(latest, transferred);
+            _sessions[tabId] = latest;
+            _emitSession(latest);
           }
-          final completed = connected.copyWith(
+          final completed = _withTransferProgress(
+            latest,
+            transferred,
             status: DccSessionStatus.closed,
-            bytesTransferred: transferred,
           );
           _sessions[tabId] = completed;
           _emitSession(completed);
           await connection.close();
         } catch (error) {
-          final failed = connected.copyWith(
+          final failed = latest.copyWith(
             status: DccSessionStatus.failed,
             error: error.toString(),
           );
@@ -292,7 +369,6 @@ class DccService {
     final connecting = session.copyWith(status: DccSessionStatus.connecting);
     _sessions[session.tabId] = connecting;
     _emitSession(connecting);
-    DccFileSink? sink;
     try {
       final connection = await _backend.connect(
         host: session.host ?? '',
@@ -300,47 +376,10 @@ class DccService {
       );
       _connections[session.tabId] = connection;
       final fileName = session.filename ?? 'dcc-download.bin';
-      final tempFile = await createDccTempFile(fileName);
-      _tempFiles[session.tabId] = tempFile;
-      sink = tempFile.sink;
-      final connected = connecting.copyWith(
-        status: DccSessionStatus.connected,
-        filePath: tempFile.path,
-      );
-      _sessions[session.tabId] = connected;
-      _emitSession(connected);
-      var transferred = 0;
-      _subscriptions[session.tabId] = connection.bytes.listen(
-        (data) async {
-          sink!.add(data);
-          transferred += data.length;
-          final updated = connected.copyWith(bytesTransferred: transferred);
-          _sessions[session.tabId] = updated;
-          _emitSession(updated);
-          final ack = ByteData(4)..setUint32(0, transferred, Endian.big);
-          await connection.sendBytes(ack.buffer.asUint8List());
-        },
-        onDone: () async {
-          await sink?.flush();
-          await sink?.close();
-          final completed = connected.copyWith(
-            status: DccSessionStatus.closed,
-            bytesTransferred: transferred,
-          );
-          _tempFiles.remove(session.tabId);
-          _sessions[session.tabId] = completed;
-          _emitSession(completed);
-        },
-        onError: (Object error, StackTrace stackTrace) async {
-          await _deleteTempFile(session.tabId);
-          final failed = connected.copyWith(
-            status: DccSessionStatus.failed,
-            error: error.toString(),
-            bytesTransferred: transferred,
-          );
-          _sessions[session.tabId] = failed;
-          _emitSession(failed);
-        },
+      await _prepareIncomingSendTransfer(
+        baseSession: connecting,
+        connection: connection,
+        fileName: fileName,
       );
     } catch (error) {
       await _deleteTempFile(session.tabId);
@@ -351,6 +390,105 @@ class DccService {
       _sessions[session.tabId] = failed;
       _emitSession(failed);
     }
+  }
+
+  Future<DccSession> _prepareIncomingSendTransfer({
+    required DccSession baseSession,
+    required DccSocketConnection connection,
+    required String fileName,
+  }) async {
+    final tempFile = await createDccTempFile(
+      fileName,
+      directoryPath: _downloadDirectoryPath,
+    );
+    _tempFiles[baseSession.tabId] = tempFile;
+    final sink = tempFile.sink;
+    final startedAt = DateTime.now();
+    var latest = baseSession.copyWith(
+      status: DccSessionStatus.connected,
+      filePath: tempFile.path,
+      transferStartedAt: startedAt,
+      lastProgressAt: startedAt,
+    );
+    _sessions[baseSession.tabId] = latest;
+    _emitSession(latest);
+    var transferred = 0;
+    _subscriptions[baseSession.tabId] = connection.bytes.listen(
+      (data) async {
+        sink.add(data);
+        transferred += data.length;
+        latest = _withTransferProgress(latest, transferred);
+        _sessions[baseSession.tabId] = latest;
+        _emitSession(latest);
+        final ack = ByteData(4)..setUint32(0, transferred, Endian.big);
+        await connection.sendBytes(ack.buffer.asUint8List());
+      },
+      onDone: () async {
+        await sink.flush();
+        await sink.close();
+        final completed = _withTransferProgress(
+          latest,
+          transferred,
+          status: DccSessionStatus.closed,
+        );
+        _tempFiles.remove(baseSession.tabId);
+        _sessions[baseSession.tabId] = completed;
+        _emitSession(completed);
+      },
+      onError: (Object error, StackTrace stackTrace) async {
+        await _deleteTempFile(baseSession.tabId);
+        final failed = latest.copyWith(
+          status: DccSessionStatus.failed,
+          error: error.toString(),
+          bytesTransferred: transferred,
+        );
+        _sessions[baseSession.tabId] = failed;
+        _emitSession(failed);
+      },
+    );
+    return latest;
+  }
+
+  DccSession _withTransferProgress(
+    DccSession session,
+    int bytesTransferred, {
+    DccSessionStatus? status,
+  }) {
+    final now = DateTime.now();
+    final startedAt = session.transferStartedAt ?? now;
+    final elapsedMicros = now.difference(startedAt).inMicroseconds;
+    final elapsed = elapsedMicros <= 0 ? 1 : elapsedMicros;
+    final bytesPerSecond = bytesTransferred <= 0
+        ? session.bytesPerSecond
+        : bytesTransferred * Duration.microsecondsPerSecond / elapsed;
+    Duration? estimatedRemaining = session.estimatedRemaining;
+    final totalBytes = session.size;
+    if (status == DccSessionStatus.closed) {
+      estimatedRemaining = Duration.zero;
+    } else if (totalBytes != null &&
+        totalBytes > 0 &&
+        bytesPerSecond != null &&
+        bytesPerSecond > 0) {
+      final remainingBytes = totalBytes - bytesTransferred;
+      estimatedRemaining = remainingBytes <= 0
+          ? Duration.zero
+          : Duration(
+              microseconds:
+                  (remainingBytes *
+                          Duration.microsecondsPerSecond /
+                          bytesPerSecond)
+                      .round(),
+            );
+    }
+
+    return session.copyWith(
+      status: status,
+      bytesTransferred: bytesTransferred,
+      transferStartedAt: startedAt,
+      lastProgressAt: now,
+      bytesPerSecond: bytesPerSecond,
+      estimatedRemaining: estimatedRemaining,
+    );
   }
 
   int? _ipToInt(String ip) {
@@ -385,5 +523,10 @@ class DccService {
     } catch (_) {
       // Best-effort cleanup only. The transfer state already reports failure or close.
     }
+  }
+
+  static String? _normalizeDownloadDirectory(String? path) {
+    final normalized = path?.trim();
+    return normalized == null || normalized.isEmpty ? null : normalized;
   }
 }
