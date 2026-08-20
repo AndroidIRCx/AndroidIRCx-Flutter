@@ -50,6 +50,23 @@ void main() {
     expect(frame.trailing, 'body');
   });
 
+  test('keeps the first duplicate IRCv3 message tag', () {
+    final frame = parseIrcMessage(
+      '@time=first;time=second;msgid=abc PRIVMSG #c :body',
+    );
+
+    expect(frame.tags['time'], 'first');
+    expect(frame.tags['msgid'], 'abc');
+  });
+
+  test('preserves significant trailing spaces before CRLF', () {
+    final frame = parseIrcMessage('PRIVMSG #c :hello   \r\n');
+
+    expect(frame.command, 'PRIVMSG');
+    expect(frame.params, ['#c']);
+    expect(frame.trailing, 'hello   ');
+  });
+
   test('handles repeated spaces around tags prefix params and trailing', () {
     final frame = parseIrcMessage(
       '@time=2026-03-17T10:11:12.000Z   :nick!user@host   PRIVMSG   #flutter   :hello world',

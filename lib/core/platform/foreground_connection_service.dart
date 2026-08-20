@@ -1,4 +1,5 @@
 import 'package:androidircx/core/models/connection_state.dart';
+import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:flutter/services.dart';
 
 enum ForegroundNotificationChannelKind {
@@ -114,10 +115,12 @@ class ForegroundConnectionNetwork {
 class ForegroundConnectionSnapshot {
   const ForegroundConnectionSnapshot({
     required this.networks,
+    this.transfers = const <ForegroundTransferSnapshot>[],
     this.channels = foregroundNotificationChannels,
   });
 
   final List<ForegroundConnectionNetwork> networks;
+  final List<ForegroundTransferSnapshot> transfers;
   final List<ForegroundNotificationChannel> channels;
 
   int get activeNetworkCount =>
@@ -135,6 +138,9 @@ class ForegroundConnectionSnapshot {
       .where((network) => network.phase == ConnectionPhase.error)
       .length;
 
+  int get activeTransferCount =>
+      transfers.where((transfer) => transfer.isActive).length;
+
   bool get shouldRunForegroundService => activeNetworkCount > 0;
 
   Map<String, Object?> toJson() {
@@ -145,12 +151,93 @@ class ForegroundConnectionSnapshot {
       'networks': networks
           .map((network) => network.toJson())
           .toList(growable: false),
+      'transfers': transfers
+          .map((transfer) => transfer.toJson())
+          .toList(growable: false),
       'activeNetworkCount': activeNetworkCount,
       'connectedNetworkCount': connectedNetworkCount,
       'reconnectingNetworkCount': reconnectingNetworkCount,
       'errorNetworkCount': errorNetworkCount,
+      'activeTransferCount': activeTransferCount,
       'shouldRunForegroundService': shouldRunForegroundService,
     };
+  }
+}
+
+enum ForegroundTransferKind { dcc, media }
+
+class ForegroundTransferSnapshot {
+  const ForegroundTransferSnapshot({
+    required this.id,
+    required this.networkId,
+    required this.tabId,
+    required this.kind,
+    required this.status,
+    required this.direction,
+    this.peerNick,
+    this.fileName,
+    this.bytesTransferred = 0,
+    this.totalBytes,
+  });
+
+  final String id;
+  final String networkId;
+  final String tabId;
+  final ForegroundTransferKind kind;
+  final String status;
+  final String direction;
+  final String? peerNick;
+  final String? fileName;
+  final int bytesTransferred;
+  final int? totalBytes;
+
+  bool get isActive {
+    return switch (status) {
+      'offering' || 'connecting' || 'connected' => true,
+      _ => false,
+    };
+  }
+
+  double? get progress {
+    final total = totalBytes;
+    if (total == null || total <= 0) {
+      return null;
+    }
+    return (bytesTransferred / total).clamp(0, 1).toDouble();
+  }
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'id': id,
+      'networkId': networkId,
+      'tabId': tabId,
+      'kind': kind.name,
+      'status': status,
+      'direction': direction,
+      if ((peerNick ?? '').trim().isNotEmpty) 'peerNick': peerNick!.trim(),
+      if ((fileName ?? '').trim().isNotEmpty) 'fileName': fileName!.trim(),
+      'bytesTransferred': bytesTransferred,
+      if (totalBytes != null) 'totalBytes': totalBytes,
+      if (progress != null) 'progress': progress,
+    };
+  }
+
+  factory ForegroundTransferSnapshot.fromDccSession({
+    required String networkId,
+    required DccSession session,
+  }) {
+    return ForegroundTransferSnapshot(
+      id: session.id,
+      networkId: networkId,
+      tabId: session.tabId,
+      kind: ForegroundTransferKind.dcc,
+      status: session.status.name,
+      direction: session.direction,
+      peerNick: session.peerNick,
+      fileName: session.filename,
+      bytesTransferred: session.bytesTransferred,
+      totalBytes: session.size,
+    );
   }
 }
 

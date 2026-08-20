@@ -12,12 +12,7 @@ class ParsedMessagePart {
   final String? mediaId;
 }
 
-enum ParsedMessagePartType {
-  text,
-  url,
-  image,
-  media,
-}
+enum ParsedMessagePartType { text, url, image, video, audio, file, media }
 
 final RegExp _mediaTagPattern = RegExp(
   r'!enc-media\s+\[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]',
@@ -80,10 +75,7 @@ const List<String> _downloadableExtensions = <String>[
 ];
 
 class ExtractedMediaTag {
-  const ExtractedMediaTag({
-    required this.tag,
-    required this.mediaId,
-  });
+  const ExtractedMediaTag({required this.tag, required this.mediaId});
 
   final String tag;
   final String mediaId;
@@ -120,8 +112,9 @@ String? getUrlExtension(String url) {
   try {
     final normalized = url.contains('://') ? url : 'https://$url';
     final parsed = Uri.parse(normalized);
-    final nonEmptySegments =
-        parsed.pathSegments.where((segment) => segment.isNotEmpty).toList(growable: false);
+    final nonEmptySegments = parsed.pathSegments
+        .where((segment) => segment.isNotEmpty)
+        .toList(growable: false);
     final lastSegment = nonEmptySegments.isEmpty ? null : nonEmptySegments.last;
     if (lastSegment == null || !lastSegment.contains('.')) {
       return null;
@@ -150,26 +143,31 @@ bool isDownloadableFileUrl(String url) {
   if (isImageUrl(url) || isVideoUrl(url) || isAudioUrl(url)) {
     return false;
   }
-  return _downloadableExtensions.contains(ext) || RegExp(r'^[a-z0-9]{2,5}$').hasMatch(ext);
+  return _downloadableExtensions.contains(ext) ||
+      RegExp(r'^[a-z0-9]{2,5}$').hasMatch(ext);
 }
 
-List<String> extractUrls(String text) =>
-    _urlPattern.allMatches(text).map((match) => match.group(0)!).toList(growable: false);
+List<String> extractUrls(String text) => _urlPattern
+    .allMatches(text)
+    .map((match) => _trimTrailingUrlPunctuation(match.group(0)!))
+    .toList(growable: false);
 
-List<String> extractImageUrls(String text) =>
-    _imagePattern.allMatches(text).map((match) => match.group(0)!).toList(growable: false);
+List<String> extractImageUrls(String text) => _imagePattern
+    .allMatches(text)
+    .map((match) => match.group(0)!)
+    .toList(growable: false);
 
-List<String> extractEmojis(String text) =>
-    _emojiPattern.allMatches(text).map((match) => match.group(0)!).toList(growable: false);
+List<String> extractEmojis(String text) => _emojiPattern
+    .allMatches(text)
+    .map((match) => match.group(0)!)
+    .toList(growable: false);
 
 List<ExtractedMediaTag> extractMediaTags(String text) {
   return _mediaTagPattern
       .allMatches(text)
       .map(
-        (match) => ExtractedMediaTag(
-          tag: match.group(0)!,
-          mediaId: match.group(1)!,
-        ),
+        (match) =>
+            ExtractedMediaTag(tag: match.group(0)!, mediaId: match.group(1)!),
       )
       .toList(growable: false);
 }
@@ -194,20 +192,11 @@ List<ParsedMessagePart> parseMessageContent(String text) {
     );
   }
 
-  for (final match in _imagePattern.allMatches(text)) {
-    matches.add(
-      _IndexedMatch(
-        index: match.start,
-        content: match.group(0)!,
-        type: ParsedMessagePartType.image,
-      ),
-    );
-  }
-
   for (final match in _urlPattern.allMatches(text)) {
-    final content = match.group(0)!;
-    final alreadyCaptured =
-        matches.any((item) => item.index == match.start && item.content == content);
+    final content = _trimTrailingUrlPunctuation(match.group(0)!);
+    final alreadyCaptured = matches.any(
+      (item) => item.index == match.start && item.content == content,
+    );
     if (alreadyCaptured) {
       continue;
     }
@@ -217,6 +206,12 @@ List<ParsedMessagePart> parseMessageContent(String text) {
         content: content,
         type: isImageUrl(content)
             ? ParsedMessagePartType.image
+            : isVideoUrl(content)
+            ? ParsedMessagePartType.video
+            : isAudioUrl(content)
+            ? ParsedMessagePartType.audio
+            : isDownloadableFileUrl(content)
+            ? ParsedMessagePartType.file
             : ParsedMessagePartType.url,
       ),
     );
@@ -272,4 +267,12 @@ class _IndexedMatch {
   final String content;
   final ParsedMessagePartType type;
   final String? mediaId;
+}
+
+String _trimTrailingUrlPunctuation(String value) {
+  var end = value.length;
+  while (end > 0 && '.,;:!?)]}'.contains(value[end - 1])) {
+    end -= 1;
+  }
+  return value.substring(0, end);
 }

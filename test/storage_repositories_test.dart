@@ -565,6 +565,13 @@ void main() {
         content: 'hello',
         timestamp: DateTime(2026, 3, 16, 12, 0),
         tags: const <String, String?>{'time': '2026-03-16T12:00:00.000Z'},
+        attachments: const [
+          IrcMessageAttachment(
+            type: IrcMessageAttachmentType.image,
+            label: 'Image',
+            uri: 'https://example.test/a.png',
+          ),
+        ],
       );
 
       await persistence.save(
@@ -582,6 +589,11 @@ void main() {
       expect(snapshot!.tabs.single.name, '#flutter');
       expect(snapshot.activeTabId, tab.id);
       expect(snapshot.messagesByTab[tab.id]!.single.content, 'hello');
+      expect(snapshot.messagesByTab[tab.id]!.single.attachments, hasLength(1));
+      expect(
+        snapshot.messagesByTab[tab.id]!.single.attachments.single.uri,
+        'https://example.test/a.png',
+      );
       expect(
         snapshot.messagesByTab[tab.id]!.single.tags['time'],
         '2026-03-16T12:00:00.000Z',
@@ -630,5 +642,56 @@ void main() {
 
       expect(restored, hasLength(2));
     });
+
+    test(
+      'chat session persistence applies retention and msgid dedupe',
+      () async {
+        final persistence = ChatSessionPersistence(maxMessagesPerTab: 2);
+        const tab = ChatTab(
+          id: 'channel::dbase::#flutter',
+          name: '#flutter',
+          type: ChatTabType.channel,
+          networkId: 'dbase',
+        );
+        final messages = [
+          IrcMessage(
+            id: '1',
+            tabId: tab.id,
+            sender: 'alice',
+            content: 'old',
+            timestamp: DateTime(2026, 3, 16, 12),
+            tags: const {'msgid': 'dupe'},
+          ),
+          IrcMessage(
+            id: '2',
+            tabId: tab.id,
+            sender: 'alice',
+            content: 'duplicate',
+            timestamp: DateTime(2026, 3, 16, 12, 1),
+            tags: const {'msgid': 'dupe'},
+          ),
+          IrcMessage(
+            id: '3',
+            tabId: tab.id,
+            sender: 'bob',
+            content: 'newer',
+            timestamp: DateTime(2026, 3, 16, 12, 2),
+            tags: const {'msgid': 'newer'},
+          ),
+        ];
+
+        await persistence.save(
+          networkId: 'dbase',
+          tabs: const [tab],
+          messagesByTab: {tab.id: messages},
+          activeTabId: tab.id,
+        );
+
+        final snapshot = await persistence.load('dbase');
+        final restored = snapshot!.messagesByTab[tab.id]!;
+
+        expect(restored.map((message) => message.content), ['old', 'newer']);
+      },
+    );
   });
 }

@@ -17,6 +17,14 @@ class ChatSessionSnapshot {
 }
 
 class ChatSessionPersistence {
+  ChatSessionPersistence({
+    this.maxMessagesPerTab = 1000,
+    this.retainMessagesAfter,
+  });
+
+  final int maxMessagesPerTab;
+  final DateTime? retainMessagesAfter;
+
   Future<ChatSessionSnapshot?> load(String networkId) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_key(networkId));
@@ -29,11 +37,14 @@ class ChatSessionPersistence {
         .map((item) => ChatTab.fromJson(item as Map<String, Object?>))
         .toList();
     final messagesMap = <String, List<IrcMessage>>{};
-    final rawMessages = (decoded['messagesByTab'] as Map<String, dynamic>?) ?? const {};
+    final rawMessages =
+        (decoded['messagesByTab'] as Map<String, dynamic>?) ?? const {};
     for (final entry in rawMessages.entries) {
-      messagesMap[entry.key] = (entry.value as List<dynamic>)
-          .map((item) => IrcMessage.fromJson(item as Map<String, Object?>))
-          .toList();
+      messagesMap[entry.key] = _dedupeByMsgid(
+        (entry.value as List<dynamic>)
+            .map((item) => IrcMessage.fromJson(item as Map<String, Object?>))
+            .toList(),
+      );
     }
 
     return ChatSessionSnapshot(
@@ -55,10 +66,9 @@ class ChatSessionPersistence {
       'messagesByTab': messagesByTab.map(
         (key, value) => MapEntry(
           key,
-          value
-              .takeLast(200)
-              .map((message) => message.toJson())
-              .toList(growable: false),
+          _retainedMessages(
+            value,
+          ).map((message) => message.toJson()).toList(growable: false),
         ),
       ),
       'activeTabId': activeTabId,
@@ -67,6 +77,35 @@ class ChatSessionPersistence {
   }
 
   String _key(String networkId) => 'androidircx.chat.$networkId';
+
+  List<IrcMessage> _retainedMessages(List<IrcMessage> messages) {
+    Iterable<IrcMessage> retained = _dedupeByMsgid(messages);
+    final retainAfter = retainMessagesAfter;
+    if (retainAfter != null) {
+      retained = retained.where(
+        (message) => !message.timestamp.isBefore(retainAfter),
+      );
+    }
+
+    final maxItems = maxMessagesPerTab < 0 ? 0 : maxMessagesPerTab;
+    return retained
+        .toList(growable: false)
+        .takeLast(maxItems)
+        .toList(growable: false);
+  }
+
+  List<IrcMessage> _dedupeByMsgid(List<IrcMessage> messages) {
+    final seen = <String>{};
+    final deduped = <IrcMessage>[];
+    for (final message in messages) {
+      final msgid = (message.tags['msgid'] ?? '').trim();
+      if (msgid.isNotEmpty && !seen.add('${message.tabId}\x1f$msgid')) {
+        continue;
+      }
+      deduped.add(message);
+    }
+    return deduped;
+  }
 }
 
 extension on List<IrcMessage> {

@@ -1,7 +1,7 @@
 import 'package:androidircx/irc/models/irc_message_frame.dart';
 
 IrcMessageFrame parseIrcMessage(String raw) {
-  var rest = raw.trim();
+  var rest = raw.replaceFirst(RegExp(r'[\r\n]+$'), '').trimLeft();
   Map<String, String?> tags = const <String, String?>{};
   String? prefix;
   String? trailing;
@@ -67,13 +67,13 @@ Map<String, String?> _parseMessageTags(String source) {
 
     final separator = entry.indexOf('=');
     if (separator == -1) {
-      tags[entry] = null;
+      tags.putIfAbsent(entry, () => null);
       continue;
     }
 
     final key = entry.substring(0, separator);
     final value = entry.substring(separator + 1);
-    tags[key] = _unescapeTagValue(value);
+    tags.putIfAbsent(key, () => _unescapeTagValue(value));
   }
 
   return tags;

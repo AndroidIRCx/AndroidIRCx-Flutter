@@ -1207,8 +1207,18 @@ class _HistoryToolsSheetState extends State<_HistoryToolsSheet> {
 
 enum _HistoryKindFilter {
   all('All', <IrcMessageKind>{}),
-  chat('Chat', <IrcMessageKind>{IrcMessageKind.chat}),
-  system('System', <IrcMessageKind>{IrcMessageKind.system}),
+  chat('Chat', <IrcMessageKind>{
+    IrcMessageKind.chat,
+    IrcMessageKind.action,
+    IrcMessageKind.notice,
+    IrcMessageKind.media,
+  }),
+  system('System', <IrcMessageKind>{
+    IrcMessageKind.system,
+    IrcMessageKind.error,
+    IrcMessageKind.event,
+  }),
+  dcc('DCC', <IrcMessageKind>{IrcMessageKind.dcc}),
   raw('Raw', <IrcMessageKind>{IrcMessageKind.raw});
 
   const _HistoryKindFilter(this.label, this.kinds);
@@ -1347,9 +1357,15 @@ class _MessageList extends StatelessWidget {
         final isRedacted = message.tags['redacted'] == 'true';
         final reactions = resolveReactions(message);
         final bubbleColor = switch (message.kind) {
-          IrcMessageKind.system => const Color(0xFFF6F8F1),
+          IrcMessageKind.system ||
+          IrcMessageKind.event => const Color(0xFFF6F8F1),
+          IrcMessageKind.error => const Color(0xFFFFEBEE),
+          IrcMessageKind.dcc => const Color(0xFFEAF7F3),
           IrcMessageKind.raw => const Color(0xFFF7F7FA),
-          IrcMessageKind.chat =>
+          IrcMessageKind.chat ||
+          IrcMessageKind.action ||
+          IrcMessageKind.notice ||
+          IrcMessageKind.media =>
             message.isOwn
                 ? Theme.of(context).colorScheme.primaryContainer
                 : Colors.white,
@@ -1429,7 +1445,7 @@ class _MessageList extends StatelessWidget {
                               : Theme.of(context).textTheme.bodyMedium,
                         ),
                         if (showAttachmentPreviews && !isRedacted)
-                          _MessageAttachments(content: message.content),
+                          _MessageAttachments(message: message),
                         if (reactions.isNotEmpty) ...[
                           const SizedBox(height: 8),
                           Wrap(
@@ -1639,29 +1655,26 @@ class _IrcFormattedText extends StatelessWidget {
 
   TextStyle _resolveTextStyle(TextStyle? base, IrcLinkSegment segment) {
     final style = segment.style;
-    var foreground = style.color;
-    var background = style.background;
+    var foregroundHex =
+        style.colorHex ??
+        (style.color == null ? null : getIrcColorHex(style.color!));
+    var backgroundHex =
+        style.backgroundHex ??
+        (style.background == null ? null : getIrcColorHex(style.background!));
 
-    if (style.reverse && foreground != null && background != null) {
-      final swappedForeground = background;
-      background = foreground;
-      foreground = swappedForeground;
-    } else if (style.reverse && foreground != null) {
-      background = foreground;
-      foreground = null;
-    } else if (style.reverse && background != null) {
-      foreground = background;
-      background = null;
+    if (style.reverse && foregroundHex != null && backgroundHex != null) {
+      final swappedForeground = backgroundHex;
+      backgroundHex = foregroundHex;
+      foregroundHex = swappedForeground;
+    } else if (style.reverse && foregroundHex != null) {
+      backgroundHex = foregroundHex;
+      foregroundHex = null;
+    } else if (style.reverse && backgroundHex != null) {
+      foregroundHex = backgroundHex;
+      backgroundHex = null;
     }
 
     var textStyle = base ?? const TextStyle();
-    final foregroundHex = foreground == null
-        ? null
-        : getIrcColorHex(foreground);
-    final backgroundHex = background == null
-        ? null
-        : getIrcColorHex(background);
-
     if (foregroundHex != null) {
       textStyle = textStyle.copyWith(color: _parseHexColor(foregroundHex));
     }
@@ -1675,6 +1688,9 @@ class _IrcFormattedText extends StatelessWidget {
     }
     if (style.italic) {
       textStyle = textStyle.copyWith(fontStyle: FontStyle.italic);
+    }
+    if (style.monospace) {
+      textStyle = textStyle.copyWith(fontFamily: 'monospace');
     }
 
     final decorations = <TextDecoration>{};
@@ -1704,16 +1720,18 @@ class _IrcFormattedText extends StatelessWidget {
 }
 
 class _MessageAttachments extends StatelessWidget {
-  const _MessageAttachments({required this.content});
+  const _MessageAttachments({required this.message});
 
-  final String content;
+  final IrcMessage message;
 
   @override
   Widget build(BuildContext context) {
-    final parts = parseMessageContent(stripIrcFormatting(content));
-    final previews = parts
-        .where((part) => part.type != ParsedMessagePartType.text)
-        .toList(growable: false);
+    final previews = message.attachments.isNotEmpty
+        ? message.attachments
+        : parseMessageContent(stripIrcFormatting(message.content))
+              .where((part) => part.type != ParsedMessagePartType.text)
+              .map(_attachmentFromParsedPart)
+              .toList(growable: false);
     if (previews.isEmpty) {
       return const SizedBox.shrink();
     }
@@ -1724,9 +1742,9 @@ class _MessageAttachments extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: previews
             .map(
-              (part) => Padding(
+              (attachment) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: _AttachmentCard(part: part),
+                child: _AttachmentCard(attachment: attachment),
               ),
             )
             .toList(growable: false),
@@ -1736,34 +1754,46 @@ class _MessageAttachments extends StatelessWidget {
 }
 
 class _AttachmentCard extends StatelessWidget {
-  const _AttachmentCard({required this.part});
+  const _AttachmentCard({required this.attachment});
 
-  final ParsedMessagePart part;
+  final IrcMessageAttachment attachment;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final url = part.url;
-    final isImage = part.type == ParsedMessagePartType.image && url != null;
-    final title = switch (part.type) {
-      ParsedMessagePartType.image => 'Image',
-      ParsedMessagePartType.media => 'Encrypted media',
-      ParsedMessagePartType.url => 'Link',
-      ParsedMessagePartType.text => 'Text',
-    };
-    final icon = switch (part.type) {
-      ParsedMessagePartType.image => Icons.image_outlined,
-      ParsedMessagePartType.media => Icons.lock_outline,
-      ParsedMessagePartType.url when url != null && isVideoUrl(url) =>
+    final url = attachment.uri;
+    final isImage =
+        attachment.type == IrcMessageAttachmentType.image && url != null;
+    final title = attachment.label.trim().isNotEmpty
+        ? attachment.label
+        : switch (attachment.type) {
+            IrcMessageAttachmentType.image => 'Image',
+            IrcMessageAttachmentType.video => 'Video',
+            IrcMessageAttachmentType.audio => 'Audio',
+            IrcMessageAttachmentType.file => 'File',
+            IrcMessageAttachmentType.media => 'Encrypted media',
+            IrcMessageAttachmentType.dccChat => 'DCC CHAT',
+            IrcMessageAttachmentType.dccSend => 'DCC SEND',
+            IrcMessageAttachmentType.url => 'Link',
+          };
+    final icon = switch (attachment.type) {
+      IrcMessageAttachmentType.image => Icons.image_outlined,
+      IrcMessageAttachmentType.video => Icons.movie_outlined,
+      IrcMessageAttachmentType.audio => Icons.audiotrack_outlined,
+      IrcMessageAttachmentType.file => Icons.download_outlined,
+      IrcMessageAttachmentType.media => Icons.lock_outline,
+      IrcMessageAttachmentType.dccChat => Icons.chat_bubble_outline,
+      IrcMessageAttachmentType.dccSend => Icons.file_present_outlined,
+      IrcMessageAttachmentType.url when url != null && isVideoUrl(url) =>
         Icons.movie_outlined,
-      ParsedMessagePartType.url when url != null && isAudioUrl(url) =>
+      IrcMessageAttachmentType.url when url != null && isAudioUrl(url) =>
         Icons.audiotrack_outlined,
-      ParsedMessagePartType.url
+      IrcMessageAttachmentType.url
           when url != null && isDownloadableFileUrl(url) =>
         Icons.download_outlined,
-      ParsedMessagePartType.url => Icons.link,
-      ParsedMessagePartType.text => Icons.notes,
+      IrcMessageAttachmentType.url => Icons.link,
     };
+    final subtitle = _attachmentSubtitle(attachment);
 
     return Material(
       color: theme.colorScheme.surfaceContainerHighest,
@@ -1827,7 +1857,7 @@ class _AttachmentCard extends StatelessWidget {
                       children: [
                         Text(title, style: theme.textTheme.labelLarge),
                         Text(
-                          part.mediaId ?? part.content,
+                          subtitle,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodySmall,
@@ -1849,6 +1879,47 @@ class _AttachmentCard extends StatelessWidget {
       ),
     );
   }
+}
+
+IrcMessageAttachment _attachmentFromParsedPart(ParsedMessagePart part) {
+  final type = switch (part.type) {
+    ParsedMessagePartType.image => IrcMessageAttachmentType.image,
+    ParsedMessagePartType.video => IrcMessageAttachmentType.video,
+    ParsedMessagePartType.audio => IrcMessageAttachmentType.audio,
+    ParsedMessagePartType.file => IrcMessageAttachmentType.file,
+    ParsedMessagePartType.media => IrcMessageAttachmentType.media,
+    ParsedMessagePartType.url ||
+    ParsedMessagePartType.text => IrcMessageAttachmentType.url,
+  };
+  final label = switch (part.type) {
+    ParsedMessagePartType.image => 'Image',
+    ParsedMessagePartType.video => 'Video',
+    ParsedMessagePartType.audio => 'Audio',
+    ParsedMessagePartType.file => 'File',
+    ParsedMessagePartType.media => 'Encrypted media',
+    ParsedMessagePartType.url || ParsedMessagePartType.text => 'Link',
+  };
+  return IrcMessageAttachment(
+    type: type,
+    label: label,
+    uri: part.url,
+    mediaId: part.mediaId,
+  );
+}
+
+String _attachmentSubtitle(IrcMessageAttachment attachment) {
+  final parts = <String?>[
+    attachment.mediaId,
+    attachment.fileName,
+    attachment.uri,
+    attachment.peerNick == null ? null : 'peer ${attachment.peerNick}',
+    attachment.size == null ? null : '${attachment.size} bytes',
+    attachment.status,
+  ].whereType<String>().where((part) => part.trim().isNotEmpty).toList();
+  if (parts.isEmpty) {
+    return attachment.type.name;
+  }
+  return parts.join(' • ');
 }
 
 class _ConnectionBanner extends StatelessWidget {

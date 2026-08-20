@@ -19,7 +19,7 @@ class DccOffer {
   final String? token;
   final int? offset;
 
-  bool get isReverseSend => command == 'SEND' && token != null;
+  bool get isReverseSend => command == 'SEND' && port == 0 && token != null;
 }
 
 DccOffer? parseDccOffer(String args) {
@@ -28,7 +28,7 @@ DccOffer? parseDccOffer(String args) {
     return null;
   }
 
-  final parts = trimmed.split(RegExp(r'\s+'));
+  final parts = _tokenizeDccPayload(trimmed);
   if (parts.length < 2 || parts.first.toUpperCase() != 'DCC') {
     return null;
   }
@@ -41,49 +41,83 @@ DccOffer? parseDccOffer(String args) {
           command: command,
           target: parts[2],
           host: _normalizeDccHost(parts[3]),
-          port: int.tryParse(parts[4]),
+          port: _parseNonNegativeInt(parts[4]),
+          token: parts.length > 5 ? parts[5] : null,
         );
       }
       return null;
     case 'SEND':
       if (parts.length >= 5) {
-        final filenameStart = trimmed.indexOf('SEND') + 5;
-        final afterCommand = trimmed.substring(filenameStart).trim();
-        final match = RegExp(r'^"?(.*?)"?\s+(\S+)\s+(\d+)\s+(\d+)(?:\s+(\S+))?$')
-            .firstMatch(afterCommand);
-        if (match != null) {
-          return DccOffer(
-            command: command,
-            target: 'file',
-            filename: match.group(1),
-            host: _normalizeDccHost(match.group(2)!),
-            port: int.tryParse(match.group(3)!),
-            size: int.tryParse(match.group(4)!),
-            token: match.group(5),
-          );
-        }
+        return DccOffer(
+          command: command,
+          target: 'file',
+          filename: parts[2],
+          host: _normalizeDccHost(parts[3]),
+          port: _parseNonNegativeInt(parts[4]),
+          size: parts.length > 5 ? _parseNonNegativeInt(parts[5]) : null,
+          token: parts.length > 6 ? parts[6] : null,
+        );
       }
       return null;
     case 'RESUME':
     case 'ACCEPT':
       if (parts.length >= 5) {
-        final afterCommand = trimmed.substring(trimmed.indexOf(command) + command.length).trim();
-        final match = RegExp(r'^"?(.*?)"?\s+(\d+)\s+(\d+)(?:\s+(\S+))?$').firstMatch(afterCommand);
-        if (match != null) {
-          return DccOffer(
-            command: command,
-            target: 'file',
-            filename: match.group(1),
-            port: int.tryParse(match.group(2)!),
-            offset: int.tryParse(match.group(3)!),
-            token: match.group(4),
-          );
-        }
+        return DccOffer(
+          command: command,
+          target: 'file',
+          filename: parts[2],
+          port: _parseNonNegativeInt(parts[3]),
+          offset: _parseNonNegativeInt(parts[4]),
+          token: parts.length > 5 ? parts[5] : null,
+        );
       }
       return null;
     default:
-      return DccOffer(command: command, target: parts.length > 2 ? parts[2] : '');
+      return DccOffer(
+        command: command,
+        target: parts.length > 2 ? parts[2] : '',
+      );
   }
+}
+
+List<String> _tokenizeDccPayload(String value) {
+  final tokens = <String>[];
+  final buffer = StringBuffer();
+  var quoted = false;
+  var escaped = false;
+
+  void flush() {
+    if (buffer.isEmpty) {
+      return;
+    }
+    tokens.add(buffer.toString());
+    buffer.clear();
+  }
+
+  for (var i = 0; i < value.length; i += 1) {
+    final char = value[i];
+    if (escaped) {
+      buffer.write(char);
+      escaped = false;
+      continue;
+    }
+    if (quoted && char == '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char == '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && char.trim().isEmpty) {
+      flush();
+      continue;
+    }
+    buffer.write(char);
+  }
+
+  flush();
+  return tokens;
 }
 
 String _normalizeDccHost(String host) {
@@ -92,7 +126,7 @@ String _normalizeDccHost(String host) {
   }
 
   final value = int.tryParse(host);
-  if (value == null) {
+  if (value == null || value < 0 || value > 0xffffffff) {
     return host;
   }
 
@@ -102,4 +136,12 @@ String _normalizeDccHost(String host) {
     (value >> 8) & 255,
     value & 255,
   ].join('.');
+}
+
+int? _parseNonNegativeInt(String value) {
+  final parsed = int.tryParse(value);
+  if (parsed == null || parsed < 0) {
+    return null;
+  }
+  return parsed;
 }

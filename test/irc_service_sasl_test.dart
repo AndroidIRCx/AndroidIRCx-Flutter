@@ -4,8 +4,9 @@ import 'dart:convert';
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
-import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/sasl/scram_sha256_session.dart';
+import 'package:androidircx/irc/services/irc_service.dart';
+import 'package:androidircx/irc/services/irc_sts_policy_store.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -61,6 +62,7 @@ void main() {
 
     final firstConnect = service.connect(network);
     final secondConnect = service.connect(network);
+    await Future<void>.delayed(Duration.zero);
     expect(connectorCalls, 1);
 
     connectorGate.complete(transport);
@@ -321,8 +323,165 @@ void main() {
     service.dispose();
   });
 
+  test('handles CAP LS with concrete nick and SASL mechanism values', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(
+      transportConnector: (_) async => transport,
+      scramNonceGenerator: () => 'fixedNonce',
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        saslAccount: 'alice',
+        saslPassword: 'secret',
+        saslMechanism: SaslMechanism.scramSha256,
+      ),
+    );
+
+    transport.emit(
+      ':server CAP AndroidIRCX LS :multi-prefix sasl=PLAIN,SCRAM-SHA-256,EXTERNAL',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(service.availableCapabilities, contains('sasl'));
+    expect(service.capabilityValues['sasl'], 'PLAIN,SCRAM-SHA-256,EXTERNAL');
+    expect(service.availableSaslMechanisms, {
+      'PLAIN',
+      'SCRAM-SHA-256',
+      'EXTERNAL',
+    });
+    expect(transport.sentLines, contains('CAP REQ :sasl multi-prefix'));
+
+    transport.emit(':server CAP AndroidIRCX ACK :sasl');
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.sentLines, contains('AUTHENTICATE SCRAM-SHA-256'));
+
+    service.dispose();
+  });
+
   test(
-    'without SASL config registers with NICK and USER without CAP LS',
+    'does not request SASL when configured mechanism is not advertised',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+
+      await service.connect(
+        const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          saslAccount: 'alice',
+          saslPassword: 'secret',
+          saslMechanism: SaslMechanism.scramSha256,
+        ),
+      );
+
+      transport.emit(':server CAP AndroidIRCX LS :sasl=PLAIN');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.capabilityValues['sasl'], 'PLAIN');
+      expect(
+        transport.sentLines.where((line) => line.startsWith('CAP REQ')),
+        isEmpty,
+      );
+      expect(transport.sentLines, contains('CAP END'));
+
+      service.dispose();
+    },
+  );
+
+  test(
+    'sends SASL PLAIN payload terminator when encoded data is exactly 400 bytes',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final password = List<String>.filled(296, 'p').join();
+
+      await service.connect(
+        NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          saslAccount: 'a',
+          saslPassword: password,
+        ),
+      );
+      transport.emit(':server CAP AndroidIRCX LS :sasl=PLAIN');
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(':server CAP AndroidIRCX ACK :sasl');
+      await Future<void>.delayed(Duration.zero);
+      transport.emit('AUTHENTICATE +');
+      await Future<void>.delayed(Duration.zero);
+
+      final payloadLines = transport.sentLines
+          .where(
+            (line) =>
+                line.startsWith('AUTHENTICATE ') &&
+                line != 'AUTHENTICATE PLAIN',
+          )
+          .toList(growable: false);
+      expect(payloadLines, hasLength(2));
+      expect(
+        payloadLines.first.substring('AUTHENTICATE '.length),
+        hasLength(400),
+      );
+      expect(payloadLines.last, 'AUTHENTICATE +');
+
+      service.dispose();
+    },
+  );
+
+  test('splits long SASL PLAIN payloads into 400-byte chunks', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final password = List<String>.filled(400, 'p').join();
+
+    await service.connect(
+      NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        saslAccount: 'alice',
+        saslPassword: password,
+      ),
+    );
+    transport.emit(':server CAP AndroidIRCX LS :sasl=PLAIN');
+    await Future<void>.delayed(Duration.zero);
+    transport.emit(':server CAP AndroidIRCX ACK :sasl');
+    await Future<void>.delayed(Duration.zero);
+    transport.emit('AUTHENTICATE +');
+    await Future<void>.delayed(Duration.zero);
+
+    final payloadLines = transport.sentLines
+        .where(
+          (line) =>
+              line.startsWith('AUTHENTICATE ') && line != 'AUTHENTICATE PLAIN',
+        )
+        .toList(growable: false);
+    expect(payloadLines, hasLength(2));
+    expect(payloadLines[0].substring('AUTHENTICATE '.length), hasLength(400));
+    expect(
+      payloadLines[1].substring('AUTHENTICATE '.length).length,
+      lessThan(400),
+    );
+    expect(payloadLines, isNot(contains('AUTHENTICATE +')));
+
+    service.dispose();
+  });
+
+  test(
+    'without SASL config still negotiates IRCv3 caps without requesting SASL',
     () async {
       final transport = _FakeTransport();
       final service = IrcService(transportConnector: (_) async => transport);
@@ -339,14 +498,20 @@ void main() {
         ),
       );
 
-      expect(transport.sentLines, isNot(contains('CAP LS 302')));
       expect(
         transport.sentLines,
         containsAllInOrder(<String>[
+          'CAP LS 302',
           'NICK AndroidIRCX',
           'USER androidircx 0 * :AndroidIRCX',
         ]),
       );
+
+      transport.emit(':server CAP AndroidIRCX LS :sasl server-time');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(transport.sentLines, contains('CAP REQ :server-time'));
+      expect(transport.sentLines, isNot(contains('CAP REQ :sasl')));
 
       service.dispose();
     },
@@ -683,16 +848,334 @@ void main() {
       ),
     );
 
-    transport.emit(':server CAP * NEW :draft/labeled-response echo-message');
+    transport.emit(
+      ':server CAP AndroidIRCX NEW :draft/labeled-response echo-message sts=duration=86400',
+    );
     await Future<void>.delayed(Duration.zero);
     expect(service.availableCapabilities, contains('draft/labeled-response'));
     expect(service.availableCapabilities, contains('echo-message'));
+    expect(service.availableCapabilities, contains('sts'));
+    expect(service.capabilityValues['sts'], 'duration=86400');
 
-    transport.emit(':server CAP * DEL :echo-message');
+    transport.emit(':server CAP AndroidIRCX DEL :echo-message sts');
     await Future<void>.delayed(Duration.zero);
     expect(service.availableCapabilities, isNot(contains('echo-message')));
+    expect(service.availableCapabilities, contains('sts'));
+    expect(service.capabilityValues['sts'], 'duration=86400');
     expect(rawEvents.any((event) => event.contains('CAP NEW')), isTrue);
     expect(rawEvents.any((event) => event.contains('CAP DEL')), isTrue);
+    expect(
+      rawEvents.any((event) => event.contains('CAP DEL ignored for STS')),
+      isTrue,
+    );
+
+    await subscription.cancel();
+    service.dispose();
+  });
+
+  test('splits long CAP REQ requests into safe batches', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final capabilities = List<String>.generate(
+      60,
+      (index) => 'draft/example-capability-$index',
+    );
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    await service.sendCapReq(capabilities.join(' '));
+
+    final reqLines = transport.sentLines
+        .where((line) => line.startsWith('CAP REQ :'))
+        .toList(growable: false);
+    expect(reqLines.length, greaterThan(1));
+    expect(reqLines.every((line) => line.length <= 480), isTrue);
+
+    service.dispose();
+  });
+
+  test('does not request STS capability from CAP LS', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    transport.emit(
+      ':server CAP AndroidIRCX LS :sts=duration=86400 server-time',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(service.availableCapabilities, contains('sts'));
+    expect(service.capabilityValues['sts'], 'duration=86400');
+    expect(transport.sentLines, contains('CAP REQ :server-time'));
+    expect(
+      transport.sentLines.any((line) => line.contains('CAP REQ :sts')),
+      isFalse,
+    );
+
+    service.dispose();
+  });
+
+  test(
+    'uses cached STS policy to upgrade insecure connects before socket open',
+    () async {
+      final transport = _FakeTransport();
+      final store = InMemoryIrcStsPolicyStore();
+      final now = DateTime.utc(2026, 8, 20, 10);
+      final networks = <NetworkConfig>[];
+      await store.savePolicy(
+        IrcStsPolicy(
+          host: 'irc.example.test',
+          port: 6697,
+          durationSeconds: 86400,
+          expiresAt: now.add(const Duration(days: 1)),
+        ),
+      );
+      final service = IrcService(
+        transportConnector: (network) async {
+          networks.add(network);
+          return transport;
+        },
+        stsPolicyStore: store,
+        now: () => now,
+      );
+
+      await service.connect(
+        const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6667,
+          nickname: 'AndroidIRCX',
+          useTls: false,
+        ),
+      );
+
+      expect(networks, hasLength(1));
+      expect(networks.single.useTls, isTrue);
+      expect(networks.single.port, 6697);
+
+      service.dispose();
+    },
+  );
+
+  test(
+    'STS port on insecure CAP LS reconnects with TLS and skips old CAP flow',
+    () async {
+      final insecureTransport = _FakeTransport();
+      final secureTransport = _FakeTransport();
+      final networks = <NetworkConfig>[];
+      var connectorCalls = 0;
+      final service = IrcService(
+        transportConnector: (network) async {
+          networks.add(network);
+          connectorCalls += 1;
+          return connectorCalls == 1 ? insecureTransport : secureTransport;
+        },
+        stsPolicyStore: InMemoryIrcStsPolicyStore(),
+      );
+
+      await service.connect(
+        const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6667,
+          nickname: 'AndroidIRCX',
+          useTls: false,
+        ),
+      );
+
+      insecureTransport.emit(':server CAP AndroidIRCX LS :sts=port=6697');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(insecureTransport.closeCount, 1);
+      expect(networks, hasLength(2));
+      expect(networks.last.useTls, isTrue);
+      expect(networks.last.port, 6697);
+      expect(
+        insecureTransport.sentLines.where((line) => line.startsWith('CAP REQ')),
+        isEmpty,
+      );
+      expect(secureTransport.sentLines, contains('CAP LS 302'));
+
+      service.dispose();
+    },
+  );
+
+  test(
+    'stores and clears STS duration policies only from secure connections',
+    () async {
+      final transport = _FakeTransport();
+      final store = InMemoryIrcStsPolicyStore();
+      var now = DateTime.utc(2026, 8, 20, 10);
+      final service = IrcService(
+        transportConnector: (_) async => transport,
+        stsPolicyStore: store,
+        now: () => now,
+      );
+
+      await service.connect(
+        const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+        ),
+      );
+
+      transport.emit(':server CAP AndroidIRCX LS :sts=duration=60,preload');
+      await Future<void>.delayed(Duration.zero);
+
+      var policy = await store.loadPolicy('IRC.EXAMPLE.TEST');
+      expect(policy, isNotNull);
+      expect(policy!.port, 6697);
+      expect(policy.durationSeconds, 60);
+      expect(policy.expiresAt, now.add(const Duration(seconds: 60)));
+      expect(policy.preload, isTrue);
+
+      now = now.add(const Duration(seconds: 10));
+      await service.disconnect();
+      policy = await store.loadPolicy('irc.example.test');
+      expect(policy!.expiresAt, now.add(const Duration(seconds: 60)));
+
+      final nextTransport = _FakeTransport();
+      final nextService = IrcService(
+        transportConnector: (_) async => nextTransport,
+        stsPolicyStore: store,
+        now: () => now,
+      );
+      await nextService.connect(
+        const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+        ),
+      );
+      nextTransport.emit(':server CAP AndroidIRCX NEW :sts=duration=0');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(await store.loadPolicy('irc.example.test'), isNull);
+
+      nextService.dispose();
+    },
+  );
+
+  test(
+    'CAP NEW requests SASL when a compatible mechanism appears later',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+
+      await service.connect(
+        const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          saslAccount: 'alice',
+          saslPassword: 'secret',
+        ),
+      );
+
+      transport.emit(':server CAP AndroidIRCX LS :');
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.sentLines, contains('CAP END'));
+
+      transport.emit(':server CAP AndroidIRCX NEW :sasl=PLAIN,EXTERNAL');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.capabilityValues['sasl'], 'PLAIN,EXTERNAL');
+      expect(transport.sentLines, contains('CAP REQ :sasl'));
+
+      service.dispose();
+    },
+  );
+
+  test('CAP ACK with disable prefix removes enabled capability', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final rawEvents = <String>[];
+    final subscription = service.rawEvents.listen(rawEvents.add);
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    transport.emit(':server CAP AndroidIRCX ACK :echo-message');
+    await Future<void>.delayed(Duration.zero);
+    expect(service.enabledCapabilities, contains('echo-message'));
+
+    transport.emit(':server CAP AndroidIRCX ACK :-echo-message');
+    await Future<void>.delayed(Duration.zero);
+    expect(service.enabledCapabilities, isNot(contains('echo-message')));
+    expect(rawEvents.any((event) => event.contains('CAP disabled')), isTrue);
+
+    await subscription.cancel();
+    service.dispose();
+  });
+
+  test('SASL 908 updates mechanism list and safely ends active flow', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final rawEvents = <String>[];
+    final subscription = service.rawEvents.listen(rawEvents.add);
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        saslAccount: 'alice',
+        saslPassword: 'secret',
+        saslMechanism: SaslMechanism.scramSha256,
+      ),
+    );
+
+    transport.emit(':server CAP AndroidIRCX LS :sasl=PLAIN,SCRAM-SHA-256');
+    await Future<void>.delayed(Duration.zero);
+    transport.emit(':server CAP AndroidIRCX ACK :sasl');
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.sentLines, contains('AUTHENTICATE SCRAM-SHA-256'));
+
+    transport.emit(
+      ':server 908 AndroidIRCX PLAIN :are available SASL mechanisms',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(service.capabilityValues['sasl'], 'PLAIN');
+    expect(service.availableSaslMechanisms, {'PLAIN'});
+    expect(rawEvents.any((event) => event.contains('SASL mechanisms')), isTrue);
+    expect(transport.sentLines, contains('CAP END'));
 
     await subscription.cancel();
     service.dispose();
@@ -790,9 +1273,100 @@ void main() {
     );
     expect(
       transport.sentLines.any(
-        (line) => line.contains('CHATHISTORY BEFORE #room msgid-1 25'),
+        (line) => line.contains('CHATHISTORY BEFORE #room msgid=msgid-1 25'),
       ),
       isTrue,
+    );
+    expect(
+      await service.sendChatHistory(
+        target: '#room',
+        reference: '2026-08-20T10:11:12.123Z',
+      ),
+      isTrue,
+    );
+    expect(
+      transport.sentLines.any(
+        (line) => line.contains(
+          'CHATHISTORY LATEST #room timestamp=2026-08-20T10:11:12.123Z 50',
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      await service.sendChatHistory(
+        target: '#room',
+        subcommand: 'BETWEEN',
+        reference: 'first-1',
+        endReference: 'last-1',
+        limit: 40,
+      ),
+      isTrue,
+    );
+    expect(
+      transport.sentLines.any(
+        (line) => line.contains(
+          'CHATHISTORY BETWEEN #room msgid=first-1 msgid=last-1 40',
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      await service.sendChatHistory(
+        target: '*',
+        subcommand: 'TARGETS',
+        reference: '2026-08-20T10:00:00.000Z',
+        endReference: '2026-08-20T11:00:00.000Z',
+        limit: 10,
+      ),
+      isTrue,
+    );
+    expect(
+      transport.sentLines.any(
+        (line) => line.contains(
+          'CHATHISTORY TARGETS timestamp=2026-08-20T10:00:00.000Z timestamp=2026-08-20T11:00:00.000Z 10',
+        ),
+      ),
+      isTrue,
+    );
+
+    service.dispose();
+  });
+
+  test('sendReadMarker uses IRCv3 server-time timestamp format', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+
+    await service.connect(
+      const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+    );
+
+    expect(
+      await service.sendReadMarker(
+        target: '#room',
+        timestamp: DateTime.utc(2026, 8, 20, 10, 11, 12, 123),
+      ),
+      isFalse,
+    );
+
+    transport.emit(':server CAP * ACK :draft/read-marker');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      await service.sendReadMarker(
+        target: '#room',
+        timestamp: DateTime.utc(2026, 8, 20, 10, 11, 12, 123),
+      ),
+      isTrue,
+    );
+    expect(
+      transport.sentLines,
+      contains('MARKREAD #room timestamp=2026-08-20T10:11:12.123Z'),
     );
 
     service.dispose();

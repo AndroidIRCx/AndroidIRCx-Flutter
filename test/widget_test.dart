@@ -503,7 +503,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Link'), findsOneWidget);
+    expect(find.text('File'), findsOneWidget);
     expect(find.textContaining('https://example.com/file.pdf'), findsWidgets);
 
     await tester.longPress(

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
+import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/dcc/services/dcc_service.dart';
@@ -67,6 +68,12 @@ class _FakeDccConnection implements DccSocketConnection {
   Future<void> sendBytes(List<int> data) async {
     sentPackets.add(Uint8List.fromList(data));
   }
+
+  void emitBytes(List<int> data) {
+    _controller.add(Uint8List.fromList(data));
+  }
+
+  Future<void> finish() => _controller.close();
 }
 
 class _FakeDccServer implements DccSocketServer {
@@ -1012,6 +1019,49 @@ void main() {
     controller.dispose();
   });
 
+  test('stores media urls as structured message attachments', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    transport.emit(
+      ':alice!user@example PRIVMSG #room :Look \u0002https://example.test/manual.pdf\u0002',
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    controller.selectTab(
+      controller.tabs
+          .firstWhere(
+            (tab) => tab.type.name == 'channel' && tab.name == '#room',
+          )
+          .id,
+    );
+    final message = controller.activeMessages.singleWhere(
+      (item) => item.content.contains('manual.pdf'),
+    );
+    final export = controller.exportTabHistory(controller.activeTabId);
+
+    expect(message.kind, IrcMessageKind.media);
+    expect(message.attachments.single.type, IrcMessageAttachmentType.file);
+    expect(message.attachments.single.uri, 'https://example.test/manual.pdf');
+    expect(export, contains('Look https://example.test/manual.pdf'));
+    expect(export, isNot(contains('\u0002')));
+
+    controller.dispose();
+  });
+
   test('renders draft intent action as an action message', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);
@@ -1089,6 +1139,68 @@ void main() {
     );
 
     controller.dispose();
+  });
+
+  test('deduplicates persisted msgid after controller restart', () async {
+    final firstTransport = _FakeTransport();
+    final firstService = IrcService(
+      transportConnector: (_) async => firstTransport,
+    );
+    final firstController = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: firstService,
+    );
+
+    await firstController.start();
+    firstTransport.emit(
+      '@msgid=replay-1 :alice!user@example PRIVMSG #room :from history',
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    await firstController.flushState();
+    firstController.dispose();
+
+    final secondTransport = _FakeTransport();
+    final secondService = IrcService(
+      transportConnector: (_) async => secondTransport,
+    );
+    final secondController = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: secondService,
+    );
+
+    await secondController.start();
+    secondTransport.emit(
+      '@batch=hist;msgid=replay-1 :alice!user@example PRIVMSG #room :from history',
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    final roomTab = secondController.tabs.firstWhere(
+      (tab) => tab.type == ChatTabType.channel && tab.name == '#room',
+    );
+    final messages = secondController.messagesForTab(roomTab.id);
+
+    expect(
+      messages.where((message) => message.tags['msgid'] == 'replay-1'),
+      hasLength(1),
+    );
+
+    secondController.dispose();
   });
 
   test('tracks batch start and end with message count', () async {
@@ -1233,6 +1345,60 @@ void main() {
     controller.dispose();
   });
 
+  test('requests chathistory between and targets subcommands', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    transport.emit(':server CAP * ACK :draft/chathistory labeled-response');
+    await Future<void>.delayed(Duration.zero);
+
+    await controller.handleComposerSubmit('/chathistory between first last 40');
+    controller.selectTab(
+      controller.tabs.firstWhere((tab) => tab.type == ChatTabType.server).id,
+    );
+    await controller.handleComposerSubmit(
+      '/chathistory targets 2026-08-20T10:00:00.000Z 2026-08-20T11:00:00.000Z 10',
+    );
+
+    expect(
+      transport.sentLines.any(
+        (line) => line.contains(
+          'CHATHISTORY BETWEEN #room msgid=first msgid=last 40',
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      transport.sentLines.any(
+        (line) => line.contains(
+          'CHATHISTORY TARGETS timestamp=2026-08-20T10:00:00.000Z timestamp=2026-08-20T11:00:00.000Z 10',
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      controller.activeMessages.any(
+        (message) => message.content.contains('Requested CHATHISTORY TARGETS'),
+      ),
+      isTrue,
+    );
+
+    controller.dispose();
+  });
+
   test(
     'uses latest known msgid for /chathistory before when omitted',
     () async {
@@ -1261,7 +1427,7 @@ void main() {
 
       expect(
         transport.sentLines.any(
-          (line) => line.contains('CHATHISTORY BEFORE #room abc123 20'),
+          (line) => line.contains('CHATHISTORY BEFORE #room msgid=abc123 20'),
         ),
         isTrue,
       );
@@ -1472,7 +1638,9 @@ void main() {
       await controller.start();
       await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
       transport.emit(':server CAP * ACK :draft/read-marker');
-      transport.emit('@msgid=msg-1 :alice!user@example PRIVMSG #room :hello');
+      transport.emit(
+        '@msgid=msg-1;time=2026-08-20T10:11:12.123Z :alice!user@example PRIVMSG #room :hello',
+      );
       await Future<void>.delayed(Duration.zero);
       await Future<void>.delayed(Duration.zero);
 
@@ -1482,8 +1650,52 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(
-        transport.sentLines.any(
-          (line) => line.startsWith('MARKREAD #room timestamp='),
+        transport.sentLines,
+        contains('MARKREAD #room timestamp=2026-08-20T10:11:12.123Z'),
+      );
+
+      controller.dispose();
+    },
+  );
+
+  test(
+    'tracks incoming read markers with IRCv3 timestamp and star values',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit(
+        ':server MARKREAD #room timestamp=2026-08-20T10:11:12.123Z',
+      );
+      await Future<void>.delayed(Duration.zero);
+      final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(roomTab.id);
+
+      expect(
+        controller.activeReadMarker,
+        DateTime.parse('2026-08-20T10:11:12.123Z'),
+      );
+
+      transport.emit(':server MARKREAD #room *');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.activeReadMarker, isNull);
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('no read marker for #room'),
         ),
         isTrue,
       );
@@ -1794,6 +2006,13 @@ void main() {
       ),
       isTrue,
     );
+    final message = controller.activeMessages.firstWhere(
+      (m) => m.content.contains('DCC SEND offer from alice: movie.mkv'),
+    );
+    expect(message.kind, IrcMessageKind.dcc);
+    expect(message.attachments.single.type, IrcMessageAttachmentType.dccSend);
+    expect(message.attachments.single.fileName, 'movie.mkv');
+    expect(message.attachments.single.peerNick, 'alice');
 
     controller.dispose();
   });
@@ -1914,6 +2133,68 @@ void main() {
       isTrue,
     );
 
+    controller.dispose();
+  });
+
+  test('accepts incoming dcc send and records transfer completion', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final dccBackend = _FakeDccBackend();
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+      dccService: DccService(backend: dccBackend),
+    );
+
+    await controller.start();
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC SEND "movie.mkv" 127001 5000 42\u0001',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final dccTab = controller.tabs.firstWhere(
+      (tab) => tab.type == ChatTabType.dcc,
+    );
+    controller.selectTab(dccTab.id);
+    await controller.acceptActiveDccSession();
+    dccBackend.connection.emitBytes([1, 2, 3, 4]);
+    await Future<void>.delayed(Duration.zero);
+    await dccBackend.connection.finish();
+    for (var i = 0; i < 10; i += 1) {
+      if (controller.activeDccSession?.status == DccSessionStatus.closed) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+    }
+
+    expect(
+      controller.activeMessages.any(
+        (message) => message.content.contains('DCC SEND accept requested'),
+      ),
+      isTrue,
+    );
+    expect(
+      controller.activeMessages.any(
+        (message) => message.content.contains('DCC SEND finished'),
+      ),
+      isTrue,
+    );
+    expect(controller.activeDccSession!.bytesTransferred, 4);
+
+    final filePath = controller.activeDccSession!.filePath;
+    if (filePath != null) {
+      final file = File(filePath);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
     controller.dispose();
   });
 
@@ -2445,7 +2726,7 @@ void main() {
     expect(await controller.requestOlderHistory(limit: 40), isTrue);
     expect(
       transport.sentLines.any(
-        (line) => line.contains('CHATHISTORY BEFORE #room first-1 40'),
+        (line) => line.contains('CHATHISTORY BEFORE #room msgid=first-1 40'),
       ),
       isTrue,
     );
@@ -2518,7 +2799,7 @@ void main() {
     expect(await controller.requestNewerHistory(limit: 40), isTrue);
     expect(
       transport.sentLines.any(
-        (line) => line.contains('CHATHISTORY AFTER #room last-1 40'),
+        (line) => line.contains('CHATHISTORY AFTER #room msgid=last-1 40'),
       ),
       isTrue,
     );
@@ -2553,7 +2834,7 @@ void main() {
       expect(await controller.requestAroundLatestHistory(limit: 30), isTrue);
       expect(
         transport.sentLines.any(
-          (line) => line.contains('CHATHISTORY AROUND #room mid-1 30'),
+          (line) => line.contains('CHATHISTORY AROUND #room msgid=mid-1 30'),
         ),
         isTrue,
       );
@@ -3024,6 +3305,61 @@ void main() {
     controller.dispose();
   });
 
+  test('sends extended registered raw commands from composer', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    await controller.joinChannel(
+      const JoinChannelRequest(channel: '#androidircx'),
+    );
+    await controller.handleComposerSubmit('/lusers');
+    await controller.handleComposerSubmit('/knock #secret please');
+    await controller.handleComposerSubmit('/oper opername secret');
+    await controller.handleComposerSubmit('/watch +Alice');
+    await controller.handleComposerSubmit('/cnotice Alice #androidircx hi');
+    await controller.handleComposerSubmit('/squery NickServ identify secret');
+    await controller.handleComposerSubmit('/wallops ops online');
+    await controller.handleComposerSubmit('/kickban BadUser flooding');
+    await controller.handleComposerSubmit('/oper onlyname');
+
+    expect(transport.sentLines, contains('LUSERS'));
+    expect(transport.sentLines, contains('KNOCK #secret :please'));
+    expect(transport.sentLines, contains('OPER opername secret'));
+    expect(transport.sentLines, contains('WATCH +Alice'));
+    expect(transport.sentLines, contains('CNOTICE Alice #androidircx :hi'));
+    expect(transport.sentLines, contains('PRIVMSG NickServ :identify secret'));
+    expect(transport.sentLines, contains('WALLOPS :ops online'));
+    expect(transport.sentLines, contains('MODE #androidircx +b BadUser!*@*'));
+    expect(
+      transport.sentLines,
+      contains('KICK #androidircx BadUser :flooding'),
+    );
+
+    final serverTab = controller.tabs.firstWhere(
+      (tab) => tab.type == ChatTabType.server,
+    );
+    expect(
+      controller
+          .messagesForTab(serverTab.id)
+          .any((message) => message.content.contains('Usage: /oper')),
+      isTrue,
+    );
+
+    controller.dispose();
+  });
+
   test('handles channel admin commands and ban list numerics', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);
@@ -3277,6 +3613,65 @@ void main() {
         controller.activeChannelUsers,
         containsAll(<String>['alice', 'bob']),
       );
+
+      controller.dispose();
+    },
+  );
+
+  test(
+    'updates channel mode summary and nick prefixes from MODE events',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+      transport.emit(
+        ':server 005 AndroidIRCX PREFIX=(ov)@+ CHANMODES=b,k,l,imnpst :supported',
+      );
+      transport.emit(':server 353 AndroidIRCX = #room :@alice +bob');
+      await Future<void>.delayed(Duration.zero);
+      final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(roomTab.id);
+
+      expect(
+        controller.activeChannelUserDetails
+            .firstWhere((item) => item.nick == 'alice')
+            .details,
+        contains('mode: @'),
+      );
+      expect(
+        controller.activeChannelUserDetails
+            .firstWhere((item) => item.nick == 'bob')
+            .details,
+        contains('mode: +'),
+      );
+
+      transport.emit(':oper!user@example MODE #room -o+v alice alice');
+      transport.emit(':oper!user@example MODE #room +m');
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        controller.activeChannelUserDetails
+            .firstWhere((item) => item.nick == 'alice')
+            .details,
+        contains('mode: +'),
+      );
+      expect(controller.activeChannelModes, '+m');
+
+      transport.emit(':oper!user@example MODE #room -m');
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.activeChannelModes, '');
 
       controller.dispose();
     },

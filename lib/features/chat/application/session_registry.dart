@@ -128,6 +128,16 @@ class SessionRegistry extends ChangeNotifier {
             ),
           )
           .toList(growable: false),
+      transfers: _sessions.values
+          .expand(
+            (controller) => controller.dccSessions.map(
+              (session) => ForegroundTransferSnapshot.fromDccSession(
+                networkId: controller.network.id,
+                session: session,
+              ),
+            ),
+          )
+          .toList(growable: false),
     );
   }
 

@@ -1,4 +1,5 @@
 import 'package:androidircx/core/models/connection_state.dart';
+import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -98,6 +99,43 @@ void main() {
     final updateArguments = calls[1].arguments! as Map<Object?, Object?>;
     expect(updateArguments['activeNetworkCount'], 1);
     expect(updateArguments['connectedNetworkCount'], 1);
+  });
+
+  test('serializes DCC transfer progress without private local paths', () {
+    const session = DccSession(
+      id: 'dcc-1',
+      tabId: 'dcc::dbase::1',
+      peerNick: 'alice',
+      type: DccSessionType.send,
+      status: DccSessionStatus.connected,
+      direction: 'incoming',
+      filename: 'movie.mkv',
+      size: 1000,
+      filePath: r'C:\Users\majst\AppData\Local\Temp\movie.mkv',
+      bytesTransferred: 250,
+    );
+    final transfer = ForegroundTransferSnapshot.fromDccSession(
+      networkId: 'dbase',
+      session: session,
+    );
+    final snapshot = ForegroundConnectionSnapshot(
+      networks: const <ForegroundConnectionNetwork>[
+        ForegroundConnectionNetwork(
+          id: 'dbase',
+          name: 'DBase',
+          phase: ConnectionPhase.connected,
+        ),
+      ],
+      transfers: [transfer],
+    );
+    final json = snapshot.toJson();
+    final transfers = json['transfers']! as List<Object?>;
+    final payload = transfers.single! as Map<Object?, Object?>;
+
+    expect(snapshot.activeTransferCount, 1);
+    expect(payload['fileName'], 'movie.mkv');
+    expect(payload['progress'], 0.25);
+    expect(payload.values, isNot(contains(contains('AppData'))));
   });
 
   test('method channel update stops service for inactive snapshots', () async {

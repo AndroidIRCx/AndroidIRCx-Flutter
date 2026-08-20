@@ -8,14 +8,20 @@ abstract class DccFileSink {
   Future<void> close();
 }
 
-typedef DccTempFile = ({String path, DccFileSink sink});
+typedef DccTempFile = ({
+  String path,
+  DccFileSink sink,
+  Future<void> Function() delete,
+});
 typedef DccSourceFile = ({
   String path,
   String fileName,
   int size,
-  Future<List<int>> Function() readAllBytes,
+  Stream<List<int>> Function() openRead,
 });
 
-Future<DccTempFile> createDccTempFile(String fileName) => createPlatformDccTempFile(fileName);
+Future<DccTempFile> createDccTempFile(String fileName) =>
+    createPlatformDccTempFile(fileName);
 
-Future<DccSourceFile> openDccSourceFile(String path) => openPlatformDccSourceFile(path);
+Future<DccSourceFile> openDccSourceFile(String path) =>
+    openPlatformDccSourceFile(path);
