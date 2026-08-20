@@ -2198,6 +2198,61 @@ void main() {
     controller.dispose();
   });
 
+  test('accepts reverse dcc send by replying with listener details', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final dccBackend = _FakeDccBackend();
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+      dccService: DccService(backend: dccBackend),
+    );
+
+    await controller.start();
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC SEND "reverse.bin" 127001 0 42 abc123\u0001',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final dccTab = controller.tabs.firstWhere(
+      (tab) => tab.type == ChatTabType.dcc,
+    );
+    controller.selectTab(dccTab.id);
+    await controller.acceptActiveDccSession();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      transport.sentLines.any(
+        (line) =>
+            line.startsWith('PRIVMSG alice :\u0001DCC SEND "reverse.bin" ') &&
+            line.endsWith(' 42 abc123\u0001'),
+      ),
+      isTrue,
+    );
+    expect(
+      controller.activeMessages.any(
+        (message) =>
+            message.content.contains('Reverse DCC SEND accept requested'),
+      ),
+      isTrue,
+    );
+    expect(
+      controller.activeMessages.any(
+        (message) => message.content.contains('not implemented'),
+      ),
+      isFalse,
+    );
+
+    controller.dispose();
+  });
+
   test(
     'starts outgoing dcc chat offers and sends ctcp payload to target nick',
     () async {
@@ -2295,6 +2350,59 @@ void main() {
       controller.dispose();
     },
   );
+
+  test('starts outgoing dcc send offers from selected file paths', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final dccBackend = _FakeDccBackend();
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+      dccService: DccService(backend: dccBackend),
+    );
+    final file = File.fromUri(
+      Directory.systemTemp.uri.resolve('androidircx-dcc-picker-test.txt'),
+    );
+    await file.writeAsString('picked file');
+
+    await controller.start();
+    await controller.sendDccFileToNick(nick: 'alice', filePath: file.path);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      transport.sentLines.any(
+        (line) => line.startsWith(
+          'PRIVMSG alice :\u0001DCC SEND "androidircx-dcc-picker-test.txt" ',
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      controller.tabs.any(
+        (tab) => tab.type == ChatTabType.dcc && tab.name == 'DCC SEND alice',
+      ),
+      isTrue,
+    );
+
+    for (var attempt = 0; attempt < 20; attempt += 1) {
+      if (controller.dccSessions.any(
+        (session) => session.status == DccSessionStatus.closed,
+      )) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    controller.dispose();
+    await file.delete();
+  });
 
   test(
     'routes invite kick and extended whois numerics into chat state',

@@ -13,6 +13,37 @@ enum ForegroundNotificationChannelKind {
 
 enum ForegroundConnectionAction { disconnectAll }
 
+class ForegroundUserNotification {
+  const ForegroundUserNotification({
+    required this.id,
+    required this.channelKind,
+    required this.networkId,
+    required this.tabId,
+    required this.title,
+    required this.body,
+  });
+
+  final String id;
+  final ForegroundNotificationChannelKind channelKind;
+  final String networkId;
+  final String tabId;
+  final String title;
+  final String body;
+
+  Map<String, Object?> toJson() {
+    final channel = _channelForKind(channelKind);
+    return <String, Object?>{
+      'id': id,
+      'kind': channelKind.name,
+      'channelId': channel.id,
+      'networkId': networkId,
+      'tabId': tabId,
+      'title': title,
+      'body': body,
+    };
+  }
+}
+
 class ForegroundNotificationChannel {
   const ForegroundNotificationChannel({
     required this.kind,
@@ -74,6 +105,15 @@ const foregroundNotificationChannels = <ForegroundNotificationChannel>[
     description: 'Connection failures and important protocol errors.',
   ),
 ];
+
+ForegroundNotificationChannel _channelForKind(
+  ForegroundNotificationChannelKind kind,
+) {
+  return foregroundNotificationChannels.firstWhere(
+    (channel) => channel.kind == kind,
+    orElse: () => foregroundNotificationChannels.first,
+  );
+}
 
 class ForegroundConnectionNetwork {
   const ForegroundConnectionNetwork({
@@ -141,7 +181,8 @@ class ForegroundConnectionSnapshot {
   int get activeTransferCount =>
       transfers.where((transfer) => transfer.isActive).length;
 
-  bool get shouldRunForegroundService => activeNetworkCount > 0;
+  bool get shouldRunForegroundService =>
+      activeNetworkCount > 0 || activeTransferCount > 0;
 
   Map<String, Object?> toJson() {
     return <String, Object?>{
@@ -178,6 +219,8 @@ class ForegroundTransferSnapshot {
     this.fileName,
     this.bytesTransferred = 0,
     this.totalBytes,
+    this.bytesPerSecond,
+    this.estimatedRemainingSeconds,
   });
 
   final String id;
@@ -190,6 +233,8 @@ class ForegroundTransferSnapshot {
   final String? fileName;
   final int bytesTransferred;
   final int? totalBytes;
+  final double? bytesPerSecond;
+  final int? estimatedRemainingSeconds;
 
   bool get isActive {
     return switch (status) {
@@ -218,6 +263,9 @@ class ForegroundTransferSnapshot {
       if ((fileName ?? '').trim().isNotEmpty) 'fileName': fileName!.trim(),
       'bytesTransferred': bytesTransferred,
       if (totalBytes != null) 'totalBytes': totalBytes,
+      if (bytesPerSecond != null) 'bytesPerSecond': bytesPerSecond,
+      if (estimatedRemainingSeconds != null)
+        'estimatedRemainingSeconds': estimatedRemainingSeconds,
       if (progress != null) 'progress': progress,
     };
   }
@@ -237,6 +285,8 @@ class ForegroundTransferSnapshot {
       fileName: session.filename,
       bytesTransferred: session.bytesTransferred,
       totalBytes: session.size,
+      bytesPerSecond: session.bytesPerSecond,
+      estimatedRemainingSeconds: session.estimatedRemaining?.inSeconds,
     );
   }
 }
@@ -253,6 +303,8 @@ abstract class ForegroundConnectionService {
   Future<bool> openBatteryOptimizationSettings();
 
   Future<ForegroundConnectionAction?> consumePendingAction();
+
+  Future<void> showNotification(ForegroundUserNotification notification);
 }
 
 class NoopForegroundConnectionService extends ForegroundConnectionService {
@@ -272,6 +324,11 @@ class NoopForegroundConnectionService extends ForegroundConnectionService {
 
   @override
   Future<ForegroundConnectionAction?> consumePendingAction() async => null;
+
+  @override
+  Future<void> showNotification(
+    ForegroundUserNotification notification,
+  ) async {}
 }
 
 class MethodChannelForegroundConnectionService
@@ -319,6 +376,11 @@ class MethodChannelForegroundConnectionService
       'disconnectAll' => ForegroundConnectionAction.disconnectAll,
       _ => null,
     };
+  }
+
+  @override
+  Future<void> showNotification(ForegroundUserNotification notification) {
+    return _invokeOptional<void>('showNotification', notification.toJson());
   }
 
   Future<T?> _invokeOptional<T>(String method, [Object? arguments]) async {

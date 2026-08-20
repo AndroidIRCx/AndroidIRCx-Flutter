@@ -2,11 +2,15 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:androidircx/app/app.dart';
+import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/core/storage/in_memory_network_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_network_repository.dart';
+import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
+import 'package:androidircx/core/storage/settings_repository.dart';
+import 'package:androidircx/dcc/services/dcc_file_picker.dart';
 import 'package:androidircx/dcc/services/dcc_service.dart';
 import 'package:androidircx/dcc/services/dcc_socket_backend.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
@@ -16,8 +20,10 @@ import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart'
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/connections/presentation/network_form_screen.dart';
 import 'package:androidircx/features/connections/presentation/network_list_screen.dart';
+import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
+import 'package:androidircx/media/services/media_download_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -65,35 +71,89 @@ class _FakeDccConnection implements DccSocketConnection {
 }
 
 class _FakeDccServer implements DccSocketServer {
-  _FakeDccServer(this.connection);
-
-  final DccSocketConnection connection;
+  final StreamController<DccSocketConnection> _controller =
+      StreamController<DccSocketConnection>.broadcast();
 
   @override
   String get address => '127.0.0.1';
 
   @override
-  Stream<DccSocketConnection> get connections =>
-      Stream<DccSocketConnection>.value(connection);
+  Stream<DccSocketConnection> get connections => _controller.stream;
 
   @override
   int get port => 5001;
 
+  void accept(DccSocketConnection connection) {
+    _controller.add(connection);
+  }
+
   @override
-  Future<void> close() async {}
+  Future<void> close() async {
+    await _controller.close();
+  }
 }
 
 class _FakeDccBackend implements DccSocketBackend {
   final _FakeDccConnection connection = _FakeDccConnection();
+  _FakeDccServer? server;
 
   @override
-  Future<DccSocketServer> bindEphemeral() async => _FakeDccServer(connection);
+  Future<DccSocketServer> bindEphemeral() async {
+    final next = _FakeDccServer();
+    server = next;
+    return next;
+  }
 
   @override
   Future<DccSocketConnection> connect({
     required String host,
     required int port,
   }) async => connection;
+}
+
+class _FakeDccFilePicker implements DccFilePicker {
+  _FakeDccFilePicker(this.path);
+
+  final String? path;
+  int calls = 0;
+
+  @override
+  Future<String?> pickFile() async {
+    calls += 1;
+    return path;
+  }
+}
+
+class _FakeMediaDownloadService implements MediaDownloadService {
+  final calls = <({String url, String? directoryPath})>[];
+
+  @override
+  Future<MediaDownloadResult> download(
+    String url, {
+    String? directoryPath,
+  }) async {
+    calls.add((url: url, directoryPath: directoryPath));
+    return MediaDownloadResult(
+      url: url,
+      fileName: 'manual.pdf',
+      localPath: r'C:\Downloads\Media\manual.pdf',
+      bytesDownloaded: 6,
+    );
+  }
+}
+
+class _FakeSettingsRepository implements SettingsRepository {
+  _FakeSettingsRepository(this._settings);
+
+  AppSettings _settings;
+
+  @override
+  Future<AppSettings> loadSettings() async => _settings;
+
+  @override
+  Future<void> saveSettings(AppSettings settings) async {
+    _settings = settings;
+  }
 }
 
 void main() {
@@ -217,6 +277,44 @@ void main() {
     expect(result, isNotNull);
     expect(result!.profileLabel, 'Main profile');
     expect(result!.profileGroup, 'General');
+  });
+
+  testWidgets('settings saves DCC download folder path', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.enterText(
+      find.byKey(const Key('settings-dcc-download-directory')),
+      r'C:\Downloads\IRC',
+    );
+    await tester.tap(find.byTooltip('Save DCC folder'));
+    await tester.pump();
+
+    final settings = await SharedPrefsSettingsRepository().loadSettings();
+
+    expect(settings.dccDownloadDirectoryPath, r'C:\Downloads\IRC');
+  });
+
+  testWidgets('settings saves media download folder path', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.enterText(
+      find.byKey(const Key('settings-media-download-directory')),
+      r'C:\Downloads\Media',
+    );
+    await tester.tap(find.byTooltip('Save media folder'));
+    await tester.pump();
+
+    final settings = await SharedPrefsSettingsRepository().loadSettings();
+
+    expect(settings.mediaDownloadDirectoryPath, r'C:\Downloads\Media');
   });
 
   testWidgets('shows IRC services quick actions on the server tab', (
@@ -517,6 +615,62 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('downloads media attachment cards to configured folder', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final mediaDownloadService = _FakeMediaDownloadService();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+      settingsRepository: _FakeSettingsRepository(
+        const AppSettings(mediaDownloadDirectoryPath: r'C:\Downloads\Media'),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          controller: controller,
+          mediaDownloadService: mediaDownloadService,
+        ),
+      ),
+    );
+    await tester.pump();
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    await tester.pump();
+    transport.emit(
+      ':alice!user@example PRIVMSG #room :manual https://example.com/manual.pdf',
+    );
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Download file'));
+    await tester.pump();
+
+    expect(mediaDownloadService.calls, hasLength(1));
+    expect(
+      mediaDownloadService.calls.single.url,
+      'https://example.com/manual.pdf',
+    );
+    expect(
+      mediaDownloadService.calls.single.directoryPath,
+      r'C:\Downloads\Media',
+    );
+    expect(find.textContaining('Downloaded manual.pdf'), findsOneWidget);
+
+    controller.dispose();
+  });
+
   testWidgets('fills composer from message quote and reply actions', (
     tester,
   ) async {
@@ -730,6 +884,40 @@ void main() {
 
     expect(find.text('Accept'), findsNothing);
     expect(find.text('Close'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('opens the DCC file picker from query tabs', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final picker = _FakeDccFilePicker(null);
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(controller: controller, filePicker: picker),
+      ),
+    );
+    await tester.pump();
+
+    await controller.handleComposerSubmit('/query alice');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Send DCC file'));
+    await tester.pump();
+
+    expect(picker.calls, 1);
 
     controller.dispose();
   });

@@ -22,8 +22,11 @@ class SessionRegistry extends ChangeNotifier {
 
   final Map<String, ChatSessionController> _sessions = {};
   final Map<String, VoidCallback> _listeners = {};
+  final Map<String, StreamSubscription<ForegroundUserNotification>>
+  _notificationSubscriptions = {};
   final ForegroundConnectionService _foregroundService;
   final ChatSessionControllerFactory _sessionFactory;
+  bool _isAppInForeground = true;
 
   List<ChatSessionController> get sessions =>
       List<ChatSessionController>.unmodifiable(_sessions.values);
@@ -44,6 +47,17 @@ class SessionRegistry extends ChangeNotifier {
 
     controller.addListener(listener);
     _listeners[network.id] = listener;
+    _notificationSubscriptions[network.id] = controller.notifications.listen((
+      notification,
+    ) {
+      final activeSession = _sessions[network.id];
+      if (_isAppInForeground &&
+          activeSession != null &&
+          activeSession.activeTabId == notification.tabId) {
+        return;
+      }
+      unawaited(_showUserNotification(notification));
+    });
     _sessions[network.id] = controller;
     notifyListeners();
     unawaited(syncForegroundConnectionService());
@@ -66,6 +80,9 @@ class SessionRegistry extends ChangeNotifier {
   Future<void> closeSession(String networkId) async {
     final controller = _sessions.remove(networkId);
     final listener = _listeners.remove(networkId);
+    final notificationSubscription = _notificationSubscriptions.remove(
+      networkId,
+    );
     if (controller == null) {
       return;
     }
@@ -73,6 +90,7 @@ class SessionRegistry extends ChangeNotifier {
     if (listener != null) {
       controller.removeListener(listener);
     }
+    await notificationSubscription?.cancel();
     await controller.disconnect();
     controller.dispose();
     notifyListeners();
@@ -92,6 +110,7 @@ class SessionRegistry extends ChangeNotifier {
   }
 
   Future<void> handleAppLifecycleState(AppLifecycleState state) async {
+    _isAppInForeground = state == AppLifecycleState.resumed;
     switch (state) {
       case AppLifecycleState.resumed:
         await syncForegroundConnectionService();
@@ -114,6 +133,13 @@ class SessionRegistry extends ChangeNotifier {
 
     await _foregroundService.ensureReady();
     await _foregroundService.update(snapshot);
+  }
+
+  Future<void> _showUserNotification(
+    ForegroundUserNotification notification,
+  ) async {
+    await _foregroundService.ensureReady();
+    await _foregroundService.showNotification(notification);
   }
 
   ForegroundConnectionSnapshot _foregroundSnapshot() {
@@ -148,10 +174,12 @@ class SessionRegistry extends ChangeNotifier {
       if (listener != null) {
         entry.value.removeListener(listener);
       }
+      unawaited(_notificationSubscriptions[entry.key]?.cancel());
       entry.value.dispose();
     }
     _sessions.clear();
     _listeners.clear();
+    _notificationSubscriptions.clear();
     unawaited(_foregroundService.stop());
     super.dispose();
   }

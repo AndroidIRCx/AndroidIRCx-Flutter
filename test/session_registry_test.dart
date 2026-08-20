@@ -4,6 +4,7 @@ import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
+import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -40,6 +41,7 @@ class _RecordingForegroundConnectionService
   int ensureReadyCount = 0;
   int stopCount = 0;
   final updates = <ForegroundConnectionSnapshot>[];
+  final notifications = <ForegroundUserNotification>[];
 
   @override
   Future<void> ensureReady() async {
@@ -61,6 +63,11 @@ class _RecordingForegroundConnectionService
 
   @override
   Future<ForegroundConnectionAction?> consumePendingAction() async => null;
+
+  @override
+  Future<void> showNotification(ForegroundUserNotification notification) async {
+    notifications.add(notification);
+  }
 }
 
 void main() {
@@ -159,6 +166,55 @@ void main() {
     await registry.closeSession(network.id);
 
     expect(foregroundService.stopCount, greaterThanOrEqualTo(1));
+
+    registry.dispose();
+  });
+
+  test('forwards user notifications from active sessions', () async {
+    final transport = _FakeTransport();
+    final foregroundService = _RecordingForegroundConnectionService();
+    final registry = SessionRegistry(
+      foregroundService: foregroundService,
+      sessionFactory: (network) => ChatSessionController(
+        network: network,
+        ircService: IrcService(transportConnector: (_) async => transport),
+        reconnectJitterFactor: 0,
+      ),
+    );
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+
+    final session = registry.obtainSession(network);
+    await session.start();
+    transport.emit(':server 001 AndroidIRCX :Welcome');
+    await session.joinChannel(const JoinChannelRequest(channel: '#room'));
+    await registry.handleAppLifecycleState(AppLifecycleState.paused);
+    transport.emit(':alice!user@example PRIVMSG AndroidIRCX :private ping');
+    transport.emit(':bob!user@example PRIVMSG #room :AndroidIRCX check this');
+    transport.emit(
+      ':carol!user@example PRIVMSG #room :manual https://example.test/manual.pdf',
+    );
+    transport.emit('ERROR :Closing Link: test failure');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      foregroundService.notifications.map(
+        (notification) => notification.channelKind,
+      ),
+      containsAll(<ForegroundNotificationChannelKind>[
+        ForegroundNotificationChannelKind.queries,
+        ForegroundNotificationChannelKind.highlights,
+        ForegroundNotificationChannelKind.mediaTransfers,
+        ForegroundNotificationChannelKind.errors,
+      ]),
+    );
 
     registry.dispose();
   });

@@ -85,6 +85,16 @@ void main() {
     );
     final opened = await service.openBatteryOptimizationSettings();
     final action = await service.consumePendingAction();
+    await service.showNotification(
+      const ForegroundUserNotification(
+        id: 'note-1',
+        channelKind: ForegroundNotificationChannelKind.highlights,
+        networkId: 'dbase',
+        tabId: 'channel::dbase::#room',
+        title: 'alice mentioned you',
+        body: 'alice: hello AndroidIRCX',
+      ),
+    );
     await service.stop();
 
     expect(opened, isTrue);
@@ -94,11 +104,15 @@ void main() {
       'update',
       'openBatteryOptimizationSettings',
       'consumePendingAction',
+      'showNotification',
       'stop',
     ]);
     final updateArguments = calls[1].arguments! as Map<Object?, Object?>;
     expect(updateArguments['activeNetworkCount'], 1);
     expect(updateArguments['connectedNetworkCount'], 1);
+    final notificationArguments = calls[4].arguments! as Map<Object?, Object?>;
+    expect(notificationArguments['channelId'], 'irc_highlights');
+    expect(notificationArguments['title'], 'alice mentioned you');
   });
 
   test('serializes DCC transfer progress without private local paths', () {
@@ -113,6 +127,8 @@ void main() {
       size: 1000,
       filePath: r'C:\Users\majst\AppData\Local\Temp\movie.mkv',
       bytesTransferred: 250,
+      bytesPerSecond: 512,
+      estimatedRemaining: Duration(seconds: 2),
     );
     final transfer = ForegroundTransferSnapshot.fromDccSession(
       networkId: 'dbase',
@@ -135,7 +151,41 @@ void main() {
     expect(snapshot.activeTransferCount, 1);
     expect(payload['fileName'], 'movie.mkv');
     expect(payload['progress'], 0.25);
+    expect(payload['bytesPerSecond'], 512);
+    expect(payload['estimatedRemainingSeconds'], 2);
     expect(payload.values, isNot(contains(contains('AppData'))));
+  });
+
+  test('active transfers keep foreground service payload alive', () {
+    const session = DccSession(
+      id: 'dcc-2',
+      tabId: 'dcc::dbase::2',
+      peerNick: 'alice',
+      type: DccSessionType.send,
+      status: DccSessionStatus.connected,
+      direction: 'incoming',
+      filename: 'file.bin',
+      bytesTransferred: 1,
+    );
+    final snapshot = ForegroundConnectionSnapshot(
+      networks: const <ForegroundConnectionNetwork>[
+        ForegroundConnectionNetwork(
+          id: 'dbase',
+          name: 'DBase',
+          phase: ConnectionPhase.disconnected,
+        ),
+      ],
+      transfers: [
+        ForegroundTransferSnapshot.fromDccSession(
+          networkId: 'dbase',
+          session: session,
+        ),
+      ],
+    );
+
+    expect(snapshot.activeNetworkCount, 0);
+    expect(snapshot.activeTransferCount, 1);
+    expect(snapshot.shouldRunForegroundService, isTrue);
   });
 
   test('method channel update stops service for inactive snapshots', () async {

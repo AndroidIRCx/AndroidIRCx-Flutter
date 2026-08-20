@@ -22,7 +22,8 @@ class AndroidIrcxForegroundService : Service() {
 
         createNotificationChannels(this)
         val activeNetworkCount = intent?.getIntExtra(EXTRA_ACTIVE_NETWORK_COUNT, 0) ?: 0
-        if (activeNetworkCount <= 0) {
+        val activeTransferCount = intent?.getIntExtra(EXTRA_ACTIVE_TRANSFER_COUNT, 0) ?: 0
+        if (activeNetworkCount <= 0 && activeTransferCount <= 0) {
             stopForegroundService()
             return START_NOT_STICKY
         }
@@ -31,6 +32,7 @@ class AndroidIrcxForegroundService : Service() {
         val reconnectingNetworkCount = intent?.getIntExtra(EXTRA_RECONNECTING_NETWORK_COUNT, 0) ?: 0
         val errorNetworkCount = intent?.getIntExtra(EXTRA_ERROR_NETWORK_COUNT, 0) ?: 0
         val networkNames = intent?.getStringArrayListExtra(EXTRA_NETWORK_NAMES).orEmpty()
+        val transferSummaries = intent?.getStringArrayListExtra(EXTRA_TRANSFER_SUMMARIES).orEmpty()
 
         val notification = buildConnectionNotification(
             activeNetworkCount = activeNetworkCount,
@@ -38,6 +40,8 @@ class AndroidIrcxForegroundService : Service() {
             reconnectingNetworkCount = reconnectingNetworkCount,
             errorNetworkCount = errorNetworkCount,
             networkNames = networkNames,
+            activeTransferCount = activeTransferCount,
+            transferSummaries = transferSummaries,
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -59,6 +63,8 @@ class AndroidIrcxForegroundService : Service() {
         reconnectingNetworkCount: Int,
         errorNetworkCount: Int,
         networkNames: List<String>,
+        activeTransferCount: Int,
+        transferSummaries: List<String>,
     ): Notification {
         val launchIntent =
             packageManager.getLaunchIntentForPackage(packageName)
@@ -91,12 +97,29 @@ class AndroidIrcxForegroundService : Service() {
         }
         val statusSummary =
             "$connectedNetworkCount connected, $reconnectingNetworkCount reconnecting, $errorNetworkCount errors"
+        val transferCountSummary = if (activeTransferCount > 0) {
+            "$activeTransferCount active transfer(s)"
+        } else {
+            null
+        }
+        val transferDetailSummary = transferSummaries.take(3).joinToString("\n")
+        val bigText = listOfNotNull(
+            networkSummary,
+            statusSummary,
+            transferCountSummary,
+            transferDetailSummary.takeIf { it.isNotBlank() },
+        ).joinToString("\n")
+        val compactText = if (activeTransferCount > 0) {
+            "$networkSummary - $activeTransferCount transfer(s)"
+        } else {
+            networkSummary
+        }
 
         builder
             .setSmallIcon(R.drawable.ic_stat_androidircx)
             .setContentTitle(getString(R.string.notification_connection_title))
-            .setContentText(networkSummary)
-            .setStyle(Notification.BigTextStyle().bigText("$networkSummary\n$statusSummary"))
+            .setContentText(compactText)
+            .setStyle(Notification.BigTextStyle().bigText(bigText))
             .setContentIntent(launchPendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -143,6 +166,8 @@ class AndroidIrcxForegroundService : Service() {
         private const val EXTRA_RECONNECTING_NETWORK_COUNT = "reconnectingNetworkCount"
         private const val EXTRA_ERROR_NETWORK_COUNT = "errorNetworkCount"
         private const val EXTRA_NETWORK_NAMES = "networkNames"
+        private const val EXTRA_ACTIVE_TRANSFER_COUNT = "activeTransferCount"
+        private const val EXTRA_TRANSFER_SUMMARIES = "transferSummaries"
         private const val NOTIFICATION_ID = 3101
         private const val REQUEST_OPEN_APP = 3102
         private const val REQUEST_STOP = 3103
@@ -154,6 +179,8 @@ class AndroidIrcxForegroundService : Service() {
             reconnectingNetworkCount: Int,
             errorNetworkCount: Int,
             networkNames: ArrayList<String>,
+            activeTransferCount: Int,
+            transferSummaries: ArrayList<String>,
         ): Intent {
             return Intent(context, AndroidIrcxForegroundService::class.java)
                 .setAction(ACTION_UPDATE)
@@ -162,6 +189,8 @@ class AndroidIrcxForegroundService : Service() {
                 .putExtra(EXTRA_RECONNECTING_NETWORK_COUNT, reconnectingNetworkCount)
                 .putExtra(EXTRA_ERROR_NETWORK_COUNT, errorNetworkCount)
                 .putStringArrayListExtra(EXTRA_NETWORK_NAMES, networkNames)
+                .putExtra(EXTRA_ACTIVE_TRANSFER_COUNT, activeTransferCount)
+                .putStringArrayListExtra(EXTRA_TRANSFER_SUMMARIES, transferSummaries)
         }
 
         fun createNotificationChannels(context: Context) {
