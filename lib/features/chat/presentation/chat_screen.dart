@@ -17,6 +17,7 @@ import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart'
 import 'package:androidircx/irc/parser/irc_formatter.dart';
 import 'package:androidircx/irc/parser/message_content_parser.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
+import 'package:androidircx/media/services/link_preview_service.dart';
 import 'package:androidircx/media/services/media_download_service.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -2203,14 +2204,89 @@ class _MessageAttachments extends StatelessWidget {
             .map(
               (attachment) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: _AttachmentCard(
-                  attachment: attachment,
-                  onDownloadAttachment: onDownloadAttachment,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _AttachmentCard(
+                      attachment: attachment,
+                      onDownloadAttachment: onDownloadAttachment,
+                    ),
+                    if (attachment.type == IrcMessageAttachmentType.url &&
+                        (attachment.uri ?? '').isNotEmpty)
+                      _LinkPreviewCard(url: attachment.uri!),
+                  ],
                 ),
               ),
             )
             .toList(growable: false),
       ),
+    );
+  }
+}
+
+/// Shared link-preview service; overridable in tests to avoid real network.
+LinkPreviewService linkPreviewService = LinkPreviewService();
+
+class _LinkPreviewCard extends StatefulWidget {
+  const _LinkPreviewCard({required this.url});
+
+  final String url;
+
+  @override
+  State<_LinkPreviewCard> createState() => _LinkPreviewCardState();
+}
+
+class _LinkPreviewCardState extends State<_LinkPreviewCard> {
+  late final Future<LinkPreview?> _future = linkPreviewService.fetch(widget.url);
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<LinkPreview?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final preview = snapshot.data;
+        if (preview == null || !preview.hasContent) {
+          return const SizedBox.shrink();
+        }
+        final theme = Theme.of(context);
+        return Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: InkWell(
+            onTap: () => launchUrl(
+              Uri.parse(widget.url),
+              mode: LaunchMode.externalApplication,
+            ),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if ((preview.title ?? '').isNotEmpty)
+                    Text(
+                      preview.title!,
+                      style: theme.textTheme.titleSmall,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  if ((preview.description ?? '').isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      preview.description!,
+                      style: theme.textTheme.bodySmall,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

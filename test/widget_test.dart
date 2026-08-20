@@ -24,6 +24,7 @@ import 'package:androidircx/features/connections/presentation/network_list_scree
 import 'package:androidircx/features/onboarding/presentation/onboarding_screen.dart';
 import 'package:androidircx/features/security/presentation/app_lock_gate.dart';
 import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
+import 'package:androidircx/media/services/link_preview_service.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
@@ -161,6 +162,11 @@ class _FakeSettingsRepository implements SettingsRepository {
 }
 
 void main() {
+  setUp(() {
+    // Avoid real network for link previews in widget tests.
+    linkPreviewService = LinkPreviewService(fetcher: (_) async => '');
+  });
+
   testWidgets('shows seeded network on bootstrap', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
