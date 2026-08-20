@@ -322,6 +322,12 @@ class ChatSessionController extends ChangeNotifier {
   Duration? get pendingReconnectDelay => _pendingReconnectDelay;
   ChatTab get activeTab => _tabs.firstWhere((tab) => tab.id == _activeTabId);
   String get currentNick => _ircService.currentNick ?? network.nickname;
+
+  /// IRCv3 capabilities negotiated with the server.
+  Set<String> get enabledCapabilities => _ircService.enabledCapabilities;
+
+  /// IRCv3 capabilities advertised by the server.
+  Set<String> get availableCapabilities => _ircService.availableCapabilities;
   bool get canRequestServerHistory =>
       activeTab.type != ChatTabType.server && _ircService.supportsChatHistory;
   bool get canRequestOlderServerHistory =>

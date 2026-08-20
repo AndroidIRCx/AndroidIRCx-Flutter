@@ -12,6 +12,7 @@ import 'package:androidircx/features/chat/application/chat_session_controller.da
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
+import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
 import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
@@ -234,6 +235,19 @@ class _ChatScreenState extends State<ChatScreen> {
                         MaterialPageRoute<void>(
                           builder: (_) =>
                               IgnoreListScreen(controller: _controller),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.info_outline),
+                    title: const Text('Connection details'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              ConnectionDetailsScreen(controller: _controller),
                         ),
                       );
                     },

@@ -19,6 +19,7 @@ import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/presentation/chat_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
+import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
 import 'package:androidircx/features/connections/presentation/network_form_screen.dart';
 import 'package:androidircx/features/connections/presentation/network_list_screen.dart';
 import 'package:androidircx/features/onboarding/presentation/onboarding_screen.dart';
@@ -188,6 +189,34 @@ void main() {
     expect(find.text('AndroidIRCX'), findsOneWidget);
     expect(find.text('DBase'), findsOneWidget);
     expect(find.text('Connect'), findsOneWidget);
+  });
+
+  testWidgets('connection details screen shows network and status', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => _FakeTransport()),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: ConnectionDetailsScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    expect(find.text('DBase'), findsOneWidget);
+    expect(find.text('irc.dbase.in.rs:6697'), findsOneWidget);
+    expect(find.text('TLS'), findsOneWidget);
+
+    controller.dispose();
   });
 
   testWidgets('theme editor generates JSON from picked brightness', (
