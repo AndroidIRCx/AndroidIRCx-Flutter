@@ -14,6 +14,7 @@ import 'package:androidircx/features/chat/application/message_history_formatter.
 import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
+import 'package:androidircx/features/chat/data/message_history_repository.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/core/security/certificate_store.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
@@ -60,6 +61,7 @@ class ChatSessionController extends ChangeNotifier {
     IrcService? ircService,
     DccService? dccService,
     ChatSessionPersistence? persistence,
+    MessageHistoryRepository? historyRepository,
     SettingsRepository? settingsRepository,
     CommandService? commandService,
     int maxReconnectAttempts = 6,
@@ -74,6 +76,7 @@ class ChatSessionController extends ChangeNotifier {
            ),
        _dccService = dccService ?? DccService(),
        _persistence = persistence ?? ChatSessionPersistence(),
+       _historyRepository = historyRepository,
        _settingsRepository =
            settingsRepository ?? SharedPrefsSettingsRepository(),
        _commandService = commandService ?? CommandService(),
@@ -98,6 +101,7 @@ class ChatSessionController extends ChangeNotifier {
   final IrcService _ircService;
   final DccService _dccService;
   final ChatSessionPersistence _persistence;
+  final MessageHistoryRepository? _historyRepository;
   final SettingsRepository _settingsRepository;
   final CommandService _commandService;
   final int _maxReconnectAttempts;
@@ -4983,7 +4987,14 @@ class ChatSessionController extends ChangeNotifier {
         ),
       ),
     );
-    return list.last;
+    final appended = list.last;
+    final repository = _historyRepository;
+    if (repository != null) {
+      unawaited(
+        repository.append(networkId: network.id, message: appended),
+      );
+    }
+    return appended;
   }
 
   void _emitIncomingMessageNotification(IrcMessage? message) {

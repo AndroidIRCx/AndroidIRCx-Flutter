@@ -167,6 +167,7 @@ void main() {
           secretStorage: InMemorySecretStorage(),
         ),
         foregroundConnectionService: const NoopForegroundConnectionService(),
+        historyRepositoryLoader: () async => null,
       ),
     );
     await tester.pump();
@@ -191,6 +192,7 @@ void main() {
           const AppSettings(themePreset: AppThemePreset.dark),
         ),
         foregroundConnectionService: const NoopForegroundConnectionService(),
+        historyRepositoryLoader: () async => null,
       ),
     );
     await tester.pump();

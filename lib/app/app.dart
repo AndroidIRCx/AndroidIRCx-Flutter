@@ -13,11 +13,13 @@ class AndroidIrcxApp extends StatefulWidget {
     this.settingsRepository,
     this.foregroundConnectionService =
         const MethodChannelForegroundConnectionService(),
+    this.historyRepositoryLoader,
   });
 
   final NetworkRepository? networkRepository;
   final SettingsRepository? settingsRepository;
   final ForegroundConnectionService foregroundConnectionService;
+  final HistoryRepositoryLoader? historyRepositoryLoader;
 
   @override
   State<AndroidIrcxApp> createState() => _AndroidIrcxAppState();
@@ -55,6 +57,7 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
             home: BootstrapScreen(
               networkRepository: widget.networkRepository,
               foregroundConnectionService: widget.foregroundConnectionService,
+              historyRepositoryLoader: widget.historyRepositoryLoader,
             ),
           );
         },

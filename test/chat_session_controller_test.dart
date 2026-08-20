@@ -13,6 +13,7 @@ import 'package:androidircx/dcc/services/dcc_socket_backend.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
+import 'package:androidircx/features/chat/data/message_history_repository.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
@@ -3721,6 +3722,41 @@ void main() {
       controller.activeMessages.any(
         (message) => message.content.contains('Timer "loop" cancelled'),
       ),
+      isTrue,
+    );
+
+    controller.dispose();
+  });
+
+  test('mirrors appended messages into the history repository', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final history = InMemoryMessageHistoryRepository();
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+      historyRepository: history,
+    );
+
+    await controller.start();
+    transport.emit(':alice!u@h PRIVMSG #room :hello history');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+    final stored = await history.loadTabHistory(
+      networkId: 'dbase',
+      tabId: roomTab.id,
+    );
+    expect(
+      stored.any((message) => message.content == 'hello history'),
       isTrue,
     );
 
