@@ -131,6 +131,13 @@ class SharedPrefsNetworkRepository implements NetworkRepository {
           ? null
           : jsonEncode(network.autoJoinChannelKeys),
     );
+    await storage.setSecret(
+      networkSecretStorageKey(
+        networkId: network.id,
+        field: NetworkSecretField.proxyPassword,
+      ),
+      network.proxyPassword,
+    );
   }
 
   Future<void> _removeNetworkSecrets(String networkId) async {
@@ -170,6 +177,12 @@ class SharedPrefsNetworkRepository implements NetworkRepository {
         field: NetworkSecretField.autoJoinChannelKeys,
       ),
     );
+    final proxyPassword = await storage.getSecret(
+      networkSecretStorageKey(
+        networkId: network.id,
+        field: NetworkSecretField.proxyPassword,
+      ),
+    );
 
     return _copyNetworkSecrets(
       network,
@@ -178,6 +191,7 @@ class SharedPrefsNetworkRepository implements NetworkRepository {
       autoJoinChannelKeys: autoJoinChannelKeys == null
           ? network.autoJoinChannelKeys
           : _decodeChannelKeys(autoJoinChannelKeys),
+      proxyPassword: proxyPassword ?? network.proxyPassword,
     );
   }
 
@@ -186,6 +200,7 @@ class SharedPrefsNetworkRepository implements NetworkRepository {
     String? password,
     String? saslPassword,
     Map<String, String>? autoJoinChannelKeys,
+    String? proxyPassword,
   }) {
     return NetworkConfig(
       id: network.id,
@@ -206,6 +221,13 @@ class SharedPrefsNetworkRepository implements NetworkRepository {
       autoConnect: network.autoConnect,
       autoJoinChannels: network.autoJoinChannels,
       autoJoinChannelKeys: autoJoinChannelKeys ?? network.autoJoinChannelKeys,
+      serviceAuthFallback: network.serviceAuthFallback,
+      serviceAuthTarget: network.serviceAuthTarget,
+      proxyType: network.proxyType,
+      proxyHost: network.proxyHost,
+      proxyPort: network.proxyPort,
+      proxyUsername: network.proxyUsername,
+      proxyPassword: proxyPassword,
       profileLabel: network.profileLabel,
       profileGroup: network.profileGroup,
     );
@@ -214,7 +236,8 @@ class SharedPrefsNetworkRepository implements NetworkRepository {
   bool _hasRawNetworkSecrets(NetworkConfig network) {
     return (network.password != null && network.password!.isNotEmpty) ||
         (network.saslPassword != null && network.saslPassword!.isNotEmpty) ||
-        network.autoJoinChannelKeys.isNotEmpty;
+        network.autoJoinChannelKeys.isNotEmpty ||
+        (network.proxyPassword != null && network.proxyPassword!.isNotEmpty);
   }
 
   Map<String, String> _decodeChannelKeys(String encoded) {

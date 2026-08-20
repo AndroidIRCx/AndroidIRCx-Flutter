@@ -1,14 +1,22 @@
 import 'dart:math';
 
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/security/certificate_store.dart';
+import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/core/storage/network_repository.dart';
 import 'package:flutter/foundation.dart';
 
 class NetworkListController extends ChangeNotifier {
-  NetworkListController({required NetworkRepository repository})
-    : _repository = repository;
+  NetworkListController({
+    required NetworkRepository repository,
+    CertificateStore? certificateStore,
+  }) : _repository = repository,
+       _certificateStore =
+           certificateStore ??
+           CertificateStore(FlutterSecureSecretStorage());
 
   final NetworkRepository _repository;
+  final CertificateStore _certificateStore;
 
   List<NetworkConfig> _networks = const [];
   bool _isLoading = true;
@@ -35,15 +43,30 @@ class NetworkListController extends ChangeNotifier {
     String? webSocketPath,
     required bool autoConnect,
     List<String> autoJoinChannels = const <String>[],
+    Map<String, String> autoJoinChannelKeys = const <String, String>{},
     String? profileLabel,
     String? profileGroup,
     required SaslMechanism saslMechanism,
     String? saslAccount,
     String? saslPassword,
+    ServiceAuthFallback serviceAuthFallback = ServiceAuthFallback.disabled,
+    String? serviceAuthTarget,
+    IrcProxyType proxyType = IrcProxyType.none,
+    String? proxyHost,
+    int? proxyPort,
+    String? proxyUsername,
+    String? proxyPassword,
+    String? identityProfileId,
+    bool useClientCertificate = false,
+    String? clientCertificatePem,
+    String? clientPrivateKeyPem,
+    String? clientKeyPassphrase,
     String? networkId,
   }) async {
     final network = NetworkConfig(
       id: networkId ?? _createId(name),
+      identityProfileId: _optionalText(identityProfileId),
+      useClientCertificate: useClientCertificate,
       name: name,
       host: host,
       port: port,
@@ -63,9 +86,35 @@ class NetworkListController extends ChangeNotifier {
           ? null
           : saslAccount?.trim(),
       saslPassword: (saslPassword ?? '').trim().isEmpty ? null : saslPassword,
+      serviceAuthFallback: serviceAuthFallback,
+      serviceAuthTarget: _optionalText(serviceAuthTarget) ?? 'NickServ',
+      autoJoinChannelKeys: _normalizeChannelKeys(autoJoinChannelKeys),
+      proxyType: proxyType,
+      proxyHost: _optionalText(proxyHost),
+      proxyPort: proxyType == IrcProxyType.none ? null : proxyPort,
+      proxyUsername: _optionalText(proxyUsername),
+      proxyPassword: (proxyPassword ?? '').trim().isEmpty
+          ? null
+          : proxyPassword,
     );
 
     await _repository.saveNetwork(network);
+
+    final certPem = (clientCertificatePem ?? '').trim();
+    final keyPem = (clientPrivateKeyPem ?? '').trim();
+    if (useClientCertificate && certPem.isNotEmpty && keyPem.isNotEmpty) {
+      await _certificateStore.save(
+        network.id,
+        ClientCertificate(
+          certificatePem: certPem,
+          privateKeyPem: keyPem,
+          privateKeyPassphrase: (clientKeyPassphrase ?? '').trim().isEmpty
+              ? null
+              : clientKeyPassphrase,
+        ),
+      );
+    }
+
     await load();
   }
 
@@ -96,6 +145,22 @@ class NetworkListController extends ChangeNotifier {
       }
     }
     return result;
+  }
+
+  Map<String, String> _normalizeChannelKeys(Map<String, String> channelKeys) {
+    final result = <String, String>{};
+    channelKeys.forEach((rawChannel, rawKey) {
+      final channelValue = rawChannel.trim();
+      final keyValue = rawKey.trim();
+      if (channelValue.isEmpty || keyValue.isEmpty) {
+        return;
+      }
+      final channel = channelValue.startsWith('#')
+          ? channelValue
+          : '#$channelValue';
+      result[channel] = keyValue;
+    });
+    return Map<String, String>.unmodifiable(result);
   }
 
   String? _optionalText(String? value) {

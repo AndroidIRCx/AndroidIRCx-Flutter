@@ -7,6 +7,7 @@ class ChatTab {
     required this.type,
     required this.networkId,
     this.hasActivity = false,
+    this.unreadCount = 0,
     this.isEncrypted = false,
   });
 
@@ -15,6 +16,7 @@ class ChatTab {
   final ChatTabType type;
   final String networkId;
   final bool hasActivity;
+  final int unreadCount;
   final bool isEncrypted;
 
   ChatTab copyWith({
@@ -23,6 +25,7 @@ class ChatTab {
     ChatTabType? type,
     String? networkId,
     bool? hasActivity,
+    int? unreadCount,
     bool? isEncrypted,
   }) {
     return ChatTab(
@@ -31,6 +34,7 @@ class ChatTab {
       type: type ?? this.type,
       networkId: networkId ?? this.networkId,
       hasActivity: hasActivity ?? this.hasActivity,
+      unreadCount: unreadCount ?? this.unreadCount,
       isEncrypted: isEncrypted ?? this.isEncrypted,
     );
   }
@@ -42,6 +46,7 @@ class ChatTab {
       'type': type.name,
       'networkId': networkId,
       'hasActivity': hasActivity,
+      'unreadCount': unreadCount,
       'isEncrypted': isEncrypted,
     };
   }
@@ -53,6 +58,7 @@ class ChatTab {
       type: ChatTabType.values.byName(json['type']! as String),
       networkId: json['networkId']! as String,
       hasActivity: (json['hasActivity'] as bool?) ?? false,
+      unreadCount: (json['unreadCount'] as num?)?.toInt() ?? 0,
       isEncrypted: (json['isEncrypted'] as bool?) ?? false,
     );
   }

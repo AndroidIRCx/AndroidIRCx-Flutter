@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/security/certificate_store.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
 import 'package:androidircx/irc/parser/ctcp.dart';
 import 'package:androidircx/irc/parser/irc_capability_parser.dart';
@@ -16,6 +18,19 @@ import 'package:androidircx/irc/services/irc_transport.dart';
 typedef IrcTransportConnector =
     Future<IrcTransport> Function(NetworkConfig network);
 
+enum SaslAuthStatus {
+  idle,
+  notConfigured,
+  pending,
+  unavailable,
+  mechanismUnavailable,
+  requested,
+  authenticating,
+  succeeded,
+  failed,
+  aborted,
+}
+
 class IrcService {
   static const Set<String> _preferredCapabilities = <String>{
     'account-notify',
@@ -24,9 +39,11 @@ class IrcService {
     'batch',
     'bot',
     'cap-notify',
+    'chathistory',
     'chghost',
     'draft/account-registration',
     'draft/channel-rename',
+    'draft/chathistory',
     'draft/multiline',
     'draft/read-marker',
     'draft/typing',
@@ -46,6 +63,7 @@ class IrcService {
     'typing',
     'userhost-in-names',
     'utf8only',
+    'znc.in/self-message',
   };
   static const int _maxCapReqLineLength = 480;
   static const Set<String> _capSubcommands = <String>{
@@ -61,22 +79,40 @@ class IrcService {
 
   IrcService({
     IrcTransportConnector? transportConnector,
+    CertificateStore? certificateStore,
     String Function()? scramNonceGenerator,
     IrcStsPolicyStore? stsPolicyStore,
     DateTime Function()? now,
+    Duration connectTimeout = const Duration(seconds: 20),
+    Duration readTimeout = const Duration(minutes: 5),
+    Duration writeTimeout = const Duration(seconds: 10),
+    Duration sendRateWindow = const Duration(milliseconds: 100),
+    int sendRateBurst = 8,
   }) : _transportConnector = transportConnector ?? defaultIrcTransportConnector,
+       _certificateStore = certificateStore,
        _scramNonceGenerator = scramNonceGenerator,
        _stsPolicyStore = stsPolicyStore ?? SharedPrefsIrcStsPolicyStore(),
        _now = now ?? DateTime.now,
+       _connectTimeout = connectTimeout,
+       _readTimeout = readTimeout,
+       _writeTimeout = writeTimeout,
+       _sendRateWindow = sendRateWindow,
+       _sendRateBurst = sendRateBurst < 1 ? 1 : sendRateBurst,
        _state = const ConnectionSnapshot(
          networkId: '',
          phase: ConnectionPhase.idle,
        );
 
   final IrcTransportConnector _transportConnector;
+  final CertificateStore? _certificateStore;
   final String Function()? _scramNonceGenerator;
   final IrcStsPolicyStore _stsPolicyStore;
   final DateTime Function() _now;
+  final Duration _connectTimeout;
+  final Duration _readTimeout;
+  final Duration _writeTimeout;
+  final Duration _sendRateWindow;
+  final int _sendRateBurst;
   final StreamController<String> _rawEventsController =
       StreamController<String>.broadcast();
   final StreamController<IrcMessageFrame> _framesController =
@@ -104,6 +140,7 @@ class IrcService {
   bool _capEnded = false;
   bool _stsUpgradeInProgress = false;
   bool _saslInProgress = false;
+  SaslAuthStatus _saslAuthStatus = SaslAuthStatus.idle;
   SaslMechanism? _activeSaslMechanism;
   NetworkConfig? _network;
   String? _primaryNick;
@@ -113,8 +150,13 @@ class IrcService {
   bool _scramAwaitingServerFinal = false;
   int _labelCounter = 0;
   final Map<String, String> _pendingLabels = <String, String>{};
+  final Queue<_QueuedIrcLine> _sendQueue = Queue<_QueuedIrcLine>();
   Future<void>? _connectInFlight;
   int _connectGeneration = 0;
+  Timer? _readTimeoutTimer;
+  bool _isDrainingSendQueue = false;
+  int _sentInRateWindow = 0;
+  DateTime? _sendRateWindowStartedAt;
   bool _isDisposed = false;
 
   ConnectionSnapshot get state => _state;
@@ -127,6 +169,9 @@ class IrcService {
   IrcServerSupport get serverSupport => _serverSupport;
   Set<String> get availableSaslMechanisms =>
       parseIrcCapabilityValueList(_capValues['sasl']);
+  SaslAuthStatus get saslAuthStatus => _saslAuthStatus;
+  bool get saslConfigured => _shouldUseSasl(_network);
+  bool get saslSucceeded => _saslAuthStatus == SaslAuthStatus.succeeded;
   Stream<String> get rawEvents => _rawEventsController.stream;
   Stream<IrcMessageFrame> get frames => _framesController.stream;
   Stream<ConnectionSnapshot> get stateStream => _stateController.stream;
@@ -182,6 +227,9 @@ class IrcService {
     _capEnded = false;
     _stsUpgradeInProgress = false;
     _saslInProgress = false;
+    _saslAuthStatus = _shouldUseSasl(effectiveNetwork)
+        ? SaslAuthStatus.pending
+        : SaslAuthStatus.notConfigured;
     _activeSaslMechanism = null;
     _scramSession = null;
     _scramAwaitingServerFinal = false;
@@ -194,8 +242,14 @@ class IrcService {
       ),
     );
 
+    Future<IrcTransport>? pendingTransport;
     try {
-      _transport = await _transportConnector(effectiveNetwork);
+      pendingTransport = _connectTransport(effectiveNetwork);
+      _transport = await _withOptionalTimeout(
+        pendingTransport,
+        _connectTimeout,
+        () => TimeoutException('Connection timed out.', _connectTimeout),
+      );
       if (!_isCurrentConnect(generation, effectiveNetwork.id)) {
         final staleTransport = _transport;
         _transport = null;
@@ -207,6 +261,7 @@ class IrcService {
         onError: _handleTransportError,
         onDone: _handleTransportDone,
       );
+      _resetReadTimeoutTimer();
 
       _updateState(
         ConnectionSnapshot(
@@ -226,6 +281,9 @@ class IrcService {
     } catch (error) {
       if (!_isCurrentConnect(generation, effectiveNetwork.id)) {
         return;
+      }
+      if (error is TimeoutException) {
+        pendingTransport?.then((transport) => transport.close()).ignore();
       }
       await _cleanupTransport();
       _updateState(
@@ -300,8 +358,14 @@ class IrcService {
       return;
     }
 
-    _emitRawEvent('>> ${redactedLine ?? line}');
-    await transport.sendLine(line);
+    final queued = _QueuedIrcLine(
+      line: line,
+      redactedLine: redactedLine,
+      bypassBackpressure: _shouldBypassSendBackpressure(line),
+    );
+    _sendQueue.add(queued);
+    _drainSendQueue();
+    await queued.completer.future;
   }
 
   Future<String> sendRawLabeled(String line) async {
@@ -767,6 +831,7 @@ class IrcService {
     if (_isDisposed) {
       return;
     }
+    _resetReadTimeoutTimer();
     _emitRawEvent('<< $line');
     final frame = parseIrcMessage(line);
     _handleLabeledResponse(frame);
@@ -809,6 +874,7 @@ class IrcService {
 
     if (frame.command == '903') {
       _saslInProgress = false;
+      _saslAuthStatus = SaslAuthStatus.succeeded;
       _activeSaslMechanism = null;
       _scramSession = null;
       _scramAwaitingServerFinal = false;
@@ -830,6 +896,7 @@ class IrcService {
         frame.command == '906' ||
         frame.command == '907') {
       _saslInProgress = false;
+      _saslAuthStatus = SaslAuthStatus.failed;
       _activeSaslMechanism = null;
       _scramSession = null;
       _scramAwaitingServerFinal = false;
@@ -857,6 +924,7 @@ class IrcService {
       }
       if (_saslInProgress) {
         _saslInProgress = false;
+        _saslAuthStatus = SaslAuthStatus.mechanismUnavailable;
         _activeSaslMechanism = null;
         _scramSession = null;
         _scramAwaitingServerFinal = false;
@@ -1071,6 +1139,7 @@ class IrcService {
 
   void _requestAvailableCapabilities() {
     final requested = _selectCapabilitiesToRequest();
+    _updateSaslStatusForSelectedCapabilities(requested);
     if (requested.isEmpty) {
       unawaited(_endCapNegotiation());
       return;
@@ -1078,6 +1147,50 @@ class IrcService {
 
     _capRequested.addAll(requested);
     unawaited(_sendCapReqBatches(requested));
+  }
+
+  void _updateSaslStatusForSelectedCapabilities(List<String> requested) {
+    if (!_shouldUseSasl(_network)) {
+      _saslAuthStatus = SaslAuthStatus.notConfigured;
+      return;
+    }
+
+    if (requested.contains('sasl')) {
+      _saslAuthStatus = SaslAuthStatus.requested;
+      return;
+    }
+
+    if (!_capAvailable.contains('sasl')) {
+      _saslAuthStatus = SaslAuthStatus.unavailable;
+      _rawEventsController.add(
+        '** SASL unavailable: server did not advertise sasl capability',
+      );
+      return;
+    }
+
+    _saslAuthStatus = SaslAuthStatus.mechanismUnavailable;
+    final mechanism = _saslMechanismName(
+      _network?.saslMechanism ?? SaslMechanism.plain,
+    );
+    _rawEventsController.add(
+      '** SASL unavailable: server does not advertise $mechanism',
+    );
+  }
+
+  /// Connects the transport, presenting the network's stored client certificate
+  /// in the TLS handshake (SASL EXTERNAL / CertFP) when one is configured.
+  Future<IrcTransport> _connectTransport(NetworkConfig network) async {
+    final store = _certificateStore;
+    if (store != null && network.useClientCertificate && network.useTls) {
+      final certificate = await store.read(network.id);
+      if (certificate != null) {
+        return defaultIrcTransportConnector(
+          network,
+          clientCertificate: certificate,
+        );
+      }
+    }
+    return _transportConnector(network);
   }
 
   List<String> _selectCapabilitiesToRequest() {
@@ -1246,6 +1359,9 @@ class IrcService {
     for (final name in names) {
       _capRequested.remove(name);
     }
+    if (names.contains('sasl') && _shouldUseSasl(_network)) {
+      _saslAuthStatus = SaslAuthStatus.failed;
+    }
 
     if (names.isNotEmpty) {
       _rawEventsController.add(
@@ -1266,6 +1382,7 @@ class IrcService {
 
   void _startSaslAuthentication(SaslMechanism mechanism) {
     _saslInProgress = true;
+    _saslAuthStatus = SaslAuthStatus.authenticating;
     _activeSaslMechanism = mechanism;
     _updateState(
       ConnectionSnapshot(
@@ -1421,6 +1538,7 @@ class IrcService {
 
   Future<void> _abortSasl() async {
     _saslInProgress = false;
+    _saslAuthStatus = SaslAuthStatus.aborted;
     _activeSaslMechanism = null;
     _scramSession = null;
     _scramAwaitingServerFinal = false;
@@ -1459,6 +1577,8 @@ class IrcService {
     if (_isDisposed) {
       return;
     }
+    _cancelReadTimeoutTimer();
+    _failQueuedSends(StateError('Transport closed.'));
     unawaited(_rescheduleStsPolicyOnDisconnect());
     _transport = null;
     _linesSubscription = null;
@@ -1476,6 +1596,8 @@ class IrcService {
     if (_isDisposed) {
       return;
     }
+    _cancelReadTimeoutTimer();
+    _failQueuedSends(error);
     _pendingLabels.clear();
     unawaited(_cleanupTransport());
     _updateState(
@@ -1520,6 +1642,8 @@ class IrcService {
   Future<void> _cleanupTransport({bool rescheduleStsPolicy = true}) async {
     final subscription = _linesSubscription;
     final transport = _transport;
+    _cancelReadTimeoutTimer();
+    _failQueuedSends(StateError('Transport cleanup.'));
     if (rescheduleStsPolicy) {
       await _rescheduleStsPolicyOnDisconnect();
     }
@@ -1555,12 +1679,186 @@ class IrcService {
     }
   }
 
+  void _resetReadTimeoutTimer() {
+    _cancelReadTimeoutTimer();
+    if (_readTimeout <= Duration.zero || _isDisposed || _transport == null) {
+      return;
+    }
+    _readTimeoutTimer = Timer(_readTimeout, _handleReadTimeout);
+  }
+
+  void _cancelReadTimeoutTimer() {
+    _readTimeoutTimer?.cancel();
+    _readTimeoutTimer = null;
+  }
+
+  void _handleReadTimeout() {
+    if (_isDisposed || _transport == null) {
+      return;
+    }
+    _rawEventsController.add('** Read timeout: no IRC data received');
+    _pendingLabels.clear();
+    unawaited(_cleanupTransport());
+    _updateState(
+      ConnectionSnapshot(
+        networkId: _state.networkId,
+        phase: ConnectionPhase.error,
+        message: 'Read timeout.',
+      ),
+    );
+  }
+
+  void _drainSendQueue() {
+    if (_isDisposed || _isDrainingSendQueue || _transport == null) {
+      return;
+    }
+    _isDrainingSendQueue = true;
+    unawaited(_drainSendQueueAsync());
+  }
+
+  Future<void> _drainSendQueueAsync() async {
+    try {
+      while (!_isDisposed && _transport != null && _sendQueue.isNotEmpty) {
+        final queued = _sendQueue.first;
+        final wait = queued.bypassBackpressure
+            ? Duration.zero
+            : _sendQueueDelay();
+        if (wait > Duration.zero) {
+          await Future<void>.delayed(wait);
+          if (_isDisposed || _transport == null) {
+            return;
+          }
+        }
+
+        _sendQueue.removeFirst();
+        final transport = _transport;
+        if (transport == null) {
+          queued.completer.completeError(StateError('Transport closed.'));
+          continue;
+        }
+
+        if (!queued.bypassBackpressure) {
+          _recordQueuedSend();
+        }
+        _emitRawEvent('>> ${queued.redactedLine ?? queued.line}');
+        try {
+          await _withOptionalTimeout(
+            transport.sendLine(queued.line),
+            _writeTimeout,
+            () => TimeoutException('IRC write timed out.', _writeTimeout),
+          );
+          if (!queued.completer.isCompleted) {
+            queued.completer.complete();
+          }
+        } catch (error, stackTrace) {
+          if (!queued.completer.isCompleted) {
+            queued.completer.completeError(error, stackTrace);
+          }
+          _handleTransportError(error, stackTrace);
+          return;
+        }
+      }
+    } finally {
+      _isDrainingSendQueue = false;
+      if (!_isDisposed && _transport != null && _sendQueue.isNotEmpty) {
+        _drainSendQueue();
+      }
+    }
+  }
+
+  Duration _sendQueueDelay() {
+    if (_sendRateWindow <= Duration.zero) {
+      return Duration.zero;
+    }
+
+    final now = _now();
+    final windowStartedAt = _sendRateWindowStartedAt;
+    if (windowStartedAt == null ||
+        now.difference(windowStartedAt) >= _sendRateWindow) {
+      _sendRateWindowStartedAt = now;
+      _sentInRateWindow = 0;
+      return Duration.zero;
+    }
+
+    if (_sentInRateWindow < _sendRateBurst) {
+      return Duration.zero;
+    }
+
+    final elapsed = now.difference(windowStartedAt);
+    final remaining = _sendRateWindow - elapsed;
+    return remaining.isNegative ? Duration.zero : remaining;
+  }
+
+  void _recordQueuedSend() {
+    if (_sendRateWindow <= Duration.zero) {
+      return;
+    }
+
+    final now = _now();
+    final windowStartedAt = _sendRateWindowStartedAt;
+    if (windowStartedAt == null ||
+        now.difference(windowStartedAt) >= _sendRateWindow) {
+      _sendRateWindowStartedAt = now;
+      _sentInRateWindow = 0;
+    }
+    _sentInRateWindow += 1;
+  }
+
+  bool _shouldBypassSendBackpressure(String line) {
+    var commandLine = line.trimLeft();
+    if (commandLine.startsWith('@')) {
+      final firstSpace = commandLine.indexOf(' ');
+      if (firstSpace == -1) {
+        return false;
+      }
+      commandLine = commandLine.substring(firstSpace + 1).trimLeft();
+    }
+
+    final firstSpace = commandLine.indexOf(' ');
+    final command =
+        (firstSpace == -1 ? commandLine : commandLine.substring(0, firstSpace))
+            .toUpperCase();
+    return switch (command) {
+      'AUTHENTICATE' ||
+      'CAP' ||
+      'NICK' ||
+      'PASS' ||
+      'PING' ||
+      'PONG' ||
+      'QUIT' ||
+      'USER' => true,
+      _ => false,
+    };
+  }
+
+  void _failQueuedSends(Object error) {
+    while (_sendQueue.isNotEmpty) {
+      final queued = _sendQueue.removeFirst();
+      if (!queued.completer.isCompleted) {
+        queued.completer.completeError(error);
+      }
+    }
+  }
+
+  Future<T> _withOptionalTimeout<T>(
+    Future<T> future,
+    Duration timeout,
+    Object Function() errorFactory,
+  ) {
+    if (timeout <= Duration.zero) {
+      return future;
+    }
+    return future.timeout(timeout, onTimeout: () => throw errorFactory());
+  }
+
   void dispose() {
     if (_isDisposed) {
       return;
     }
     _isDisposed = true;
     _connectGeneration += 1;
+    _cancelReadTimeoutTimer();
+    _failQueuedSends(StateError('IRC service disposed.'));
     unawaited(_cleanupTransport());
     _labeledResponsesController.close();
     _rawEventsController.close();
@@ -1661,4 +1959,17 @@ class IrcService {
       frame: frame,
     ));
   }
+}
+
+class _QueuedIrcLine {
+  _QueuedIrcLine({
+    required this.line,
+    this.redactedLine,
+    this.bypassBackpressure = false,
+  });
+
+  final String line;
+  final String? redactedLine;
+  final bool bypassBackpressure;
+  final Completer<void> completer = Completer<void>();
 }

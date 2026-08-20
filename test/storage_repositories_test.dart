@@ -45,6 +45,14 @@ void main() {
           saslMechanism: SaslMechanism.scramSha256,
           autoConnect: true,
           autoJoinChannels: ['#androidircx', '#flutter'],
+          autoJoinChannelKeys: {'#androidircx': 'join-key'},
+          serviceAuthFallback: ServiceAuthFallback.nickServ,
+          serviceAuthTarget: 'NickServ',
+          proxyType: IrcProxyType.socks5,
+          proxyHost: '127.0.0.1',
+          proxyPort: 9050,
+          proxyUsername: 'proxy-user',
+          proxyPassword: 'proxy-pass-value',
           profileLabel: 'Main profile',
           profileGroup: 'General',
         ),
@@ -60,6 +68,14 @@ void main() {
       expect(saved.webSocketPath, '/irc');
       expect(saved.saslMechanism, SaslMechanism.scramSha256);
       expect(saved.autoJoinChannels, ['#androidircx', '#flutter']);
+      expect(saved.autoJoinChannelKeys, {'#androidircx': 'join-key'});
+      expect(saved.serviceAuthFallback, ServiceAuthFallback.nickServ);
+      expect(saved.serviceAuthTarget, 'NickServ');
+      expect(saved.proxyType, IrcProxyType.socks5);
+      expect(saved.proxyHost, '127.0.0.1');
+      expect(saved.proxyPort, 9050);
+      expect(saved.proxyUsername, 'proxy-user');
+      expect(saved.proxyPassword, 'proxy-pass-value');
       expect(saved.profileLabel, 'Main profile');
       expect(saved.profileGroup, 'General');
     });
@@ -74,6 +90,10 @@ void main() {
       });
 
       expect(saved.autoJoinChannels, isEmpty);
+      expect(saved.autoJoinChannelKeys, isEmpty);
+      expect(saved.serviceAuthFallback, ServiceAuthFallback.disabled);
+      expect(saved.serviceAuthTarget, 'NickServ');
+      expect(saved.proxyType, IrcProxyType.none);
       expect(saved.profileLabel, isNull);
       expect(saved.profileGroup, isNull);
     });
@@ -127,6 +147,7 @@ void main() {
           password: 'server-pass-value',
           saslAccount: 'sasl-account',
           saslPassword: 'sasl-pass-value',
+          proxyPassword: 'proxy-pass-value',
         );
 
         final redacted = config.toRedactedJson();
@@ -135,13 +156,17 @@ void main() {
 
         expect(config.toJson()['password'], 'server-pass-value');
         expect(config.toJson()['saslPassword'], 'sasl-pass-value');
+        expect(config.toJson()['proxyPassword'], 'proxy-pass-value');
         expect(redacted['password'], '[REDACTED]');
         expect(redacted['saslPassword'], '[REDACTED]');
+        expect(redacted['proxyPassword'], '[REDACTED]');
         expect(redacted['saslAccount'], 'sasl-account');
         expect(redactedText, isNot(contains('server-pass-value')));
         expect(redactedText, isNot(contains('sasl-pass-value')));
+        expect(redactedText, isNot(contains('proxy-pass-value')));
         expect(debugText, isNot(contains('server-pass-value')));
         expect(debugText, isNot(contains('sasl-pass-value')));
+        expect(debugText, isNot(contains('proxy-pass-value')));
         expect(debugText, contains('[REDACTED]'));
       },
     );
@@ -237,6 +262,11 @@ void main() {
             saslPassword: 'sasl-pass-value',
             autoJoinChannels: ['#secret'],
             autoJoinChannelKeys: {'#secret': 'channel-key-value'},
+            proxyType: IrcProxyType.socks5,
+            proxyHost: '127.0.0.1',
+            proxyPort: 9050,
+            proxyUsername: 'proxy-user',
+            proxyPassword: 'proxy-pass-value',
             profileLabel: 'Secure profile',
             profileGroup: 'Ops',
           ),
@@ -253,9 +283,11 @@ void main() {
         expect(raw, isNot(contains('server-pass-value')));
         expect(raw, isNot(contains('sasl-pass-value')));
         expect(raw, isNot(contains('channel-key-value')));
+        expect(raw, isNot(contains('proxy-pass-value')));
         expect(savedJson['password'], isNull);
         expect(savedJson['saslPassword'], isNull);
         expect(savedJson['autoJoinChannelKeys'], isNull);
+        expect(savedJson['proxyPassword'], isNull);
         expect(
           await storage.getSecret('androidircx.network.secret-net.password'),
           'server-pass-value',
@@ -272,12 +304,19 @@ void main() {
           ),
           '{"#secret":"channel-key-value"}',
         );
+        expect(
+          await storage.getSecret(
+            'androidircx.network.secret-net.proxyPassword',
+          ),
+          'proxy-pass-value',
+        );
 
         final saved = (await repository.loadNetworks()).firstWhere(
           (item) => item.id == 'secret-net',
         );
         expect(saved.password, 'server-pass-value');
         expect(saved.saslPassword, 'sasl-pass-value');
+        expect(saved.proxyPassword, 'proxy-pass-value');
         expect(saved.profileLabel, 'Secure profile');
         expect(saved.profileGroup, 'Ops');
       },
@@ -297,6 +336,7 @@ void main() {
           password: 'server-pass-value',
           saslPassword: 'sasl-pass-value',
           autoJoinChannelKeys: {'#secret': 'channel-key-value'},
+          proxyPassword: 'proxy-pass-value',
         ),
       );
 
@@ -317,6 +357,12 @@ void main() {
       expect(
         await storage.getSecret(
           'androidircx.network.delete-secret-net.autoJoinChannelKeys',
+        ),
+        isNull,
+      );
+      expect(
+        await storage.getSecret(
+          'androidircx.network.delete-secret-net.proxyPassword',
         ),
         isNull,
       );
@@ -342,6 +388,7 @@ void main() {
               'password': 'legacy-server-pass-value',
               'saslAccount': 'sasl-account',
               'saslPassword': 'legacy-sasl-pass-value',
+              'proxyPassword': 'legacy-proxy-pass-value',
             },
           ]),
         });
@@ -352,6 +399,7 @@ void main() {
 
         expect(saved.password, 'legacy-server-pass-value');
         expect(saved.saslPassword, 'legacy-sasl-pass-value');
+        expect(saved.proxyPassword, 'legacy-proxy-pass-value');
         expect(
           await storage.getSecret(
             'androidircx.network.legacy-secret-net.password',
@@ -364,6 +412,12 @@ void main() {
           ),
           'legacy-sasl-pass-value',
         );
+        expect(
+          await storage.getSecret(
+            'androidircx.network.legacy-secret-net.proxyPassword',
+          ),
+          'legacy-proxy-pass-value',
+        );
 
         final prefs = await SharedPreferences.getInstance();
         final raw = prefs.getString('androidircx.networks')!;
@@ -371,8 +425,10 @@ void main() {
         final migratedJson = decoded.cast<Map<String, Object?>>().single;
         expect(raw, isNot(contains('legacy-server-pass-value')));
         expect(raw, isNot(contains('legacy-sasl-pass-value')));
+        expect(raw, isNot(contains('legacy-proxy-pass-value')));
         expect(migratedJson['password'], isNull);
         expect(migratedJson['saslPassword'], isNull);
+        expect(migratedJson['proxyPassword'], isNull);
       },
     );
 
@@ -388,6 +444,7 @@ void main() {
           password: 'server-pass-value',
           saslAccount: 'sasl-account',
           saslPassword: 'sasl-pass-value',
+          proxyPassword: 'proxy-pass-value',
         );
 
         final plannedSecrets = networkSecretMigrationValues(config);
@@ -398,6 +455,7 @@ void main() {
           containsAll(<String>[
             'androidircx.network.secret-net.password',
             'androidircx.network.secret-net.saslPassword',
+            'androidircx.network.secret-net.proxyPassword',
           ]),
         );
         expect(
@@ -409,6 +467,10 @@ void main() {
           'sasl-pass-value',
         );
         expect(
+          plannedSecrets['androidircx.network.secret-net.proxyPassword'],
+          'proxy-pass-value',
+        );
+        expect(
           redactedPlan['androidircx.network.secret-net.password'],
           '[REDACTED]',
         );
@@ -416,8 +478,13 @@ void main() {
           redactedPlan['androidircx.network.secret-net.saslPassword'],
           '[REDACTED]',
         );
+        expect(
+          redactedPlan['androidircx.network.secret-net.proxyPassword'],
+          '[REDACTED]',
+        );
         expect(jsonEncode(redactedPlan), isNot(contains('server-pass-value')));
         expect(jsonEncode(redactedPlan), isNot(contains('sasl-pass-value')));
+        expect(jsonEncode(redactedPlan), isNot(contains('proxy-pass-value')));
       },
     );
 
@@ -542,6 +609,12 @@ void main() {
           showAttachmentPreviews: false,
           dccDownloadDirectoryPath: r'C:\Downloads\IRC',
           mediaDownloadDirectoryPath: r'C:\Downloads\Media',
+          themePreset: AppThemePreset.dark,
+          customThemeJson: '{"primary":"#123456"}',
+          messageFontScale: 1.2,
+          messageDensity: MessageDensity.compact,
+          monospaceMessages: true,
+          nickColorMode: NickColorMode.vivid,
         ),
       );
       final settings = await repository.loadSettings();
@@ -552,6 +625,12 @@ void main() {
       expect(settings.showAttachmentPreviews, isFalse);
       expect(settings.dccDownloadDirectoryPath, r'C:\Downloads\IRC');
       expect(settings.mediaDownloadDirectoryPath, r'C:\Downloads\Media');
+      expect(settings.themePreset, AppThemePreset.dark);
+      expect(settings.customThemeJson, '{"primary":"#123456"}');
+      expect(settings.messageFontScale, 1.2);
+      expect(settings.messageDensity, MessageDensity.compact);
+      expect(settings.monospaceMessages, isTrue);
+      expect(settings.nickColorMode, NickColorMode.vivid);
     });
 
     test('chat session persistence saves tabs and history', () async {
@@ -561,6 +640,8 @@ void main() {
         name: '#flutter',
         type: ChatTabType.channel,
         networkId: 'dbase',
+        hasActivity: true,
+        unreadCount: 3,
       );
       final message = IrcMessage(
         id: '1',
@@ -591,6 +672,8 @@ void main() {
 
       expect(snapshot, isNotNull);
       expect(snapshot!.tabs.single.name, '#flutter');
+      expect(snapshot.tabs.single.hasActivity, isTrue);
+      expect(snapshot.tabs.single.unreadCount, 3);
       expect(snapshot.activeTabId, tab.id);
       expect(snapshot.messagesByTab[tab.id]!.single.content, 'hello');
       expect(snapshot.messagesByTab[tab.id]!.single.attachments, hasLength(1));

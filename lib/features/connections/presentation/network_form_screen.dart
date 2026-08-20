@@ -1,4 +1,8 @@
+import 'dart:async';
+
+import 'package:androidircx/core/models/identity_profile.dart';
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/storage/identity_profile_repository.dart';
 import 'package:flutter/material.dart';
 
 class NetworkFormResult {
@@ -13,11 +17,24 @@ class NetworkFormResult {
     this.webSocketPath,
     required this.autoConnect,
     required this.autoJoinChannels,
+    required this.autoJoinChannelKeys,
     this.profileLabel,
     this.profileGroup,
     required this.saslMechanism,
     this.saslAccount,
     this.saslPassword,
+    required this.serviceAuthFallback,
+    required this.serviceAuthTarget,
+    required this.proxyType,
+    this.proxyHost,
+    this.proxyPort,
+    this.proxyUsername,
+    this.proxyPassword,
+    this.identityProfileId,
+    this.useClientCertificate = false,
+    this.clientCertificatePem,
+    this.clientPrivateKeyPem,
+    this.clientKeyPassphrase,
   });
 
   final String name;
@@ -30,17 +47,34 @@ class NetworkFormResult {
   final String? webSocketPath;
   final bool autoConnect;
   final List<String> autoJoinChannels;
+  final Map<String, String> autoJoinChannelKeys;
   final String? profileLabel;
   final String? profileGroup;
   final SaslMechanism saslMechanism;
   final String? saslAccount;
   final String? saslPassword;
+  final ServiceAuthFallback serviceAuthFallback;
+  final String serviceAuthTarget;
+  final IrcProxyType proxyType;
+  final String? proxyHost;
+  final int? proxyPort;
+  final String? proxyUsername;
+  final String? proxyPassword;
+  final String? identityProfileId;
+  final bool useClientCertificate;
+  final String? clientCertificatePem;
+  final String? clientPrivateKeyPem;
+  final String? clientKeyPassphrase;
 }
 
 class NetworkFormScreen extends StatefulWidget {
-  const NetworkFormScreen({super.key, this.initialValue});
+  const NetworkFormScreen({super.key, this.initialValue, this.profileRepository});
 
   final NetworkConfig? initialValue;
+
+  /// Source of identity profiles for the attach-profile picker; defaults to
+  /// shared-prefs storage.
+  final IdentityProfileRepository? profileRepository;
 
   @override
   State<NetworkFormScreen> createState() => _NetworkFormScreenState();
@@ -56,18 +90,37 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
   late final TextEditingController _nicknameController;
   late final TextEditingController _altNicknameController;
   late final TextEditingController _autoJoinChannelsController;
+  late final TextEditingController _autoJoinChannelKeysController;
   late final TextEditingController _profileLabelController;
   late final TextEditingController _profileGroupController;
   late final TextEditingController _saslAccountController;
   late final TextEditingController _saslPasswordController;
+  late final TextEditingController _serviceAuthTargetController;
+  late final TextEditingController _proxyHostController;
+  late final TextEditingController _proxyPortController;
+  late final TextEditingController _proxyUsernameController;
+  late final TextEditingController _proxyPasswordController;
   late bool _useTls;
   late bool _autoConnect;
   late SaslMechanism _saslMechanism;
+  late ServiceAuthFallback _serviceAuthFallback;
+  late IrcProxyType _proxyType;
+  late final IdentityProfileRepository _profileRepository;
+  List<IdentityProfile> _profiles = const [IdentityProfile.defaultProfile];
+  String? _identityProfileId;
+  late final TextEditingController _clientCertController;
+  late final TextEditingController _clientKeyController;
+  late final TextEditingController _clientKeyPassphraseController;
+  late bool _useClientCertificate;
 
   @override
   void initState() {
     super.initState();
     final initial = widget.initialValue;
+    _profileRepository =
+        widget.profileRepository ?? SharedPrefsIdentityProfileRepository();
+    _identityProfileId = initial?.identityProfileId;
+    unawaited(_loadProfiles());
     _nameController = TextEditingController(text: initial?.name ?? '');
     _hostController = TextEditingController(text: initial?.host ?? '');
     _portController = TextEditingController(
@@ -88,6 +141,9 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _autoJoinChannelsController = TextEditingController(
       text: initial?.autoJoinChannels.join(', ') ?? '',
     );
+    _autoJoinChannelKeysController = TextEditingController(
+      text: _formatAutoJoinChannelKeys(initial?.autoJoinChannelKeys),
+    );
     _profileLabelController = TextEditingController(
       text: initial?.profileLabel ?? '',
     );
@@ -100,9 +156,45 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _saslPasswordController = TextEditingController(
       text: initial?.saslPassword ?? '',
     );
+    _serviceAuthTargetController = TextEditingController(
+      text: initial?.serviceAuthTarget ?? 'NickServ',
+    );
+    _proxyHostController = TextEditingController(
+      text: initial?.proxyHost ?? '',
+    );
+    _proxyPortController = TextEditingController(
+      text: initial?.proxyPort?.toString() ?? '',
+    );
+    _proxyUsernameController = TextEditingController(
+      text: initial?.proxyUsername ?? '',
+    );
+    _proxyPasswordController = TextEditingController(
+      text: initial?.proxyPassword ?? '',
+    );
+    _clientCertController = TextEditingController();
+    _clientKeyController = TextEditingController();
+    _clientKeyPassphraseController = TextEditingController();
+    _useClientCertificate = initial?.useClientCertificate ?? false;
     _useTls = initial?.useTls ?? true;
     _autoConnect = initial?.autoConnect ?? false;
     _saslMechanism = initial?.saslMechanism ?? SaslMechanism.plain;
+    _serviceAuthFallback =
+        initial?.serviceAuthFallback ?? ServiceAuthFallback.disabled;
+    _proxyType = initial?.proxyType ?? IrcProxyType.none;
+  }
+
+  Future<void> _loadProfiles() async {
+    final profiles = await _profileRepository.loadProfiles();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _profiles = profiles;
+      if (_identityProfileId != null &&
+          !profiles.any((profile) => profile.id == _identityProfileId)) {
+        _identityProfileId = null;
+      }
+    });
   }
 
   @override
@@ -115,10 +207,19 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _nicknameController.dispose();
     _altNicknameController.dispose();
     _autoJoinChannelsController.dispose();
+    _autoJoinChannelKeysController.dispose();
     _profileLabelController.dispose();
     _profileGroupController.dispose();
     _saslAccountController.dispose();
     _saslPasswordController.dispose();
+    _serviceAuthTargetController.dispose();
+    _proxyHostController.dispose();
+    _proxyPortController.dispose();
+    _proxyUsernameController.dispose();
+    _proxyPasswordController.dispose();
+    _clientCertController.dispose();
+    _clientKeyController.dispose();
+    _clientKeyPassphraseController.dispose();
     super.dispose();
   }
 
@@ -219,6 +320,68 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                   validator: _requiredValidator,
                 ),
                 const SizedBox(height: 16),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Client certificate (SASL EXTERNAL)'),
+                  subtitle: const Text(
+                    'Present a stored client cert in the TLS handshake.',
+                  ),
+                  value: _useClientCertificate,
+                  onChanged: (value) =>
+                      setState(() => _useClientCertificate = value),
+                ),
+                if (_useClientCertificate) ...[
+                  TextFormField(
+                    controller: _clientCertController,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Client certificate PEM',
+                      helperText:
+                          'Paste -----BEGIN CERTIFICATE-----; leave empty to keep the stored one.',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _clientKeyController,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Private key PEM',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _clientKeyPassphraseController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Private key passphrase (optional)',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                DropdownButtonFormField<String?>(
+                  initialValue: _identityProfileId,
+                  decoration: const InputDecoration(
+                    labelText: 'Identity profile',
+                    helperText:
+                        'Attach a saved identity; overrides nick/realname on connect.',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      child: Text('Use this network\'s identity'),
+                    ),
+                    for (final profile in _profiles)
+                      if (profile.id != IdentityProfile.defaultProfileId)
+                        DropdownMenuItem<String?>(
+                          value: profile.id,
+                          child: Text('${profile.name} (${profile.nick})'),
+                        ),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => _identityProfileId = value),
+                ),
+                const SizedBox(height: 16),
                 TextFormField(
                   controller: _saslAccountController,
                   decoration: InputDecoration(
@@ -269,6 +432,40 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                 const SizedBox(height: 12),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
+                  title: const Text('NickServ fallback'),
+                  subtitle: const Text(
+                    'Use SASL credentials with services when SASL is unavailable.',
+                  ),
+                  value: _serviceAuthFallback == ServiceAuthFallback.nickServ,
+                  onChanged: (value) {
+                    setState(
+                      () => _serviceAuthFallback = value
+                          ? ServiceAuthFallback.nickServ
+                          : ServiceAuthFallback.disabled,
+                    );
+                  },
+                ),
+                if (_serviceAuthFallback == ServiceAuthFallback.nickServ) ...[
+                  TextFormField(
+                    key: const Key('network-form-service-auth-target'),
+                    controller: _serviceAuthTargetController,
+                    decoration: const InputDecoration(
+                      labelText: 'Service target',
+                      helperText: 'Usually NickServ.',
+                    ),
+                    validator: (value) {
+                      if (_serviceAuthFallback ==
+                              ServiceAuthFallback.nickServ &&
+                          (value ?? '').trim().isEmpty) {
+                        return 'Service target is required.';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
                   title: const Text('Use TLS'),
                   subtitle: const Text(
                     'Enabled by default for modern IRC servers.',
@@ -293,6 +490,98 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                         'Optional comma-separated list, e.g. #androidircx, #flutter.',
                   ),
                 ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  key: const Key('network-form-auto-join-channel-keys'),
+                  controller: _autoJoinChannelKeysController,
+                  minLines: 2,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    labelText: 'Auto-join channel keys',
+                    helperText:
+                        'Optional one per line, e.g. #private=secret-key.',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<IrcProxyType>(
+                  key: const Key('network-form-proxy-type'),
+                  initialValue: _proxyType,
+                  decoration: const InputDecoration(labelText: 'Proxy'),
+                  items: const [
+                    DropdownMenuItem<IrcProxyType>(
+                      value: IrcProxyType.none,
+                      child: Text('None'),
+                    ),
+                    DropdownMenuItem<IrcProxyType>(
+                      value: IrcProxyType.socks5,
+                      child: Text('SOCKS5 / Tor'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() => _proxyType = value);
+                  },
+                ),
+                if (_proxyType == IrcProxyType.socks5) ...[
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    key: const Key('network-form-proxy-host'),
+                    controller: _proxyHostController,
+                    decoration: const InputDecoration(
+                      labelText: 'Proxy host',
+                      helperText: 'Tor default is 127.0.0.1.',
+                    ),
+                    validator: (value) {
+                      if (_proxyType == IrcProxyType.socks5 &&
+                          (value ?? '').trim().isEmpty) {
+                        return 'Proxy host is required.';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    key: const Key('network-form-proxy-port'),
+                    controller: _proxyPortController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Proxy port',
+                      helperText:
+                          'Tor Browser usually uses 9150; tor daemon uses 9050.',
+                    ),
+                    validator: (value) {
+                      if (_proxyType != IrcProxyType.socks5) {
+                        return null;
+                      }
+                      final parsed = int.tryParse((value ?? '').trim());
+                      if (parsed == null || parsed < 1 || parsed > 65535) {
+                        return 'Enter a valid proxy port.';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    key: const Key('network-form-proxy-username'),
+                    controller: _proxyUsernameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Proxy username',
+                      helperText: 'Optional for authenticated SOCKS5 proxies.',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    key: const Key('network-form-proxy-password'),
+                    controller: _proxyPasswordController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Proxy password',
+                      helperText: 'Optional for authenticated SOCKS5 proxies.',
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 TextFormField(
                   key: const Key('network-form-profile-label'),
@@ -355,11 +644,29 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
         autoJoinChannels: _parseAutoJoinChannels(
           _autoJoinChannelsController.text,
         ),
+        autoJoinChannelKeys: _parseAutoJoinChannelKeys(
+          _autoJoinChannelKeysController.text,
+        ),
         profileLabel: _optionalText(_profileLabelController.text),
         profileGroup: _optionalText(_profileGroupController.text),
         saslMechanism: _saslMechanism,
         saslAccount: _saslAccountController.text.trim(),
         saslPassword: _saslPasswordController.text,
+        serviceAuthFallback: _serviceAuthFallback,
+        serviceAuthTarget:
+            _optionalText(_serviceAuthTargetController.text) ?? 'NickServ',
+        proxyType: _proxyType,
+        proxyHost: _optionalText(_proxyHostController.text),
+        proxyPort: _proxyType == IrcProxyType.socks5
+            ? int.parse(_proxyPortController.text.trim())
+            : null,
+        proxyUsername: _optionalText(_proxyUsernameController.text),
+        proxyPassword: _proxyPasswordController.text,
+        identityProfileId: _identityProfileId,
+        useClientCertificate: _useClientCertificate,
+        clientCertificatePem: _clientCertController.text,
+        clientPrivateKeyPem: _clientKeyController.text,
+        clientKeyPassphrase: _clientKeyPassphraseController.text,
       ),
     );
   }
@@ -378,6 +685,44 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
       }
     }
     return result;
+  }
+
+  Map<String, String> _parseAutoJoinChannelKeys(String value) {
+    final result = <String, String>{};
+    final entries = value
+        .split(RegExp(r'[\r\n,]+'))
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty);
+
+    for (final entry in entries) {
+      final separatorIndex = entry.indexOf('=');
+      final parts = separatorIndex == -1
+          ? entry.split(RegExp(r'\s+'))
+          : <String>[
+              entry.substring(0, separatorIndex),
+              entry.substring(separatorIndex + 1),
+            ];
+      if (parts.length < 2) {
+        continue;
+      }
+      final rawChannel = parts.first.trim();
+      final key = parts.skip(1).join(' ').trim();
+      if (rawChannel.isEmpty || key.isEmpty) {
+        continue;
+      }
+      final channel = rawChannel.startsWith('#') ? rawChannel : '#$rawChannel';
+      result[channel] = key;
+    }
+    return Map<String, String>.unmodifiable(result);
+  }
+
+  String _formatAutoJoinChannelKeys(Map<String, String>? keys) {
+    if (keys == null || keys.isEmpty) {
+      return '';
+    }
+    return keys.entries
+        .map((entry) => '${entry.key}=${entry.value}')
+        .join('\n');
   }
 
   String? _optionalText(String value) {

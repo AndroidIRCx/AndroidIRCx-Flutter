@@ -1,5 +1,11 @@
 enum NoticeRoutingMode { server, active, notice, private }
 
+enum AppThemePreset { light, dark, ircap, custom }
+
+enum MessageDensity { compact, comfortable, relaxed }
+
+enum NickColorMode { none, soft, vivid }
+
 class AppSettings {
   const AppSettings({
     this.showRawEvents = true,
@@ -8,6 +14,29 @@ class AppSettings {
     this.showAttachmentPreviews = true,
     this.dccDownloadDirectoryPath = '',
     this.mediaDownloadDirectoryPath = '',
+    this.themePreset = AppThemePreset.light,
+    this.customThemeJson = '',
+    this.messageFontScale = 1.0,
+    this.messageDensity = MessageDensity.comfortable,
+    this.monospaceMessages = false,
+    this.nickColorMode = NickColorMode.soft,
+    this.onboardingCompleted = false,
+    this.appLockEnabled = false,
+    this.notifyHighlights = true,
+    this.notifyPrivateMessages = true,
+    this.notifyDccOffers = true,
+    this.notifyErrors = true,
+    this.notificationSound = true,
+    this.hideJoinPartQuit = false,
+    this.showTimestamps = true,
+    this.enterToSend = true,
+    this.showSendButton = true,
+    this.highlightWords = const <String>[],
+    this.autoAwayEnabled = false,
+    this.autoAwayMinutes = 10,
+    this.awayMessage = 'Away',
+    this.historyRetentionPerTab = 5000,
+    this.autoRejoinOnKick = true,
   });
 
   final bool showRawEvents;
@@ -16,6 +45,43 @@ class AppSettings {
   final bool showAttachmentPreviews;
   final String dccDownloadDirectoryPath;
   final String mediaDownloadDirectoryPath;
+  final AppThemePreset themePreset;
+  final String customThemeJson;
+  final double messageFontScale;
+  final MessageDensity messageDensity;
+  final bool monospaceMessages;
+  final NickColorMode nickColorMode;
+
+  /// Whether the first-run onboarding + consent flow has been completed.
+  final bool onboardingCompleted;
+
+  /// Whether the whole app is locked behind biometric/PIN on launch/resume.
+  final bool appLockEnabled;
+
+  // Notifications.
+  final bool notifyHighlights;
+  final bool notifyPrivateMessages;
+  final bool notifyDccOffers;
+  final bool notifyErrors;
+  final bool notificationSound;
+
+  // Display / writing.
+  final bool hideJoinPartQuit;
+  final bool showTimestamps;
+  final bool enterToSend;
+  final bool showSendButton;
+
+  /// Extra words (besides your nick) that trigger a highlight notification.
+  final List<String> highlightWords;
+  final bool autoAwayEnabled;
+  final int autoAwayMinutes;
+  final String awayMessage;
+
+  /// Max messages kept per tab in the encrypted history (0 = unlimited).
+  final int historyRetentionPerTab;
+
+  /// Whether to rejoin a channel automatically after being kicked.
+  final bool autoRejoinOnKick;
 
   AppSettings copyWith({
     bool? showRawEvents,
@@ -24,6 +90,29 @@ class AppSettings {
     bool? showAttachmentPreviews,
     String? dccDownloadDirectoryPath,
     String? mediaDownloadDirectoryPath,
+    AppThemePreset? themePreset,
+    String? customThemeJson,
+    double? messageFontScale,
+    MessageDensity? messageDensity,
+    bool? monospaceMessages,
+    NickColorMode? nickColorMode,
+    bool? onboardingCompleted,
+    bool? appLockEnabled,
+    bool? notifyHighlights,
+    bool? notifyPrivateMessages,
+    bool? notifyDccOffers,
+    bool? notifyErrors,
+    bool? notificationSound,
+    bool? hideJoinPartQuit,
+    bool? showTimestamps,
+    bool? enterToSend,
+    bool? showSendButton,
+    List<String>? highlightWords,
+    bool? autoAwayEnabled,
+    int? autoAwayMinutes,
+    String? awayMessage,
+    int? historyRetentionPerTab,
+    bool? autoRejoinOnKick,
   }) {
     return AppSettings(
       showRawEvents: showRawEvents ?? this.showRawEvents,
@@ -36,6 +125,33 @@ class AppSettings {
           dccDownloadDirectoryPath ?? this.dccDownloadDirectoryPath,
       mediaDownloadDirectoryPath:
           mediaDownloadDirectoryPath ?? this.mediaDownloadDirectoryPath,
+      themePreset: themePreset ?? this.themePreset,
+      customThemeJson: customThemeJson ?? this.customThemeJson,
+      messageFontScale: _clampFontScale(
+        messageFontScale ?? this.messageFontScale,
+      ),
+      messageDensity: messageDensity ?? this.messageDensity,
+      monospaceMessages: monospaceMessages ?? this.monospaceMessages,
+      nickColorMode: nickColorMode ?? this.nickColorMode,
+      onboardingCompleted: onboardingCompleted ?? this.onboardingCompleted,
+      appLockEnabled: appLockEnabled ?? this.appLockEnabled,
+      notifyHighlights: notifyHighlights ?? this.notifyHighlights,
+      notifyPrivateMessages:
+          notifyPrivateMessages ?? this.notifyPrivateMessages,
+      notifyDccOffers: notifyDccOffers ?? this.notifyDccOffers,
+      notifyErrors: notifyErrors ?? this.notifyErrors,
+      notificationSound: notificationSound ?? this.notificationSound,
+      hideJoinPartQuit: hideJoinPartQuit ?? this.hideJoinPartQuit,
+      showTimestamps: showTimestamps ?? this.showTimestamps,
+      enterToSend: enterToSend ?? this.enterToSend,
+      showSendButton: showSendButton ?? this.showSendButton,
+      highlightWords: highlightWords ?? this.highlightWords,
+      autoAwayEnabled: autoAwayEnabled ?? this.autoAwayEnabled,
+      autoAwayMinutes: autoAwayMinutes ?? this.autoAwayMinutes,
+      awayMessage: awayMessage ?? this.awayMessage,
+      historyRetentionPerTab:
+          historyRetentionPerTab ?? this.historyRetentionPerTab,
+      autoRejoinOnKick: autoRejoinOnKick ?? this.autoRejoinOnKick,
     );
   }
 
@@ -47,21 +163,113 @@ class AppSettings {
       'showAttachmentPreviews': showAttachmentPreviews,
       'dccDownloadDirectoryPath': dccDownloadDirectoryPath,
       'mediaDownloadDirectoryPath': mediaDownloadDirectoryPath,
+      'themePreset': themePreset.name,
+      'customThemeJson': customThemeJson,
+      'messageFontScale': messageFontScale,
+      'messageDensity': messageDensity.name,
+      'monospaceMessages': monospaceMessages,
+      'nickColorMode': nickColorMode.name,
+      'onboardingCompleted': onboardingCompleted,
+      'appLockEnabled': appLockEnabled,
+      'notifyHighlights': notifyHighlights,
+      'notifyPrivateMessages': notifyPrivateMessages,
+      'notifyDccOffers': notifyDccOffers,
+      'notifyErrors': notifyErrors,
+      'notificationSound': notificationSound,
+      'hideJoinPartQuit': hideJoinPartQuit,
+      'showTimestamps': showTimestamps,
+      'enterToSend': enterToSend,
+      'showSendButton': showSendButton,
+      'highlightWords': highlightWords,
+      'autoAwayEnabled': autoAwayEnabled,
+      'autoAwayMinutes': autoAwayMinutes,
+      'awayMessage': awayMessage,
+      'historyRetentionPerTab': historyRetentionPerTab,
+      'autoRejoinOnKick': autoRejoinOnKick,
     };
   }
 
   factory AppSettings.fromJson(Map<String, Object?> json) {
     return AppSettings(
       showRawEvents: (json['showRawEvents'] as bool?) ?? true,
-      noticeRouting: json['noticeRouting'] is String
-          ? NoticeRoutingMode.values.byName(json['noticeRouting']! as String)
-          : NoticeRoutingMode.server,
+      noticeRouting: _enumByName(
+        NoticeRoutingMode.values,
+        json['noticeRouting'],
+        NoticeRoutingMode.server,
+      ),
       showHeaderSearchButton: (json['showHeaderSearchButton'] as bool?) ?? true,
       showAttachmentPreviews: (json['showAttachmentPreviews'] as bool?) ?? true,
       dccDownloadDirectoryPath:
           (json['dccDownloadDirectoryPath'] as String?)?.trim() ?? '',
       mediaDownloadDirectoryPath:
           (json['mediaDownloadDirectoryPath'] as String?)?.trim() ?? '',
+      themePreset: _enumByName(
+        AppThemePreset.values,
+        json['themePreset'],
+        AppThemePreset.light,
+      ),
+      customThemeJson: (json['customThemeJson'] as String?)?.trim() ?? '',
+      messageFontScale: _clampFontScale(
+        (json['messageFontScale'] as num?)?.toDouble() ?? 1.0,
+      ),
+      messageDensity: _enumByName(
+        MessageDensity.values,
+        json['messageDensity'],
+        MessageDensity.comfortable,
+      ),
+      monospaceMessages: (json['monospaceMessages'] as bool?) ?? false,
+      nickColorMode: _enumByName(
+        NickColorMode.values,
+        json['nickColorMode'],
+        NickColorMode.soft,
+      ),
+      onboardingCompleted: (json['onboardingCompleted'] as bool?) ?? false,
+      appLockEnabled: (json['appLockEnabled'] as bool?) ?? false,
+      notifyHighlights: (json['notifyHighlights'] as bool?) ?? true,
+      notifyPrivateMessages: (json['notifyPrivateMessages'] as bool?) ?? true,
+      notifyDccOffers: (json['notifyDccOffers'] as bool?) ?? true,
+      notifyErrors: (json['notifyErrors'] as bool?) ?? true,
+      notificationSound: (json['notificationSound'] as bool?) ?? true,
+      hideJoinPartQuit: (json['hideJoinPartQuit'] as bool?) ?? false,
+      showTimestamps: (json['showTimestamps'] as bool?) ?? true,
+      enterToSend: (json['enterToSend'] as bool?) ?? true,
+      showSendButton: (json['showSendButton'] as bool?) ?? true,
+      highlightWords: _stringList(json['highlightWords']),
+      autoAwayEnabled: (json['autoAwayEnabled'] as bool?) ?? false,
+      autoAwayMinutes: (json['autoAwayMinutes'] as num?)?.toInt() ?? 10,
+      awayMessage: (json['awayMessage'] as String?)?.trim().isEmpty ?? true
+          ? 'Away'
+          : (json['awayMessage'] as String).trim(),
+      historyRetentionPerTab:
+          (json['historyRetentionPerTab'] as num?)?.toInt() ?? 5000,
+      autoRejoinOnKick: (json['autoRejoinOnKick'] as bool?) ?? true,
     );
   }
+}
+
+List<String> _stringList(Object? value) {
+  if (value is! List) {
+    return const <String>[];
+  }
+  return value
+      .whereType<String>()
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList(growable: false);
+}
+
+double _clampFontScale(double value) {
+  return value.clamp(0.8, 1.4).toDouble();
+}
+
+T _enumByName<T extends Enum>(List<T> values, Object? raw, T fallback) {
+  if (raw is! String) {
+    return fallback;
+  }
+  for (final value in values) {
+    if (value.name == raw) {
+      return value;
+    }
+  }
+  return fallback;
 }

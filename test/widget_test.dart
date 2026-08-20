@@ -5,6 +5,7 @@ import 'package:androidircx/app/app.dart';
 import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
+import 'package:androidircx/core/presets/server_preset_service.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/core/storage/in_memory_network_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_network_repository.dart';
@@ -18,8 +19,13 @@ import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/presentation/chat_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
+import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
 import 'package:androidircx/features/connections/presentation/network_form_screen.dart';
 import 'package:androidircx/features/connections/presentation/network_list_screen.dart';
+import 'package:androidircx/features/onboarding/presentation/onboarding_screen.dart';
+import 'package:androidircx/features/security/presentation/app_lock_gate.dart';
+import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
+import 'package:androidircx/media/services/link_preview_service.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
@@ -157,6 +163,11 @@ class _FakeSettingsRepository implements SettingsRepository {
 }
 
 void main() {
+  setUp(() {
+    // Avoid real network for link previews in widget tests.
+    linkPreviewService = LinkPreviewService(fetcher: (_) async => '');
+  });
+
   testWidgets('shows seeded network on bootstrap', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
@@ -165,7 +176,11 @@ void main() {
         networkRepository: SharedPrefsNetworkRepository(
           secretStorage: InMemorySecretStorage(),
         ),
+        settingsRepository: _FakeSettingsRepository(
+          const AppSettings(onboardingCompleted: true),
+        ),
         foregroundConnectionService: const NoopForegroundConnectionService(),
+        historyRepositoryLoader: () async => null,
       ),
     );
     await tester.pump();
@@ -174,6 +189,162 @@ void main() {
     expect(find.text('AndroidIRCX'), findsOneWidget);
     expect(find.text('DBase'), findsOneWidget);
     expect(find.text('Connect'), findsOneWidget);
+  });
+
+  testWidgets('connection details screen shows network and status', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => _FakeTransport()),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: ConnectionDetailsScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    expect(find.text('DBase'), findsOneWidget);
+    expect(find.text('irc.dbase.in.rs:6697'), findsOneWidget);
+    expect(find.text('TLS'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('theme editor generates JSON from picked brightness', (
+    tester,
+  ) async {
+    String? saved;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ThemeEditorScreen(
+          initialJson: '',
+          onSaved: (json) async {
+            saved = json;
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('Dark base'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save'));
+    await tester.pumpAndSettle();
+
+    expect(saved, isNotNull);
+    expect(saved!.contains('"brightness":"dark"'), isTrue);
+    expect(saved!.contains('"primary":'), isTrue);
+  });
+
+  testWidgets('app lock gate is transparent when disabled', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: AppLockGate(enabled: false, child: Text('SECRET')),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('SECRET'), findsOneWidget);
+  });
+
+  testWidgets('app lock gate hides content until unlocked', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppLockGate(
+          enabled: true,
+          unlock: () async {
+            calls++;
+            return calls > 1;
+          },
+          child: const Text('SECRET'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('AndroidIRCX is locked'), findsOneWidget);
+    expect(find.text('SECRET'), findsNothing);
+
+    await tester.tap(find.text('Unlock'));
+    await tester.pumpAndSettle();
+    expect(find.text('SECRET'), findsOneWidget);
+  });
+
+  testWidgets('onboarding wizard creates a network and completes', (
+    tester,
+  ) async {
+    final repo = InMemoryNetworkRepository(const []);
+    var completed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: OnboardingScreen(
+          networkRepository: repo,
+          onCompleted: () async {
+            completed = true;
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Welcome to AndroidIRCX'), findsOneWidget);
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Privacy step: consent required before Next is enabled.
+    await tester.tap(find.byType(Checkbox));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Identity step (defaults filled).
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Network step (DBase selected by default).
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Channels step -> Finish.
+    await tester.tap(find.text('Finish'));
+    await tester.pumpAndSettle();
+
+    final networks = await repo.loadNetworks();
+    expect(networks.any((network) => network.name == 'DBase'), isTrue);
+    expect(completed, isTrue);
+  });
+
+  testWidgets('applies saved app theme from settings repository', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(
+      AndroidIrcxApp(
+        networkRepository: SharedPrefsNetworkRepository(
+          secretStorage: InMemorySecretStorage(),
+        ),
+        settingsRepository: _FakeSettingsRepository(
+          const AppSettings(themePreset: AppThemePreset.dark),
+        ),
+        foregroundConnectionService: const NoopForegroundConnectionService(),
+        historyRepositoryLoader: () async => null,
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final materialApp = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(materialApp.theme?.brightness, Brightness.dark);
   });
 
   testWidgets('shows active sessions and auto-connect labels in network list', (
@@ -224,6 +395,46 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('adds a network from the server directory', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final controller = NetworkListController(
+      repository: InMemoryNetworkRepository(const []),
+    );
+    final registry = SessionRegistry();
+    await controller.load();
+
+    const payload =
+        '{"data":[{"network_name":"Libera","average_users":30000,'
+        '"server_list":[{"hostname":"irc.libera.chat","port":6697,'
+        '"use_ssl":true}]}]}';
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NetworkListScreen(
+          controller: controller,
+          sessionRegistry: registry,
+          presetService: ServerPresetService(httpGet: (_) async => payload),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Browse server directory'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Server directory'), findsOneWidget);
+    expect(find.text('Libera'), findsOneWidget);
+
+    await tester.tap(find.text('Libera'));
+    await tester.pumpAndSettle();
+
+    expect(controller.networks.any((network) => network.name == 'Libera'),
+        isTrue);
+
+    registry.dispose();
+    controller.dispose();
+  });
+
   testWidgets('network form edits profile label and group fields', (
     tester,
   ) async {
@@ -259,17 +470,35 @@ void main() {
 
     await tester.tap(find.text('Open form'));
     await tester.pumpAndSettle();
-    final profileLabelField = find
-        .byKey(const Key('network-form-profile-label'))
+    final formScrollable = find
+        .descendant(
+          of: find.byType(NetworkFormScreen),
+          matching: find.byType(Scrollable),
+        )
         .first;
-    final profileGroupField = find
-        .byKey(const Key('network-form-profile-group'))
-        .first;
-    await tester.drag(find.byType(ListView), const Offset(0, -700));
-    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-profile-label')),
+      500,
+      scrollable: formScrollable,
+    );
+    final profileLabelField = find.byKey(
+      const Key('network-form-profile-label'),
+    );
+    final profileGroupField = find.byKey(
+      const Key('network-form-profile-group'),
+    );
     await tester.enterText(profileLabelField, ' Main profile ');
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-profile-group')),
+      500,
+      scrollable: formScrollable,
+    );
     await tester.enterText(profileGroupField, ' General ');
-    await tester.drag(find.byType(ListView), const Offset(0, -400));
+    await tester.scrollUntilVisible(
+      find.text('Save network'),
+      500,
+      scrollable: formScrollable,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Save network'));
     await tester.pumpAndSettle();
@@ -279,6 +508,118 @@ void main() {
     expect(result!.profileGroup, 'General');
   });
 
+  testWidgets('network form edits service fallback channel keys and proxy', (
+    tester,
+  ) async {
+    NetworkFormResult? result;
+    const network = NetworkConfig(
+      id: 'advanced-net',
+      name: 'AdvancedNet',
+      host: 'irc.advanced.test',
+      port: 6697,
+      nickname: 'tester',
+      altNickname: 'tester_',
+      saslAccount: 'alice',
+      saslPassword: 'secret',
+      serviceAuthFallback: ServiceAuthFallback.nickServ,
+      serviceAuthTarget: 'NickServ',
+      autoJoinChannels: ['#secret'],
+      autoJoinChannelKeys: {'#secret': 'old-key'},
+      proxyType: IrcProxyType.socks5,
+      proxyHost: '127.0.0.1',
+      proxyPort: 9050,
+      proxyUsername: 'old-user',
+      proxyPassword: 'old-pass',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              result = await Navigator.of(context).push<NetworkFormResult>(
+                MaterialPageRoute<NetworkFormResult>(
+                  builder: (_) =>
+                      const NetworkFormScreen(initialValue: network),
+                ),
+              );
+            },
+            child: const Text('Open form'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open form'));
+    await tester.pumpAndSettle();
+    final formScrollable = find
+        .descendant(
+          of: find.byType(NetworkFormScreen),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-service-auth-target')),
+      500,
+      scrollable: formScrollable,
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-service-auth-target')),
+      'AuthServ',
+    );
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-auto-join-channel-keys')),
+      500,
+      scrollable: formScrollable,
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-auto-join-channel-keys')),
+      '#secret=new-key\nstaff staff-key',
+    );
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('network-form-proxy-host')),
+      500,
+      scrollable: formScrollable,
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-proxy-host')),
+      '10.0.2.2',
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-proxy-port')),
+      '9150',
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-proxy-username')),
+      'proxy-user',
+    );
+    await tester.enterText(
+      find.byKey(const Key('network-form-proxy-password')),
+      'proxy-pass',
+    );
+    await tester.scrollUntilVisible(
+      find.text('Save network'),
+      500,
+      scrollable: formScrollable,
+    );
+    await tester.tap(find.text('Save network'));
+    await tester.pumpAndSettle();
+
+    expect(result, isNotNull);
+    expect(result!.serviceAuthFallback, ServiceAuthFallback.nickServ);
+    expect(result!.serviceAuthTarget, 'AuthServ');
+    expect(result!.autoJoinChannelKeys, {
+      '#secret': 'new-key',
+      '#staff': 'staff-key',
+    });
+    expect(result!.proxyType, IrcProxyType.socks5);
+    expect(result!.proxyHost, '10.0.2.2');
+    expect(result!.proxyPort, 9150);
+    expect(result!.proxyUsername, 'proxy-user');
+    expect(result!.proxyPassword, 'proxy-pass');
+  });
+
   testWidgets('settings saves DCC download folder path', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
@@ -286,6 +627,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-dcc-download-directory')),
+      500,
+    );
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('settings-dcc-download-directory')),
       r'C:\Downloads\IRC',
@@ -305,6 +651,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-media-download-directory')),
+      500,
+    );
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('settings-media-download-directory')),
       r'C:\Downloads\Media',
@@ -315,6 +666,96 @@ void main() {
     final settings = await SharedPrefsSettingsRepository().loadSettings();
 
     expect(settings.mediaDownloadDirectoryPath, r'C:\Downloads\Media');
+  });
+
+  testWidgets('settings saves appearance and theme options', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('settings-theme-preset')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Custom').last);
+    await tester.pumpAndSettle();
+
+    const customJson =
+        '{"brightness":"dark","primary":"#336699","messageDcc":"#224433"}';
+    await tester.enterText(
+      find.byKey(const Key('settings-custom-theme-json')),
+      customJson,
+    );
+    await tester.tap(find.byTooltip('Save custom theme'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-message-density')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Compact').last);
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(ListView), const Offset(0, -350));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('settings-monospace-messages')).first,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(ListView), const Offset(0, -220));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('settings-nick-color-mode')).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Vivid').last);
+    await tester.pumpAndSettle();
+
+    final settings = await SharedPrefsSettingsRepository().loadSettings();
+    expect(settings.themePreset, AppThemePreset.custom);
+    expect(settings.customThemeJson, customJson);
+    expect(settings.messageDensity, MessageDensity.compact);
+    expect(settings.monospaceMessages, isTrue);
+    expect(settings.nickColorMode, NickColorMode.vivid);
+  });
+
+  testWidgets('settings shows help privacy support and release audit docs', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final settingsScrollable = find.byType(Scrollable).first;
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-help-topic')),
+      500,
+      scrollable: settingsScrollable,
+    );
+    await tester.tap(find.byKey(const Key('settings-help-topic')));
+    await tester.pumpAndSettle();
+    expect(find.text('IRC help'), findsWidgets);
+    expect(find.textContaining('NickServ fallback'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-privacy-topic')));
+    await tester.pumpAndSettle();
+    expect(find.text('Privacy'), findsWidgets);
+    expect(find.textContaining('SecretStorage'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-support-topic')));
+    await tester.pumpAndSettle();
+    expect(find.text('Support'), findsWidgets);
+    expect(find.textContaining('redacted raw server-tab log'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-release-audit-topic')));
+    await tester.pumpAndSettle();
+    expect(find.text('Release audit'), findsWidgets);
+    expect(find.textContaining('com.androidircx.flutter'), findsOneWidget);
   });
 
   testWidgets('shows IRC services quick actions on the server tab', (
@@ -348,6 +789,67 @@ void main() {
     expect(find.text('NickServ'), findsWidgets);
 
     controller.dispose();
+  });
+
+  testWidgets('lists other networks and switches from the chat drawer', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const netA = NetworkConfig(
+      id: 'a',
+      name: 'NetA',
+      host: 'a.example',
+      port: 6697,
+      nickname: 'X',
+      altNickname: 'X_',
+    );
+    const netB = NetworkConfig(
+      id: 'b',
+      name: 'NetB',
+      host: 'b.example',
+      port: 6697,
+      nickname: 'X',
+      altNickname: 'X_',
+    );
+    final networkController = NetworkListController(
+      repository: InMemoryNetworkRepository(const [netA, netB]),
+    );
+    await networkController.load();
+    final registry = SessionRegistry();
+    final controller = ChatSessionController(
+      network: netA,
+      ircService: IrcService(transportConnector: (_) async => _FakeTransport()),
+    );
+
+    NetworkConfig? switched;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          controller: controller,
+          sessionRegistry: registry,
+          networkController: networkController,
+          onSwitchNetwork: (network) async {
+            switched = network;
+          },
+          onManageNetworks: () {},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    tester.firstState<ScaffoldState>(find.byType(Scaffold)).openDrawer();
+    await tester.pumpAndSettle();
+
+    expect(find.text('NETWORKS'), findsOneWidget);
+    expect(find.text('NetB'), findsOneWidget);
+    expect(find.text('Manage networks'), findsOneWidget);
+
+    await tester.tap(find.text('NetB'));
+    await tester.pumpAndSettle();
+    expect(switched?.id, 'b');
+
+    controller.dispose();
+    registry.dispose();
   });
 
   testWidgets('shows and applies slash command suggestions in chat composer', (
@@ -484,6 +986,43 @@ void main() {
     expect(find.text('Older 50'), findsOneWidget);
     expect(find.text('Newer 50'), findsOneWidget);
     expect(find.text('Around latest'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('shows unread badge for inactive tabs in chat drawer', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    transport.emit(':alice!user@example PRIVMSG #room :one');
+    await tester.pump();
+    transport.emit(':bob!user@example PRIVMSG #room :two');
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('#room'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
 
     controller.dispose();
   });
@@ -888,6 +1427,48 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('shows reverse dcc limitations for passive send offers', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :\u0001DCC SEND "reverse.bin" 127001 0 42 abc123\u0001',
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('DCC transfer session'), findsOneWidget);
+    expect(
+      find.textContaining('Reverse DCC opens a local listener'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('NAT, firewall, and peer support'),
+      findsOneWidget,
+    );
+
+    controller.dispose();
+  });
+
   testWidgets('opens the DCC file picker from query tabs', (tester) async {
     SharedPreferences.setMockInitialValues({});
     const network = NetworkConfig(
@@ -914,7 +1495,9 @@ void main() {
 
     await controller.handleComposerSubmit('/query alice');
     await tester.pump();
-    await tester.tap(find.byTooltip('Send DCC file'));
+    await tester.tap(find.byTooltip('Attach'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Send file (DCC)'));
     await tester.pump();
 
     expect(picker.calls, 1);

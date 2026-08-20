@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:androidircx/app/theme/app_theme.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/dcc_session.dart';
@@ -6,13 +9,20 @@ import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/dcc/services/dcc_file_picker.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
+import 'package:androidircx/features/chat/application/session_registry.dart';
+import 'package:androidircx/features/connections/application/network_list_controller.dart';
+import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
+import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
+import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
 import 'package:androidircx/irc/parser/message_content_parser.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
+import 'package:androidircx/media/services/link_preview_service.dart';
 import 'package:androidircx/media/services/media_download_service.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -22,11 +32,29 @@ class ChatScreen extends StatefulWidget {
     required this.controller,
     this.filePicker,
     this.mediaDownloadService,
+    this.sessionRegistry,
+    this.networkController,
+    this.onSwitchNetwork,
+    this.onManageNetworks,
   });
 
   final ChatSessionController controller;
   final DccFilePicker? filePicker;
   final MediaDownloadService? mediaDownloadService;
+
+  /// Live sessions across all networks, used by the in-chat network switcher.
+  final SessionRegistry? sessionRegistry;
+
+  /// All saved networks, so the switcher can list servers you have not
+  /// connected to yet.
+  final NetworkListController? networkController;
+
+  /// Switches the chat to [network] (connecting it if needed). When null the
+  /// network switcher is hidden.
+  final Future<void> Function(NetworkConfig network)? onSwitchNetwork;
+
+  /// Opens the full connection manager (network list).
+  final VoidCallback? onManageNetworks;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -64,15 +92,24 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: _controller,
+      animation: Listenable.merge([
+        _controller,
+        if (widget.sessionRegistry != null) widget.sessionRegistry!,
+        if (widget.networkController != null) widget.networkController!,
+      ]),
       builder: (context, _) {
-        final visibleMessages = _messageSearchVisible
+        final baseMessages = _messageSearchVisible
             ? _controller.messagesForTab(
                 _controller.activeTabId,
                 query: _messageSearchController.text,
                 kinds: _messageSearchFilter.kinds,
               )
             : _controller.activeMessages;
+        final visibleMessages = _controller.settings.hideJoinPartQuit
+            ? baseMessages
+                .where((message) => message.kind != IrcMessageKind.event)
+                .toList(growable: false)
+            : baseMessages;
         return Scaffold(
           appBar: AppBar(
             title: Column(
@@ -123,6 +160,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 tooltip: 'Join channel',
               ),
               IconButton(
+                onPressed: _openChannelList,
+                icon: const Icon(Icons.format_list_bulleted),
+                tooltip: 'Channel list',
+              ),
+              IconButton(
                 onPressed: _openSettings,
                 icon: const Icon(Icons.tune),
                 tooltip: 'Settings',
@@ -146,8 +188,34 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           drawer: Drawer(
             child: SafeArea(
-              child: Column(
+              child: ListView(
+                padding: EdgeInsets.zero,
                 children: [
+                  if (widget.onSwitchNetwork != null &&
+                      widget.networkController != null) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                      child: Text(
+                        'NETWORKS',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                    for (final network in widget.networkController!.networks)
+                      _buildNetworkSwitchTile(network),
+                    ListTile(
+                      leading: const Icon(Icons.dns_outlined),
+                      title: const Text('Manage networks'),
+                      subtitle: const Text('Add, edit, or browse servers'),
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        widget.onManageNetworks?.call();
+                      },
+                    ),
+                    const Divider(height: 1),
+                  ],
                   ListTile(
                     title: Text(_controller.network.name),
                     subtitle: Text(
@@ -155,50 +223,34 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const Divider(height: 1),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: _controller.tabs.length,
-                      itemBuilder: (context, index) {
-                        final tab = _controller.tabs[index];
-                        final selected = tab.id == _controller.activeTabId;
-                        return ListTile(
-                          selected: selected,
-                          leading: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              Icon(_iconForTab(tab.type)),
-                              if (tab.hasActivity)
-                                Positioned(
-                                  right: -2,
-                                  top: -2,
-                                  child: Container(
-                                    width: 10,
-                                    height: 10,
-                                    decoration: BoxDecoration(
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.primary,
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                          title: Text(tab.name),
-                          trailing: tab.type == ChatTabType.server
-                              ? null
-                              : IconButton(
-                                  onPressed: () => _controller.closeTab(tab.id),
-                                  icon: const Icon(Icons.close, size: 18),
-                                  tooltip: 'Close tab',
-                                ),
-                          onTap: () {
-                            _controller.selectTab(tab.id);
-                            Navigator.of(context).pop();
-                          },
-                        );
-                      },
-                    ),
+                  for (final tab in _controller.tabs)
+                    _buildTabTile(context, tab),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.block),
+                    title: const Text('Ignore list'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              IgnoreListScreen(controller: _controller),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.info_outline),
+                    title: const Text('Connection details'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              ConnectionDetailsScreen(controller: _controller),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -234,9 +286,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                           ? null
                                           : Text(entry.details),
                                       onTap: () {
-                                        _composerController.text =
-                                            '/whois $nick';
                                         Navigator.of(context).pop();
+                                        unawaited(_showChannelUserActions(nick));
                                       },
                                     );
                                   },
@@ -304,6 +355,15 @@ class _ChatScreenState extends State<ChatScreen> {
                     },
                     onReplyToMessage: _setPendingReply,
                     onDownloadAttachment: _downloadAttachment,
+                    showTimestamps: _controller.settings.showTimestamps,
+                    onLoadOlder:
+                        _controller.hasPersistentHistory && !_messageSearchVisible
+                        ? () async {
+                            await _controller.loadOlderHistory(
+                              _controller.activeTabId,
+                            );
+                          }
+                        : null,
                   ),
                 ),
                 if (_controller.commandHistory.isNotEmpty)
@@ -339,6 +399,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   onPickDccFile: _pickAndSendDccFile,
                   onSuggestionSelected: _applyComposerSuggestion,
                   onAutocompleteSelected: _applyAutocompleteSuggestion,
+                  enterToSend: _controller.settings.enterToSend,
+                  showSendButton: _controller.settings.showSendButton,
+                  onCameraPhoto: () =>
+                      _captureAndSendMedia(ImageSource.camera),
+                  onGalleryImage: () =>
+                      _captureAndSendMedia(ImageSource.gallery),
+                  onCameraVideo: () => _captureAndSendMedia(
+                    ImageSource.camera,
+                    video: true,
+                  ),
                 ),
               ],
             ),
@@ -493,11 +563,96 @@ class _ChatScreenState extends State<ChatScreen> {
     return '${current.substring(0, leading)}$replacement${current.substring(restStart)}';
   }
 
+  final ImagePicker _imagePicker = ImagePicker();
+
+  Future<void> _captureAndSendMedia(
+    ImageSource source, {
+    bool video = false,
+  }) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final nick = _controller.activeTab.name;
+    try {
+      final XFile? file = video
+          ? await _imagePicker.pickVideo(source: source)
+          : await _imagePicker.pickImage(source: source);
+      if (file == null) {
+        return;
+      }
+      await _controller.sendDccFileToNick(nick: nick, filePath: file.path);
+    } catch (error) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Capture failed: $error')),
+      );
+    }
+  }
+
+  Future<void> _openChannelList() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChannelListScreen(controller: _controller),
+      ),
+    );
+  }
+
   Future<void> _openSettings() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
     );
     await _controller.reloadSettings();
+  }
+
+  Future<void> _showChannelUserActions(String nick) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        Widget action(String label, IconData icon, ChannelUserAction act) {
+          return ListTile(
+            leading: Icon(icon),
+            title: Text(label),
+            onTap: () {
+              Navigator.of(sheetContext).pop();
+              unawaited(_controller.performChannelUserAction(nick, act));
+            },
+          );
+        }
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: Text(
+                  nick,
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+                subtitle: const Text('Channel user actions'),
+              ),
+              const Divider(height: 1),
+              action('WHOIS', Icons.badge_outlined, ChannelUserAction.whois),
+              action(
+                'Open query',
+                Icons.chat_bubble_outline,
+                ChannelUserAction.query,
+              ),
+              action('Op', Icons.shield_outlined, ChannelUserAction.op),
+              action(
+                'Deop',
+                Icons.remove_moderator_outlined,
+                ChannelUserAction.deop,
+              ),
+              action('Voice', Icons.volume_up_outlined, ChannelUserAction.voice),
+              action(
+                'Devoice',
+                Icons.volume_off_outlined,
+                ChannelUserAction.devoice,
+              ),
+              action('Kick', Icons.logout, ChannelUserAction.kick),
+              action('Ban', Icons.block, ChannelUserAction.ban),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _openHistoryTools() async {
@@ -560,6 +715,63 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Widget _buildNetworkSwitchTile(NetworkConfig network) {
+    final isCurrent = network.id == _controller.network.id;
+    final snapshot = widget.sessionRegistry?.connectionFor(network.id);
+    final connected = snapshot?.phase == ConnectionPhase.connected;
+    return ListTile(
+      selected: isCurrent,
+      leading: Icon(
+        connected ? Icons.check_circle : Icons.circle_outlined,
+        size: 20,
+        color: connected ? Theme.of(context).colorScheme.primary : null,
+      ),
+      title: Text(network.name),
+      subtitle: Text(
+        snapshot == null
+            ? '${network.host}:${network.port}'
+            : '${network.host}:${network.port} • ${_statusText(snapshot)}',
+      ),
+      onTap: isCurrent
+          ? () => Navigator.of(context).pop()
+          : () async {
+              Navigator.of(context).pop();
+              await widget.onSwitchNetwork?.call(network);
+            },
+    );
+  }
+
+  Widget _buildTabTile(BuildContext context, ChatTab tab) {
+    final selected = tab.id == _controller.activeTabId;
+    return ListTile(
+      selected: selected,
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(_iconForTab(tab.type)),
+          if (tab.hasActivity)
+            Positioned(
+              right: -10,
+              top: -8,
+              child: _UnreadBadge(count: tab.unreadCount),
+            ),
+        ],
+      ),
+      title: Text(tab.name),
+      trailing: tab.type == ChatTabType.server
+          ? null
+          : IconButton(
+              onPressed: () => _controller.closeTab(tab.id),
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Close tab',
+            ),
+      onTap: () {
+        _controller.selectTab(tab.id);
+        Navigator.of(context).pop();
+      },
+    );
+  }
+
   IconData _iconForTab(ChatTabType type) {
     switch (type) {
       case ChatTabType.server:
@@ -608,6 +820,13 @@ String _dccTransferSubtitle(DccSession session) {
     parts.add('resume ${_formatByteCount(session.resumeOffset)}');
   }
   return parts.join(' • ');
+}
+
+String? _dccLimitationNote(DccSession session) {
+  if (session.isReverse) {
+    return 'Reverse DCC opens a local listener and asks the peer to connect back. NAT, firewall, and peer support can still block the transfer.';
+  }
+  return null;
 }
 
 String _formatDccTransferProgress(DccSession session) {
@@ -659,6 +878,13 @@ bool _isActiveDccTransfer(DccSession session) {
       session.status == DccSessionStatus.connected;
 }
 
+String _formatClock(DateTime timestamp) {
+  final local = timestamp.toLocal();
+  final hh = local.hour.toString().padLeft(2, '0');
+  final mm = local.minute.toString().padLeft(2, '0');
+  return '$hh:$mm';
+}
+
 class _ComposerArea extends StatelessWidget {
   const _ComposerArea({
     required this.suggestions,
@@ -671,6 +897,11 @@ class _ComposerArea extends StatelessWidget {
     required this.onPickDccFile,
     required this.onSuggestionSelected,
     required this.onAutocompleteSelected,
+    required this.enterToSend,
+    required this.showSendButton,
+    required this.onCameraPhoto,
+    required this.onGalleryImage,
+    required this.onCameraVideo,
   });
 
   final List<CommandSuggestion> suggestions;
@@ -683,6 +914,11 @@ class _ComposerArea extends StatelessWidget {
   final VoidCallback onPickDccFile;
   final ValueChanged<CommandSuggestion> onSuggestionSelected;
   final ValueChanged<ComposerAutocompleteSuggestion> onAutocompleteSelected;
+  final bool enterToSend;
+  final bool showSendButton;
+  final VoidCallback onCameraPhoto;
+  final VoidCallback onGalleryImage;
+  final VoidCallback onCameraVideo;
 
   @override
   Widget build(BuildContext context) {
@@ -707,22 +943,59 @@ class _ComposerArea extends StatelessWidget {
                   controller: controller,
                   minLines: 1,
                   maxLines: 4,
-                  textInputAction: TextInputAction.send,
+                  keyboardType:
+                      enterToSend ? TextInputType.text : TextInputType.multiline,
+                  textInputAction: enterToSend
+                      ? TextInputAction.send
+                      : TextInputAction.newline,
                   onChanged: onChanged,
-                  onSubmitted: (_) => onSubmitted(),
+                  onSubmitted: enterToSend ? (_) => onSubmitted() : null,
                   decoration: InputDecoration(hintText: hintText),
                 ),
               ),
               const SizedBox(width: 12),
               if (canSendDccFile) ...[
-                IconButton(
-                  onPressed: onPickDccFile,
+                PopupMenuButton<String>(
                   icon: const Icon(Icons.attach_file),
-                  tooltip: 'Send DCC file',
+                  tooltip: 'Attach',
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'file':
+                        onPickDccFile();
+                      case 'camera':
+                        onCameraPhoto();
+                      case 'gallery':
+                        onGalleryImage();
+                      case 'video':
+                        onCameraVideo();
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem<String>(
+                      value: 'file',
+                      child: Text('Send file (DCC)'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'camera',
+                      child: Text('Camera photo'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'gallery',
+                      child: Text('Gallery image'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'video',
+                      child: Text('Record video'),
+                    ),
+                  ],
                 ),
                 const SizedBox(width: 8),
               ],
-              FilledButton(onPressed: onSubmitted, child: const Text('Send')),
+              if (showSendButton || !enterToSend)
+                FilledButton(
+                  onPressed: onSubmitted,
+                  child: const Text('Send'),
+                ),
             ],
           ),
         ),
@@ -1026,6 +1299,8 @@ class _DccSessionBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final ircTheme = context.ircUiTheme;
+    final limitationNote = _dccLimitationNote(session);
     final subtitle = switch (session.type) {
       DccSessionType.chat =>
         'Peer: ${session.peerNick} • ${session.host ?? '?'}:${session.port ?? 0} • ${session.status.name}',
@@ -1039,8 +1314,9 @@ class _DccSessionBanner extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
+        color: ircTheme.messageDcc,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: ircTheme.messageBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1053,6 +1329,15 @@ class _DccSessionBanner extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(subtitle, style: theme.textTheme.bodySmall),
+          if (limitationNote != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              limitationNote,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
@@ -1404,20 +1689,50 @@ class _ChannelTopicBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ircTheme = context.ircUiTheme;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: ircTheme.topic,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+        border: Border.all(color: ircTheme.messageBorder),
       ),
       child: _IrcFormattedText(
         topic,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
         baseStyle: Theme.of(context).textTheme.bodySmall,
+      ),
+    );
+  }
+}
+
+class _UnreadBadge extends StatelessWidget {
+  const _UnreadBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = count > 99 ? '99+' : count.clamp(1, 99).toString();
+    return Container(
+      constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 5),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Theme.of(context).colorScheme.surface),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Theme.of(context).colorScheme.onPrimary,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -1499,10 +1814,14 @@ class _MessageList extends StatelessWidget {
     required this.onReplyWithNick,
     required this.onReplyToMessage,
     required this.onDownloadAttachment,
+    this.onLoadOlder,
+    this.showTimestamps = true,
   });
 
   final List<IrcMessage> messages;
   final bool showAttachmentPreviews;
+  final bool showTimestamps;
+  final Future<void> Function()? onLoadOlder;
   final IrcMessage? Function(String replyId) resolveReplyTarget;
   final Map<String, int> Function(IrcMessage message) resolveReactions;
   final Future<bool> Function(IrcMessage message) onRedactMessage;
@@ -1514,15 +1833,45 @@ class _MessageList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ircTheme = context.ircUiTheme;
     if (messages.isEmpty) {
-      return const Center(child: Text('No messages yet.'));
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.forum_outlined,
+              size: 40,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'No messages yet.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      );
     }
 
+    final hasLoadOlder = onLoadOlder != null;
     return ListView.builder(
       reverse: true,
       padding: const EdgeInsets.all(12),
-      itemCount: messages.length,
+      itemCount: messages.length + (hasLoadOlder ? 1 : 0),
       itemBuilder: (context, index) {
+        if (hasLoadOlder && index == messages.length) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: TextButton.icon(
+                onPressed: onLoadOlder,
+                icon: const Icon(Icons.history),
+                label: const Text('Load earlier messages'),
+              ),
+            ),
+          );
+        }
         final message = messages[messages.length - 1 - index];
         final align = message.isOwn
             ? CrossAxisAlignment.end
@@ -1531,20 +1880,18 @@ class _MessageList extends StatelessWidget {
         final reactions = resolveReactions(message);
         final bubbleColor = switch (message.kind) {
           IrcMessageKind.system ||
-          IrcMessageKind.event => const Color(0xFFF6F8F1),
-          IrcMessageKind.error => const Color(0xFFFFEBEE),
-          IrcMessageKind.dcc => const Color(0xFFEAF7F3),
-          IrcMessageKind.raw => const Color(0xFFF7F7FA),
+          IrcMessageKind.event => ircTheme.messageSystem,
+          IrcMessageKind.error => ircTheme.messageError,
+          IrcMessageKind.dcc => ircTheme.messageDcc,
+          IrcMessageKind.raw => ircTheme.messageRaw,
+          IrcMessageKind.media => ircTheme.messageMedia,
           IrcMessageKind.chat ||
           IrcMessageKind.action ||
-          IrcMessageKind.notice ||
-          IrcMessageKind.media =>
-            message.isOwn
-                ? Theme.of(context).colorScheme.primaryContainer
-                : Colors.white,
+          IrcMessageKind.notice =>
+            message.isOwn ? ircTheme.messageOwn : ircTheme.messageOther,
         };
         return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
+          padding: EdgeInsets.only(bottom: ircTheme.messageSpacing),
           child: Column(
             crossAxisAlignment: align,
             children: [
@@ -1553,8 +1900,19 @@ class _MessageList extends StatelessWidget {
                 children: [
                   Text(
                     message.sender,
-                    style: Theme.of(context).textTheme.labelMedium,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color:
+                          ircTheme.nickColorFor(message.sender) ??
+                          Theme.of(context).textTheme.labelMedium?.color,
+                    ),
                   ),
+                  if (showTimestamps) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      _formatClock(message.timestamp),
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ],
                   if (message.isPlayback) ...[
                     const SizedBox(width: 8),
                     Container(
@@ -1583,15 +1941,10 @@ class _MessageList extends StatelessWidget {
                         ? bubbleColor.withValues(alpha: 0.88)
                         : bubbleColor,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: Colors.black.withValues(alpha: 0.06),
-                    ),
+                    border: Border.all(color: ircTheme.messageBorder),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
+                    padding: ircTheme.messagePadding,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -1610,12 +1963,19 @@ class _MessageList extends StatelessWidget {
                               ? Theme.of(
                                   context,
                                 ).textTheme.bodyMedium?.copyWith(
+                                  fontSize: ircTheme.messageFontSize,
+                                  fontFamily: ircTheme.messageFontFamily,
                                   fontStyle: FontStyle.italic,
                                   color: Theme.of(
                                     context,
                                   ).colorScheme.onSurfaceVariant,
                                 )
-                              : Theme.of(context).textTheme.bodyMedium,
+                              : Theme.of(
+                                  context,
+                                ).textTheme.bodyMedium?.copyWith(
+                                  fontSize: ircTheme.messageFontSize,
+                                  fontFamily: ircTheme.messageFontFamily,
+                                ),
                         ),
                         if (showAttachmentPreviews && !isRedacted)
                           _MessageAttachments(
@@ -1925,14 +2285,89 @@ class _MessageAttachments extends StatelessWidget {
             .map(
               (attachment) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: _AttachmentCard(
-                  attachment: attachment,
-                  onDownloadAttachment: onDownloadAttachment,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _AttachmentCard(
+                      attachment: attachment,
+                      onDownloadAttachment: onDownloadAttachment,
+                    ),
+                    if (attachment.type == IrcMessageAttachmentType.url &&
+                        (attachment.uri ?? '').isNotEmpty)
+                      _LinkPreviewCard(url: attachment.uri!),
+                  ],
                 ),
               ),
             )
             .toList(growable: false),
       ),
+    );
+  }
+}
+
+/// Shared link-preview service; overridable in tests to avoid real network.
+LinkPreviewService linkPreviewService = LinkPreviewService();
+
+class _LinkPreviewCard extends StatefulWidget {
+  const _LinkPreviewCard({required this.url});
+
+  final String url;
+
+  @override
+  State<_LinkPreviewCard> createState() => _LinkPreviewCardState();
+}
+
+class _LinkPreviewCardState extends State<_LinkPreviewCard> {
+  late final Future<LinkPreview?> _future = linkPreviewService.fetch(widget.url);
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<LinkPreview?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final preview = snapshot.data;
+        if (preview == null || !preview.hasContent) {
+          return const SizedBox.shrink();
+        }
+        final theme = Theme.of(context);
+        return Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: InkWell(
+            onTap: () => launchUrl(
+              Uri.parse(widget.url),
+              mode: LaunchMode.externalApplication,
+            ),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if ((preview.title ?? '').isNotEmpty)
+                    Text(
+                      preview.title!,
+                      style: theme.textTheme.titleSmall,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  if ((preview.description ?? '').isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      preview.description!,
+                      style: theme.textTheme.bodySmall,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -1950,6 +2385,7 @@ class _AttachmentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final ircTheme = context.ircUiTheme;
     final url = attachment.uri;
     final isImage =
         attachment.type == IrcMessageAttachmentType.image && url != null;
@@ -1986,7 +2422,7 @@ class _AttachmentCard extends StatelessWidget {
     final canDownload = _canDownloadAttachment(attachment);
 
     return Material(
-      color: theme.colorScheme.surfaceContainerHighest,
+      color: ircTheme.attachment,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -2152,6 +2588,7 @@ class _ConnectionBanner extends StatelessWidget {
     final snapshot = controller.connection;
     final reconnectDelay = controller.pendingReconnectDelay;
     final theme = Theme.of(context);
+    final statusColor = _colorForPhase(context, snapshot.phase);
 
     if (snapshot.phase == ConnectionPhase.connected &&
         reconnectDelay == null &&
@@ -2164,20 +2601,16 @@ class _ConnectionBanner extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+        color: Color.lerp(statusColor, theme.colorScheme.surface, 0.88),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: statusColor.withValues(alpha: 0.24)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(
-                _iconForPhase(snapshot.phase),
-                size: 18,
-                color: theme.colorScheme.primary,
-              ),
+              Icon(_iconForPhase(snapshot.phase), size: 18, color: statusColor),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -2190,28 +2623,39 @@ class _ConnectionBanner extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             '${network.host}:${network.port} • ${network.useTls ? 'TLS' : 'Plain TCP'}',
-            style: theme.textTheme.bodySmall,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
             'Current nick: ${controller.currentNick}',
-            style: theme.textTheme.bodySmall,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           if ((snapshot.message ?? '').isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text(snapshot.message!, style: theme.textTheme.bodySmall),
+            Text(
+              snapshot.message!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
           ],
           if (snapshot.phase == ConnectionPhase.error ||
               snapshot.phase == ConnectionPhase.disconnected) ...[
             const SizedBox(height: 10),
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 FilledButton.tonal(
                   onPressed: controller.reconnectNow,
                   child: const Text('Reconnect now'),
                 ),
                 if (reconnectDelay != null) ...[
-                  const SizedBox(width: 8),
                   Text(
                     'Auto retry in ${reconnectDelay.inSeconds}s',
                     style: theme.textTheme.bodySmall,
@@ -2223,6 +2667,26 @@ class _ConnectionBanner extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Color _colorForPhase(BuildContext context, ConnectionPhase phase) {
+    final scheme = Theme.of(context).colorScheme;
+    final ircTheme = context.ircUiTheme;
+    return switch (phase) {
+      ConnectionPhase.idle => scheme.onSurfaceVariant,
+      ConnectionPhase.connecting ||
+      ConnectionPhase.registering ||
+      ConnectionPhase.authenticating ||
+      ConnectionPhase.reconnecting => scheme.primary,
+      ConnectionPhase.connected => scheme.primary,
+      ConnectionPhase.disconnecting ||
+      ConnectionPhase.disconnected => scheme.tertiary,
+      ConnectionPhase.error => Color.lerp(
+        scheme.error,
+        ircTheme.messageError,
+        0.2,
+      )!,
+    };
   }
 
   String _titleForPhase(ConnectionSnapshot snapshot, Duration? reconnectDelay) {

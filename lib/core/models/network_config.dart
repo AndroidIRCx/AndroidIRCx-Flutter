@@ -2,6 +2,10 @@ import 'package:androidircx/core/security/secret_redaction.dart';
 
 enum SaslMechanism { plain, scramSha256, external }
 
+enum ServiceAuthFallback { disabled, nickServ }
+
+enum IrcProxyType { none, socks5 }
+
 class NetworkConfig {
   const NetworkConfig({
     required this.id,
@@ -19,11 +23,20 @@ class NetworkConfig {
     this.saslAccount,
     this.saslPassword,
     this.saslMechanism = SaslMechanism.plain,
+    this.useClientCertificate = false,
+    this.serviceAuthFallback = ServiceAuthFallback.disabled,
+    this.serviceAuthTarget = 'NickServ',
     this.autoConnect = false,
     this.autoJoinChannels = const <String>[],
     this.autoJoinChannelKeys = const <String, String>{},
+    this.proxyType = IrcProxyType.none,
+    this.proxyHost,
+    this.proxyPort,
+    this.proxyUsername,
+    this.proxyPassword,
     this.profileLabel,
     this.profileGroup,
+    this.identityProfileId,
   });
 
   final String id;
@@ -41,11 +54,27 @@ class NetworkConfig {
   final String? saslAccount;
   final String? saslPassword;
   final SaslMechanism saslMechanism;
+
+  /// Whether this network authenticates with a stored client certificate
+  /// (SASL EXTERNAL / CertFP). The certificate and private key themselves live
+  /// in secure storage, never in this config.
+  final bool useClientCertificate;
+  final ServiceAuthFallback serviceAuthFallback;
+  final String serviceAuthTarget;
   final bool autoConnect;
   final List<String> autoJoinChannels;
   final Map<String, String> autoJoinChannelKeys;
+  final IrcProxyType proxyType;
+  final String? proxyHost;
+  final int? proxyPort;
+  final String? proxyUsername;
+  final String? proxyPassword;
   final String? profileLabel;
   final String? profileGroup;
+
+  /// Optional id of the attached [IdentityProfile] whose nick/realname/ident/
+  /// SASL account override this network's identity on connect.
+  final String? identityProfileId;
 
   NetworkConfig copyWith({
     String? id,
@@ -63,11 +92,20 @@ class NetworkConfig {
     String? saslAccount,
     String? saslPassword,
     SaslMechanism? saslMechanism,
+    bool? useClientCertificate,
+    ServiceAuthFallback? serviceAuthFallback,
+    String? serviceAuthTarget,
     bool? autoConnect,
     List<String>? autoJoinChannels,
     Map<String, String>? autoJoinChannelKeys,
+    IrcProxyType? proxyType,
+    String? proxyHost,
+    int? proxyPort,
+    String? proxyUsername,
+    String? proxyPassword,
     String? profileLabel,
     String? profileGroup,
+    String? identityProfileId,
   }) {
     return NetworkConfig(
       id: id ?? this.id,
@@ -85,11 +123,20 @@ class NetworkConfig {
       saslAccount: saslAccount ?? this.saslAccount,
       saslPassword: saslPassword ?? this.saslPassword,
       saslMechanism: saslMechanism ?? this.saslMechanism,
+      useClientCertificate: useClientCertificate ?? this.useClientCertificate,
+      serviceAuthFallback: serviceAuthFallback ?? this.serviceAuthFallback,
+      serviceAuthTarget: serviceAuthTarget ?? this.serviceAuthTarget,
       autoConnect: autoConnect ?? this.autoConnect,
       autoJoinChannels: autoJoinChannels ?? this.autoJoinChannels,
       autoJoinChannelKeys: autoJoinChannelKeys ?? this.autoJoinChannelKeys,
+      proxyType: proxyType ?? this.proxyType,
+      proxyHost: proxyHost ?? this.proxyHost,
+      proxyPort: proxyPort ?? this.proxyPort,
+      proxyUsername: proxyUsername ?? this.proxyUsername,
+      proxyPassword: proxyPassword ?? this.proxyPassword,
       profileLabel: profileLabel ?? this.profileLabel,
       profileGroup: profileGroup ?? this.profileGroup,
+      identityProfileId: identityProfileId ?? this.identityProfileId,
     );
   }
 
@@ -110,11 +157,20 @@ class NetworkConfig {
       'saslAccount': saslAccount,
       'saslPassword': saslPassword,
       'saslMechanism': saslMechanism.name,
+      'useClientCertificate': useClientCertificate,
+      'serviceAuthFallback': serviceAuthFallback.name,
+      'serviceAuthTarget': serviceAuthTarget,
       'autoConnect': autoConnect,
       'autoJoinChannels': autoJoinChannels,
       'autoJoinChannelKeys': autoJoinChannelKeys,
+      'proxyType': proxyType.name,
+      'proxyHost': proxyHost,
+      'proxyPort': proxyPort,
+      'proxyUsername': proxyUsername,
+      'proxyPassword': proxyPassword,
       'profileLabel': profileLabel,
       'profileGroup': profileGroup,
+      'identityProfileId': identityProfileId,
     };
   }
 
@@ -143,15 +199,52 @@ class NetworkConfig {
       password: json['password'] as String?,
       saslAccount: json['saslAccount'] as String?,
       saslPassword: json['saslPassword'] as String?,
-      saslMechanism: json['saslMechanism'] == null
-          ? SaslMechanism.plain
-          : SaslMechanism.values.byName(json['saslMechanism']! as String),
+      saslMechanism: _enumByName(
+        SaslMechanism.values,
+        json['saslMechanism'],
+        SaslMechanism.plain,
+      ),
+      useClientCertificate: (json['useClientCertificate'] as bool?) ?? false,
+      serviceAuthFallback: _enumByName(
+        ServiceAuthFallback.values,
+        json['serviceAuthFallback'],
+        ServiceAuthFallback.disabled,
+      ),
+      serviceAuthTarget:
+          _nonEmptyString(json['serviceAuthTarget']) ?? 'NickServ',
       autoConnect: (json['autoConnect'] as bool?) ?? false,
       autoJoinChannels: _stringList(json['autoJoinChannels']),
       autoJoinChannelKeys: _channelKeyMap(json['autoJoinChannelKeys']),
+      proxyType: _enumByName(
+        IrcProxyType.values,
+        json['proxyType'],
+        IrcProxyType.none,
+      ),
+      proxyHost: _nonEmptyString(json['proxyHost']),
+      proxyPort: (json['proxyPort'] as num?)?.toInt(),
+      proxyUsername: _nonEmptyString(json['proxyUsername']),
+      proxyPassword: json['proxyPassword'] as String?,
       profileLabel: _nonEmptyString(json['profileLabel']),
       profileGroup: _nonEmptyString(json['profileGroup']),
+      identityProfileId: _nonEmptyString(json['identityProfileId']),
     );
+  }
+
+  static T _enumByName<T extends Enum>(
+    Iterable<T> values,
+    Object? value,
+    T fallback,
+  ) {
+    if (value is! String) {
+      return fallback;
+    }
+
+    for (final entry in values) {
+      if (entry.name == value) {
+        return entry;
+      }
+    }
+    return fallback;
   }
 
   static List<String> _stringList(Object? value) {

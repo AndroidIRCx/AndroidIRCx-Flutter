@@ -1,9 +1,14 @@
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/models/connection_state.dart';
+import 'package:androidircx/core/models/identity_profile.dart';
+import 'package:androidircx/core/presets/server_preset_service.dart';
+import 'package:androidircx/core/storage/identity_profile_repository.dart';
+import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/presentation/chat_screen.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/connections/presentation/network_form_screen.dart';
+import 'package:androidircx/features/connections/presentation/server_directory_picker.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:flutter/material.dart';
 
@@ -12,10 +17,19 @@ class NetworkListScreen extends StatelessWidget {
     super.key,
     required this.controller,
     required this.sessionRegistry,
+    this.presetService,
+    this.profileRepository,
   });
 
   final NetworkListController controller;
   final SessionRegistry sessionRegistry;
+
+  /// Directory of default IRC servers. Overridable for tests; defaults to the
+  /// live `irc.dbase.in.rs` server-presets API with an offline DBase fallback.
+  final ServerPresetService? presetService;
+
+  /// Source of identity profiles applied on connect. Defaults to shared-prefs.
+  final IdentityProfileRepository? profileRepository;
 
   @override
   Widget build(BuildContext context) {
@@ -30,6 +44,11 @@ class NetworkListScreen extends StatelessWidget {
                 onPressed: () => _openSettings(context),
                 icon: const Icon(Icons.tune),
                 tooltip: 'Settings',
+              ),
+              IconButton(
+                onPressed: () => _browseDirectory(context),
+                icon: const Icon(Icons.public),
+                tooltip: 'Browse server directory',
               ),
               IconButton(
                 onPressed: () => _openForm(context),
@@ -121,25 +140,102 @@ class NetworkListScreen extends StatelessWidget {
       webSocketPath: result.webSocketPath,
       autoConnect: result.autoConnect,
       autoJoinChannels: result.autoJoinChannels,
+      autoJoinChannelKeys: result.autoJoinChannelKeys,
       profileLabel: result.profileLabel,
       profileGroup: result.profileGroup,
       saslMechanism: result.saslMechanism,
       saslAccount: result.saslAccount,
       saslPassword: result.saslPassword,
+      serviceAuthFallback: result.serviceAuthFallback,
+      serviceAuthTarget: result.serviceAuthTarget,
+      proxyType: result.proxyType,
+      proxyHost: result.proxyHost,
+      proxyPort: result.proxyPort,
+      proxyUsername: result.proxyUsername,
+      proxyPassword: result.proxyPassword,
+      identityProfileId: result.identityProfileId,
+      useClientCertificate: result.useClientCertificate,
+      clientCertificatePem: result.clientCertificatePem,
+      clientPrivateKeyPem: result.clientPrivateKeyPem,
+      clientKeyPassphrase: result.clientKeyPassphrase,
       networkId: initialValue?.id,
     );
   }
 
+  Future<void> _browseDirectory(BuildContext context) {
+    return showServerDirectoryPicker(
+      context,
+      controller,
+      presetService: presetService,
+    );
+  }
+
+  /// Resolves the identity profile attached to [network] (if any) and applies
+  /// it, so the session connects with the chosen nick/realname/ident.
+  Future<NetworkConfig> _effectiveNetwork(NetworkConfig network) async {
+    final id = network.identityProfileId;
+    if (id == null || id == IdentityProfile.defaultProfileId) {
+      return network;
+    }
+    final repo = profileRepository ?? SharedPrefsIdentityProfileRepository();
+    final profiles = await repo.loadProfiles();
+    for (final profile in profiles) {
+      if (profile.id == id) {
+        return applyIdentityProfile(network, profile);
+      }
+    }
+    return network;
+  }
+
   Future<void> _openChat(BuildContext context, NetworkConfig network) async {
-    final session = sessionRegistry.obtainSession(network);
+    final resolved = await _effectiveNetwork(network);
+    if (!context.mounted) {
+      return;
+    }
+    final session = sessionRegistry.obtainSession(resolved);
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => ChatScreen(controller: session)),
+      MaterialPageRoute<void>(builder: (_) => _chatScreenFor(context, session)),
+    );
+  }
+
+  /// Builds a chat screen wired with the in-chat network switcher: it can list
+  /// all saved networks, switch between them, and jump back to this connection
+  /// manager.
+  ChatScreen _chatScreenFor(
+    BuildContext context,
+    ChatSessionController session,
+  ) {
+    return ChatScreen(
+      controller: session,
+      sessionRegistry: sessionRegistry,
+      networkController: controller,
+      onManageNetworks: () => Navigator.of(context).pop(),
+      onSwitchNetwork: (network) => _switchNetwork(context, network),
+    );
+  }
+
+  Future<void> _switchNetwork(
+    BuildContext context,
+    NetworkConfig network,
+  ) async {
+    final resolved = await _effectiveNetwork(network);
+    if (!context.mounted) {
+      return;
+    }
+    final session = sessionRegistry.obtainSession(resolved);
+    await Navigator.of(context).pushReplacement<void, void>(
+      MaterialPageRoute<void>(builder: (_) => _chatScreenFor(context, session)),
     );
   }
 
   Future<void> _openSettings(BuildContext context) async {
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
+      MaterialPageRoute<void>(
+        builder: (_) => SettingsScreen(
+          networkController: controller,
+          presetService: presetService,
+        ),
+      ),
     );
   }
 
@@ -150,7 +246,8 @@ class NetworkListScreen extends StatelessWidget {
     required ConnectionPhase phase,
   }) async {
     if (!hasSession) {
-      final session = sessionRegistry.obtainSession(network);
+      final resolved = await _effectiveNetwork(network);
+      final session = sessionRegistry.obtainSession(resolved);
       await session.start();
       return;
     }
@@ -546,9 +643,10 @@ class _EmptyState extends StatelessWidget {
             const SizedBox(height: 16),
             Text('No networks configured', style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
-            const Text(
-              'Sprint 1 starts with network management and IRC foundation.',
+            Text(
+              'Add an IRC network, enable auto-connect if you want persistent sessions, then join channels from the chat screen.',
               textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium,
             ),
             const SizedBox(height: 18),
             FilledButton(
