@@ -802,6 +802,7 @@ class ChatSessionController extends ChangeNotifier {
     if (text.isEmpty) {
       return;
     }
+    _onUserActivity();
 
     if (text.startsWith('/')) {
       await _commandService.addToHistory(text);
@@ -1790,11 +1791,42 @@ class ChatSessionController extends ChangeNotifier {
     _pendingReconnectDelay = null;
   }
 
+  /// Called on user activity (sending). Returns from an auto-away state and
+  /// restarts the idle countdown.
+  void _onUserActivity() {
+    if (_autoAwayActive) {
+      _autoAwayActive = false;
+      unawaited(_ircService.sendRaw('AWAY'));
+    }
+    _scheduleAutoAway();
+  }
+
+  void _scheduleAutoAway() {
+    _autoAwayTimer?.cancel();
+    if (!_settings.autoAwayEnabled) {
+      return;
+    }
+    final minutes = _settings.autoAwayMinutes.clamp(1, 240);
+    _autoAwayTimer = Timer(Duration(minutes: minutes), () {
+      if (_settings.autoAwayEnabled &&
+          _connection.phase == ConnectionPhase.connected &&
+          !_autoAwayActive) {
+        _autoAwayActive = true;
+        final message = _settings.awayMessage.trim().isEmpty
+            ? 'Away'
+            : _settings.awayMessage.trim();
+        unawaited(_ircService.sendRaw('AWAY :$message'));
+      }
+    });
+  }
+
   final List<String> _ignoreMasks = <String>[];
   final List<String> _messageFilters = <String>[];
   final Map<String, Timer> _commandTimers = <String, Timer>{};
   final List<ChannelListEntry> _channelListing = <ChannelListEntry>[];
   bool _channelListInProgress = false;
+  Timer? _autoAwayTimer;
+  bool _autoAwayActive = false;
 
   /// Channels collected from the most recent server LIST (numeric 322).
   List<ChannelListEntry> get channelListing =>
@@ -3044,6 +3076,7 @@ class ChatSessionController extends ChangeNotifier {
         if (frame.command == '001') {
           unawaited(_sendServiceAuthFallbackIfNeeded());
           _announceBouncerCompatibility();
+          _scheduleAutoAway();
         }
         if (frame.command == '376' || frame.command == '422') {
           unawaited(_runPostRegistrationActions());
@@ -5171,15 +5204,25 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   bool _containsHighlight(String content) {
-    final nick = (_ircService.currentNick ?? network.nickname).trim();
-    if (nick.isEmpty) {
-      return false;
-    }
     final plain = formatIrcPlainText(content).toLowerCase();
-    final normalizedNick = RegExp.escape(nick.toLowerCase());
-    return RegExp(
-      '(^|[^A-Za-z0-9_\\-])$normalizedNick([^A-Za-z0-9_\\-]|\$)',
-    ).hasMatch(plain);
+    final nick = (_ircService.currentNick ?? network.nickname).trim();
+    final terms = <String>[
+      if (nick.isNotEmpty) nick,
+      ..._settings.highlightWords,
+    ];
+    for (final term in terms) {
+      final normalized = term.trim().toLowerCase();
+      if (normalized.isEmpty) {
+        continue;
+      }
+      final escaped = RegExp.escape(normalized);
+      if (RegExp(
+        '(^|[^A-Za-z0-9_\\-])$escaped([^A-Za-z0-9_\\-]|\$)',
+      ).hasMatch(plain)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   bool _hasMediaNotificationAttachment(IrcMessage message) {
@@ -6113,6 +6156,7 @@ class ChatSessionController extends ChangeNotifier {
       timer.cancel();
     }
     _commandTimers.clear();
+    _autoAwayTimer?.cancel();
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }

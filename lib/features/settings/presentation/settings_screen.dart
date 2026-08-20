@@ -37,6 +37,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _dccDownloadDirectoryController = TextEditingController();
   final _mediaDownloadDirectoryController = TextEditingController();
   final _customThemeController = TextEditingController();
+  final _highlightWordsController = TextEditingController();
+  final _awayMessageController = TextEditingController();
   late final SettingsRepository _repository;
   AppSettingsController? _settingsController;
   AppSettings _settings = const AppSettings();
@@ -73,6 +75,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _dccDownloadDirectoryController.dispose();
     _mediaDownloadDirectoryController.dispose();
     _customThemeController.dispose();
+    _highlightWordsController.dispose();
+    _awayMessageController.dispose();
     super.dispose();
   }
 
@@ -605,6 +609,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ],
                   ),
+                  _SettingsSection(
+                    title: 'Highlighting',
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                        child: TextField(
+                          key: const Key('settings-highlight-words'),
+                          controller: _highlightWordsController,
+                          decoration: InputDecoration(
+                            labelText: 'Highlight words',
+                            helperText:
+                                'Comma-separated. Notify when a message '
+                                'mentions your nick or any of these.',
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.save_outlined),
+                              onPressed: () => _saveHighlightWords(
+                                _highlightWordsController.text,
+                              ),
+                            ),
+                          ),
+                          onSubmitted: _saveHighlightWords,
+                        ),
+                      ),
+                    ],
+                  ),
+                  _SettingsSection(
+                    title: 'Away',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-auto-away'),
+                        title: const Text('Auto-away when idle'),
+                        value: _settings.autoAwayEnabled,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(autoAwayEnabled: value),
+                        ),
+                      ),
+                      ListTile(
+                        title: const Text('Idle timeout'),
+                        trailing: DropdownButton<int>(
+                          key: const Key('settings-auto-away-minutes'),
+                          value: _settings.autoAwayMinutes,
+                          items: const [5, 10, 15, 30, 60]
+                              .map(
+                                (m) => DropdownMenuItem<int>(
+                                  value: m,
+                                  child: Text('$m min'),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              _saveSettings(
+                                _settings.copyWith(autoAwayMinutes: value),
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                        child: TextField(
+                          key: const Key('settings-away-message'),
+                          controller: _awayMessageController,
+                          decoration: InputDecoration(
+                            labelText: 'Away message',
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.save_outlined),
+                              onPressed: () => _saveSettings(
+                                _settings.copyWith(
+                                  awayMessage:
+                                      _awayMessageController.text.trim().isEmpty
+                                      ? 'Away'
+                                      : _awayMessageController.text.trim(),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
       ),
@@ -645,6 +730,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       settings.mediaDownloadDirectoryPath,
     );
     _setControllerText(_customThemeController, settings.customThemeJson);
+    _setControllerText(
+      _highlightWordsController,
+      settings.highlightWords.join(', '),
+    );
+    _setControllerText(_awayMessageController, settings.awayMessage);
   }
 
   void _setControllerText(TextEditingController controller, String value) {
@@ -653,6 +743,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     controller.text = value;
     controller.selection = TextSelection.collapsed(offset: value.length);
+  }
+
+  Future<void> _saveHighlightWords(String value) async {
+    final words = value
+        .split(',')
+        .map((word) => word.trim())
+        .where((word) => word.isNotEmpty)
+        .toList(growable: false);
+    await _saveSettings(_settings.copyWith(highlightWords: words));
   }
 
   Future<void> _saveSettings(AppSettings next) async {

@@ -31,6 +31,10 @@ class AppSettings {
     this.showTimestamps = true,
     this.enterToSend = true,
     this.showSendButton = true,
+    this.highlightWords = const <String>[],
+    this.autoAwayEnabled = false,
+    this.autoAwayMinutes = 10,
+    this.awayMessage = 'Away',
   });
 
   final bool showRawEvents;
@@ -65,6 +69,12 @@ class AppSettings {
   final bool enterToSend;
   final bool showSendButton;
 
+  /// Extra words (besides your nick) that trigger a highlight notification.
+  final List<String> highlightWords;
+  final bool autoAwayEnabled;
+  final int autoAwayMinutes;
+  final String awayMessage;
+
   AppSettings copyWith({
     bool? showRawEvents,
     NoticeRoutingMode? noticeRouting,
@@ -89,6 +99,10 @@ class AppSettings {
     bool? showTimestamps,
     bool? enterToSend,
     bool? showSendButton,
+    List<String>? highlightWords,
+    bool? autoAwayEnabled,
+    int? autoAwayMinutes,
+    String? awayMessage,
   }) {
     return AppSettings(
       showRawEvents: showRawEvents ?? this.showRawEvents,
@@ -121,6 +135,10 @@ class AppSettings {
       showTimestamps: showTimestamps ?? this.showTimestamps,
       enterToSend: enterToSend ?? this.enterToSend,
       showSendButton: showSendButton ?? this.showSendButton,
+      highlightWords: highlightWords ?? this.highlightWords,
+      autoAwayEnabled: autoAwayEnabled ?? this.autoAwayEnabled,
+      autoAwayMinutes: autoAwayMinutes ?? this.autoAwayMinutes,
+      awayMessage: awayMessage ?? this.awayMessage,
     );
   }
 
@@ -149,6 +167,10 @@ class AppSettings {
       'showTimestamps': showTimestamps,
       'enterToSend': enterToSend,
       'showSendButton': showSendButton,
+      'highlightWords': highlightWords,
+      'autoAwayEnabled': autoAwayEnabled,
+      'autoAwayMinutes': autoAwayMinutes,
+      'awayMessage': awayMessage,
     };
   }
 
@@ -197,8 +219,25 @@ class AppSettings {
       showTimestamps: (json['showTimestamps'] as bool?) ?? true,
       enterToSend: (json['enterToSend'] as bool?) ?? true,
       showSendButton: (json['showSendButton'] as bool?) ?? true,
+      highlightWords: _stringList(json['highlightWords']),
+      autoAwayEnabled: (json['autoAwayEnabled'] as bool?) ?? false,
+      autoAwayMinutes: (json['autoAwayMinutes'] as num?)?.toInt() ?? 10,
+      awayMessage: (json['awayMessage'] as String?)?.trim().isEmpty ?? true
+          ? 'Away'
+          : (json['awayMessage'] as String).trim(),
     );
   }
+}
+
+List<String> _stringList(Object? value) {
+  if (value is! List) {
+    return const <String>[];
+  }
+  return value
+      .whereType<String>()
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList(growable: false);
 }
 
 double _clampFontScale(double value) {
