@@ -2717,6 +2717,41 @@ void main() {
     },
   );
 
+  test('collects the server channel list from LIST numerics', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    await controller.requestChannelList();
+    expect(transport.sentLines, contains('LIST'));
+    transport.emit(':server 321 AndroidIRCX Channel :Users Name');
+    transport.emit(':server 322 AndroidIRCX #dbase 42 :Main channel');
+    transport.emit(':server 322 AndroidIRCX #flutter 7 :Dart & Flutter');
+    transport.emit(':server 323 AndroidIRCX :End of /LIST');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.channelListing.map((entry) => entry.name),
+        containsAll(<String>['#dbase', '#flutter']));
+    final dbase =
+        controller.channelListing.firstWhere((entry) => entry.name == '#dbase');
+    expect(dbase.userCount, 42);
+    expect(dbase.topic, 'Main channel');
+    expect(controller.channelListInProgress, isFalse);
+
+    controller.dispose();
+  });
+
   test('suppresses notifications disabled in settings', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);

@@ -16,6 +16,7 @@ import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
 import 'package:androidircx/features/chat/data/message_history_repository.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
+import 'package:androidircx/core/models/channel_list_entry.dart';
 import 'package:androidircx/core/security/certificate_store.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
@@ -1792,6 +1793,32 @@ class ChatSessionController extends ChangeNotifier {
   final List<String> _ignoreMasks = <String>[];
   final List<String> _messageFilters = <String>[];
   final Map<String, Timer> _commandTimers = <String, Timer>{};
+  final List<ChannelListEntry> _channelListing = <ChannelListEntry>[];
+  bool _channelListInProgress = false;
+
+  /// Channels collected from the most recent server LIST (numeric 322).
+  List<ChannelListEntry> get channelListing =>
+      List<ChannelListEntry>.unmodifiable(_channelListing);
+
+  /// Whether a LIST response is currently streaming in.
+  bool get channelListInProgress => _channelListInProgress;
+
+  /// The ignore masks currently active for this session.
+  List<String> get ignoreMasks => List<String>.unmodifiable(_ignoreMasks);
+
+  /// Requests the server channel list (LIST).
+  Future<void> requestChannelList() async {
+    _channelListing.clear();
+    _channelListInProgress = true;
+    notifyListeners();
+    await _ircService.sendRaw('LIST');
+  }
+
+  /// Adds an ignore mask programmatically (used by the ignore manager UI).
+  void addIgnoreMask(String mask) => _handleIgnoreCommand(mask);
+
+  /// Removes an ignore mask programmatically.
+  void removeIgnoreMask(String mask) => _handleUnignoreCommand(mask);
 
   Future<void> _handleSlashCommand(String commandLine) async {
     final parts = commandLine.split(' ');
@@ -3141,6 +3168,8 @@ class ChatSessionController extends ChangeNotifier {
           );
         }
       case '321':
+        _channelListing.clear();
+        _channelListInProgress = true;
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',
@@ -3152,6 +3181,13 @@ class ChatSessionController extends ChangeNotifier {
           final channel = frame.params[1];
           final visibleCount = frame.params[2];
           final topic = frame.trailing ?? '';
+          _channelListing.add(
+            ChannelListEntry(
+              name: channel,
+              userCount: int.tryParse(visibleCount) ?? 0,
+              topic: topic,
+            ),
+          );
           final details = topic.isEmpty
               ? '$channel ($visibleCount users)'
               : '$channel ($visibleCount users) - $topic';
@@ -3163,6 +3199,7 @@ class ChatSessionController extends ChangeNotifier {
           );
         }
       case '323':
+        _channelListInProgress = false;
         _appendMessage(
           tabId: _serverTabId(network.id),
           sender: '*',

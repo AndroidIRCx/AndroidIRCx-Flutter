@@ -11,6 +11,8 @@ import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
+import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
+import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
 import 'package:androidircx/irc/parser/message_content_parser.dart';
@@ -155,6 +157,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 tooltip: 'Join channel',
               ),
               IconButton(
+                onPressed: _openChannelList,
+                icon: const Icon(Icons.format_list_bulleted),
+                tooltip: 'Channel list',
+              ),
+              IconButton(
                 onPressed: _openSettings,
                 icon: const Icon(Icons.tune),
                 tooltip: 'Settings',
@@ -215,6 +222,20 @@ class _ChatScreenState extends State<ChatScreen> {
                   const Divider(height: 1),
                   for (final tab in _controller.tabs)
                     _buildTabTile(context, tab),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.block),
+                    title: const Text('Ignore list'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              IgnoreListScreen(controller: _controller),
+                        ),
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
@@ -516,6 +537,14 @@ class _ChatScreenState extends State<ChatScreen> {
       return '${current.substring(0, leading)}$replacement ';
     }
     return '${current.substring(0, leading)}$replacement${current.substring(restStart)}';
+  }
+
+  Future<void> _openChannelList() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChannelListScreen(controller: _controller),
+      ),
+    );
   }
 
   Future<void> _openSettings() async {
