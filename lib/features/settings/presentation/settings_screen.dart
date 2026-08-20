@@ -9,6 +9,7 @@ import 'package:androidircx/features/connections/presentation/profiles_screen.da
 import 'package:androidircx/features/connections/presentation/server_directory_picker.dart';
 import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
 import 'package:androidircx/features/settings/presentation/backup_screen.dart';
+import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -155,6 +156,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 onPressed: _copyCustomThemeJson,
                                 icon: const Icon(Icons.copy_outlined),
                                 label: const Text('Copy JSON'),
+                              ),
+                              FilledButton.icon(
+                                onPressed: _openThemeEditor,
+                                icon: const Icon(Icons.palette_outlined),
+                                label: const Text('Visual editor'),
                               ),
                             ],
                           ),
@@ -732,6 +738,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ],
                   ),
+                  _SettingsSection(
+                    title: 'Channels',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-auto-rejoin'),
+                        title: const Text('Auto-rejoin on kick'),
+                        subtitle: const Text(
+                          'Rejoin a channel automatically after being kicked.',
+                        ),
+                        value: _settings.autoRejoinOnKick,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(autoRejoinOnKick: value),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
       ),
@@ -785,6 +807,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     controller.text = value;
     controller.selection = TextSelection.collapsed(offset: value.length);
+  }
+
+  Future<void> _openThemeEditor() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ThemeEditorScreen(
+          initialJson: _settings.customThemeJson,
+          onSaved: (json) => _saveSettings(
+            _settings.copyWith(
+              customThemeJson: json,
+              themePreset: AppThemePreset.custom,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _saveHighlightWords(String value) async {

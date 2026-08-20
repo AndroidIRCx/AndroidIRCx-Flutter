@@ -36,6 +36,7 @@ class AppSettings {
     this.autoAwayMinutes = 10,
     this.awayMessage = 'Away',
     this.historyRetentionPerTab = 5000,
+    this.autoRejoinOnKick = true,
   });
 
   final bool showRawEvents;
@@ -79,6 +80,9 @@ class AppSettings {
   /// Max messages kept per tab in the encrypted history (0 = unlimited).
   final int historyRetentionPerTab;
 
+  /// Whether to rejoin a channel automatically after being kicked.
+  final bool autoRejoinOnKick;
+
   AppSettings copyWith({
     bool? showRawEvents,
     NoticeRoutingMode? noticeRouting,
@@ -108,6 +112,7 @@ class AppSettings {
     int? autoAwayMinutes,
     String? awayMessage,
     int? historyRetentionPerTab,
+    bool? autoRejoinOnKick,
   }) {
     return AppSettings(
       showRawEvents: showRawEvents ?? this.showRawEvents,
@@ -146,6 +151,7 @@ class AppSettings {
       awayMessage: awayMessage ?? this.awayMessage,
       historyRetentionPerTab:
           historyRetentionPerTab ?? this.historyRetentionPerTab,
+      autoRejoinOnKick: autoRejoinOnKick ?? this.autoRejoinOnKick,
     );
   }
 
@@ -179,6 +185,7 @@ class AppSettings {
       'autoAwayMinutes': autoAwayMinutes,
       'awayMessage': awayMessage,
       'historyRetentionPerTab': historyRetentionPerTab,
+      'autoRejoinOnKick': autoRejoinOnKick,
     };
   }
 
@@ -235,6 +242,7 @@ class AppSettings {
           : (json['awayMessage'] as String).trim(),
       historyRetentionPerTab:
           (json['historyRetentionPerTab'] as num?)?.toInt() ?? 5000,
+      autoRejoinOnKick: (json['autoRejoinOnKick'] as bool?) ?? true,
     );
   }
 }

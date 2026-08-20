@@ -2717,6 +2717,35 @@ void main() {
     },
   );
 
+  test('auto-rejoins a channel after being kicked', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+      settingsRepository: _FakeSettingsRepository(
+        const AppSettings(autoRejoinOnKick: true),
+      ),
+    );
+
+    await controller.start();
+    transport.emit(':server 001 AndroidIRCX :Welcome');
+    await Future<void>.delayed(Duration.zero);
+    transport.emit(':op!o@host KICK #room AndroidIRCX :seeya');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(transport.sentLines, contains('JOIN #room'));
+
+    controller.dispose();
+  });
+
   test('collects the server channel list from LIST numerics', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);

@@ -3608,6 +3608,24 @@ class ChatSessionController extends ChangeNotifier {
                 '$kickedNick was kicked from $channel by ${frame.senderNick ?? '*'}${frame.trailing == null ? '' : ' (${frame.trailing})'}',
             kind: IrcMessageKind.system,
           );
+          if (_isSelfNick(kickedNick) &&
+              _settings.autoRejoinOnKick &&
+              _connection.phase == ConnectionPhase.connected) {
+            final key = network.autoJoinChannelKeys[channel];
+            unawaited(
+              _ircService.sendRaw(
+                key == null || key.isEmpty
+                    ? 'JOIN $channel'
+                    : 'JOIN $channel $key',
+              ),
+            );
+            _appendMessage(
+              tabId: tab.id,
+              sender: '*',
+              content: 'Auto-rejoining $channel…',
+              kind: IrcMessageKind.event,
+            );
+          }
         }
       case 'QUIT':
         _removeUserFromAllChannels(frame.senderNick);

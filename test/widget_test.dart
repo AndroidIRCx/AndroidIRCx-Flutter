@@ -23,6 +23,7 @@ import 'package:androidircx/features/connections/presentation/network_form_scree
 import 'package:androidircx/features/connections/presentation/network_list_screen.dart';
 import 'package:androidircx/features/onboarding/presentation/onboarding_screen.dart';
 import 'package:androidircx/features/security/presentation/app_lock_gate.dart';
+import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
@@ -181,6 +182,32 @@ void main() {
     expect(find.text('AndroidIRCX'), findsOneWidget);
     expect(find.text('DBase'), findsOneWidget);
     expect(find.text('Connect'), findsOneWidget);
+  });
+
+  testWidgets('theme editor generates JSON from picked brightness', (
+    tester,
+  ) async {
+    String? saved;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ThemeEditorScreen(
+          initialJson: '',
+          onSaved: (json) async {
+            saved = json;
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('Dark base'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save'));
+    await tester.pumpAndSettle();
+
+    expect(saved, isNotNull);
+    expect(saved!.contains('"brightness":"dark"'), isTrue);
+    expect(saved!.contains('"primary":'), isTrue);
   });
 
   testWidgets('app lock gate is transparent when disabled', (tester) async {
