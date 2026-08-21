@@ -47,6 +47,7 @@ dependencies:
   sqlite3_flutter_libs: ^0.6.0+eol
   cryptography: ^2.9.0
   image_picker: ^1.2.3
+  in_app_review: ^2.0.12
 
 dev_dependencies:
   flutter_test:

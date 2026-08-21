@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
+import 'package:androidircx/core/review/review_prompt_service.dart';
 import 'package:androidircx/core/security/history_encryption_key_manager.dart';
 import 'package:androidircx/core/security/local_auth_history_unlock.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
@@ -96,6 +97,7 @@ class _BootstrapScreenState extends State<BootstrapScreen>
       await session.start();
     }
     await _consumePendingForegroundAction();
+    unawaited(ReviewPromptService().registerLaunchAndMaybePrompt());
 
     if (!mounted) {
       return;
