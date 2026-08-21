@@ -10,6 +10,7 @@ import 'package:androidircx/dcc/services/dcc_file_picker.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
+import 'package:androidircx/features/chat/data/channel_notes_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
@@ -36,11 +37,16 @@ class ChatScreen extends StatefulWidget {
     this.networkController,
     this.onSwitchNetwork,
     this.onManageNetworks,
+    this.channelNotesRepository,
   });
 
   final ChatSessionController controller;
   final DccFilePicker? filePicker;
   final MediaDownloadService? mediaDownloadService;
+
+  /// Local per-channel notes store; defaults to a shared-preferences backed
+  /// instance. Injectable for tests.
+  final ChannelNotesRepository? channelNotesRepository;
 
   /// Live sessions across all networks, used by the in-chat network switcher.
   final SessionRegistry? sessionRegistry;
@@ -75,6 +81,10 @@ class _ChatScreenState extends State<ChatScreen> {
       widget.filePicker ?? const MethodChannelDccFilePicker();
   MediaDownloadService get _mediaDownloadService =>
       widget.mediaDownloadService ?? createMediaDownloadService();
+  ChannelNotesRepository? _defaultChannelNotes;
+  ChannelNotesRepository get _channelNotesRepository =>
+      widget.channelNotesRepository ??
+      (_defaultChannelNotes ??= ChannelNotesRepository());
 
   @override
   void initState() {
@@ -829,6 +839,39 @@ class _ChatScreenState extends State<ChatScreen> {
         _controller.selectTab(tab.id);
         Navigator.of(context).pop();
       },
+      onLongPress: tab.type == ChatTabType.channel
+          ? () {
+              Navigator.of(context).pop();
+              unawaited(_showChannelNoteDialog(tab));
+            }
+          : null,
+    );
+  }
+
+  Future<void> _showChannelNoteDialog(ChatTab tab) async {
+    final network = _controller.network.id;
+    final existing = await _channelNotesRepository.getNote(network, tab.name);
+    if (!mounted) {
+      return;
+    }
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) =>
+          _ChannelNoteDialog(channel: tab.name, initialText: existing),
+    );
+    if (result == null) {
+      return;
+    }
+    await _channelNotesRepository.setNote(network, tab.name, result);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.trim().isEmpty ? 'Channel note cleared.' : 'Channel note saved.',
+        ),
+      ),
     );
   }
 
@@ -1859,6 +1902,54 @@ class _ServiceQuickActions extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+class _ChannelNoteDialog extends StatefulWidget {
+  const _ChannelNoteDialog({required this.channel, required this.initialText});
+
+  final String channel;
+  final String initialText;
+
+  @override
+  State<_ChannelNoteDialog> createState() => _ChannelNoteDialogState();
+}
+
+class _ChannelNoteDialogState extends State<_ChannelNoteDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialText,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Note for ${widget.channel}'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        minLines: 3,
+        maxLines: 6,
+        decoration: const InputDecoration(
+          hintText: 'Notes for this channel (stored only on this device)',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }
