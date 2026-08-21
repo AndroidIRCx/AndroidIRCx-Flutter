@@ -17,6 +17,7 @@ import 'package:androidircx/features/connections/application/network_list_contro
 import 'package:androidircx/features/chat/presentation/auto_mode_lists_screen.dart';
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
+import 'package:androidircx/features/chat/presentation/media_player_screen.dart';
 import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
@@ -2699,11 +2700,20 @@ class _AttachmentCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: url == null
-            ? null
-            : () => isImage
-                  ? _showImagePreview(context, url)
-                  : _openExternalUrl(url),
+        onTap: () {
+          switch (attachmentTapAction(attachment)) {
+            case AttachmentTapAction.none:
+              break;
+            case AttachmentTapAction.imagePreview:
+              unawaited(_showImagePreview(context, url!));
+            case AttachmentTapAction.playVideo:
+              _openMediaPlayer(context, url!, isAudio: false, title: title);
+            case AttachmentTapAction.playAudio:
+              _openMediaPlayer(context, url!, isAudio: true, title: title);
+            case AttachmentTapAction.external:
+              unawaited(_openExternalUrl(url!));
+          }
+        },
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: Column(
@@ -3021,6 +3031,51 @@ Future<void> _openExternalUrl(String rawUrl) async {
   }
 
   await launchUrl(uri, mode: LaunchMode.platformDefault);
+}
+
+/// How tapping an attachment should behave. Extracted for testing.
+enum AttachmentTapAction { none, imagePreview, playVideo, playAudio, external }
+
+AttachmentTapAction attachmentTapAction(IrcMessageAttachment attachment) {
+  final url = attachment.uri;
+  if (url == null) {
+    return AttachmentTapAction.none;
+  }
+  switch (attachment.type) {
+    case IrcMessageAttachmentType.image:
+      return AttachmentTapAction.imagePreview;
+    case IrcMessageAttachmentType.video:
+      return AttachmentTapAction.playVideo;
+    case IrcMessageAttachmentType.audio:
+      return AttachmentTapAction.playAudio;
+    case IrcMessageAttachmentType.url:
+      if (isVideoUrl(url)) {
+        return AttachmentTapAction.playVideo;
+      }
+      if (isAudioUrl(url)) {
+        return AttachmentTapAction.playAudio;
+      }
+      return AttachmentTapAction.external;
+    case IrcMessageAttachmentType.file:
+    case IrcMessageAttachmentType.media:
+    case IrcMessageAttachmentType.dccChat:
+    case IrcMessageAttachmentType.dccSend:
+      return AttachmentTapAction.external;
+  }
+}
+
+void _openMediaPlayer(
+  BuildContext context,
+  String url, {
+  required bool isAudio,
+  String? title,
+}) {
+  Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) =>
+          MediaPlayerScreen(url: url, isAudio: isAudio, title: title),
+    ),
+  );
 }
 
 Future<void> _copyToClipboard(BuildContext context, String text) async {
