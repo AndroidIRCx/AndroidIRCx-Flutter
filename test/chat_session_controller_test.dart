@@ -2869,7 +2869,10 @@ void main() {
       ),
       ircService: service,
       settingsRepository: _FakeSettingsRepository(
-        const AppSettings(highlightWords: ['flutter']),
+        const AppSettings(
+          highlightWords: ['flutter'],
+          notificationsEnabled: true,
+        ),
       ),
     );
 
@@ -2905,7 +2908,10 @@ void main() {
       ),
       ircService: service,
       settingsRepository: _FakeSettingsRepository(
-        const AppSettings(notifyPrivateMessages: false),
+        const AppSettings(
+          notifyPrivateMessages: false,
+          notificationsEnabled: true,
+        ),
       ),
     );
 

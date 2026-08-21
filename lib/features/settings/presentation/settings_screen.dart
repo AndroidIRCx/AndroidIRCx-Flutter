@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:androidircx/app/theme/app_theme.dart';
 import 'package:androidircx/core/models/app_settings.dart';
+import 'package:androidircx/core/platform/app_permissions.dart';
 import 'package:androidircx/core/presets/server_preset_service.dart';
 import 'package:androidircx/core/settings/app_settings_controller.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
@@ -23,6 +26,7 @@ class SettingsScreen extends StatefulWidget {
     this.networkController,
     this.presetService,
     this.appLockAuthenticator,
+    this.permissions,
   });
 
   final SettingsRepository? repository;
@@ -36,6 +40,10 @@ class SettingsScreen extends StatefulWidget {
   /// Confirms the user can authenticate before app lock is enabled. Overridable
   /// for tests; defaults to a biometric/PIN prompt.
   final Future<bool> Function()? appLockAuthenticator;
+
+  /// Runtime OS permissions (notifications, camera). Overridable for tests;
+  /// defaults to the `permission_handler` backed implementation.
+  final AppPermissions? permissions;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -52,6 +60,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   AppSettings _settings = const AppSettings();
   bool _isLoading = true;
   bool _didResolveController = false;
+  bool _cameraGranted = false;
+
+  AppPermissions get _permissions =>
+      widget.permissions ?? const PermissionHandlerAppPermissions();
 
   @override
   void initState() {
@@ -75,6 +87,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     controller.addListener(_syncFromController);
     _syncFromController();
+    unawaited(_refreshPermissionStatuses());
   }
 
   @override
@@ -459,49 +472,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: 'Notifications',
                     children: [
                       SwitchListTile(
+                        key: const Key('settings-notifications-enabled'),
+                        secondary: const Icon(
+                          Icons.notifications_active_outlined,
+                        ),
+                        title: const Text('Enable notifications'),
+                        subtitle: const Text(
+                          'Ask Android for permission, then show alerts and the '
+                          'background connection notice.',
+                        ),
+                        value: _settings.notificationsEnabled,
+                        onChanged: (value) => _toggleNotifications(value),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
                         key: const Key('settings-notify-highlights'),
                         title: const Text('Highlights'),
                         subtitle: const Text('Your nick or highlight words.'),
                         value: _settings.notifyHighlights,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notifyHighlights: value),
-                        ),
+                        onChanged: _settings.notificationsEnabled
+                            ? (value) => _saveSettings(
+                                _settings.copyWith(notifyHighlights: value),
+                              )
+                            : null,
                       ),
                       const Divider(height: 1),
                       SwitchListTile(
                         key: const Key('settings-notify-pm'),
                         title: const Text('Private messages'),
                         value: _settings.notifyPrivateMessages,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notifyPrivateMessages: value),
-                        ),
+                        onChanged: _settings.notificationsEnabled
+                            ? (value) => _saveSettings(
+                                _settings.copyWith(notifyPrivateMessages: value),
+                              )
+                            : null,
                       ),
                       const Divider(height: 1),
                       SwitchListTile(
                         key: const Key('settings-notify-dcc'),
                         title: const Text('DCC offers'),
                         value: _settings.notifyDccOffers,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notifyDccOffers: value),
-                        ),
+                        onChanged: _settings.notificationsEnabled
+                            ? (value) => _saveSettings(
+                                _settings.copyWith(notifyDccOffers: value),
+                              )
+                            : null,
                       ),
                       const Divider(height: 1),
                       SwitchListTile(
                         key: const Key('settings-notify-errors'),
                         title: const Text('Errors'),
                         value: _settings.notifyErrors,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notifyErrors: value),
-                        ),
+                        onChanged: _settings.notificationsEnabled
+                            ? (value) => _saveSettings(
+                                _settings.copyWith(notifyErrors: value),
+                              )
+                            : null,
                       ),
                       const Divider(height: 1),
                       SwitchListTile(
                         key: const Key('settings-notify-sound'),
                         title: const Text('Notification sound'),
                         value: _settings.notificationSound,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notificationSound: value),
+                        onChanged: _settings.notificationsEnabled
+                            ? (value) => _saveSettings(
+                                _settings.copyWith(notificationSound: value),
+                              )
+                            : null,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Permissions',
+                    children: [
+                      ListTile(
+                        key: const Key('settings-permission-camera'),
+                        leading: const Icon(Icons.photo_camera_outlined),
+                        title: const Text('Camera access'),
+                        subtitle: Text(
+                          _cameraGranted
+                              ? 'Granted — you can capture photos and video.'
+                              : 'Needed to capture photos/video for media and DCC.',
                         ),
+                        trailing: _cameraGranted
+                            ? const Icon(Icons.check_circle_outline)
+                            : const Text('Grant'),
+                        onTap: _cameraGranted ? null : _requestCameraPermission,
                       ),
                     ],
                   ),
@@ -774,6 +831,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _isLoading = false;
       _syncTextControllers(settings);
     });
+    await _refreshPermissionStatuses();
   }
 
   void _syncFromController() {
@@ -874,6 +932,86 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Reconciles permission-gated settings on entry: notifications can only be
+  /// on while the OS permission is granted, and refreshes the camera status.
+  Future<void> _refreshPermissionStatuses() async {
+    final hasNotifications = await _permissions.hasNotifications();
+    final hasCamera = await _permissions.hasCamera();
+    if (!mounted) {
+      return;
+    }
+    if (_settings.notificationsEnabled && !hasNotifications) {
+      await _saveSettings(_settings.copyWith(notificationsEnabled: false));
+    }
+    if (mounted && hasCamera != _cameraGranted) {
+      setState(() => _cameraGranted = hasCamera);
+    }
+  }
+
+  Future<void> _toggleNotifications(bool value) async {
+    if (!value) {
+      await _saveSettings(_settings.copyWith(notificationsEnabled: false));
+      return;
+    }
+    // Turning on requests the OS notification permission first; only enable on
+    // grant so the toggles reflect what Android will actually deliver.
+    if (await _permissions.hasNotifications()) {
+      await _saveSettings(_settings.copyWith(notificationsEnabled: true));
+      return;
+    }
+    final result = await _permissions.requestNotifications();
+    if (!mounted) {
+      return;
+    }
+    if (result == AppPermissionResult.granted) {
+      await _saveSettings(_settings.copyWith(notificationsEnabled: true));
+      return;
+    }
+    final permanentlyDenied = result == AppPermissionResult.permanentlyDenied;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          permanentlyDenied
+              ? 'Notifications are blocked. Enable them in system settings.'
+              : 'Notification permission denied — notifications stay off.',
+        ),
+        action: permanentlyDenied
+            ? SnackBarAction(
+                label: 'Settings',
+                onPressed: () => unawaited(_permissions.openSettingsPage()),
+              )
+            : null,
+      ),
+    );
+  }
+
+  Future<void> _requestCameraPermission() async {
+    final result = await _permissions.requestCamera();
+    if (!mounted) {
+      return;
+    }
+    if (result == AppPermissionResult.granted) {
+      setState(() => _cameraGranted = true);
+      return;
+    }
+    final permanentlyDenied = result == AppPermissionResult.permanentlyDenied;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          permanentlyDenied
+              ? 'Camera is blocked. Enable it in system settings.'
+              : 'Camera permission denied.',
+        ),
+        action: permanentlyDenied
+            ? SnackBarAction(
+                label: 'Settings',
+                onPressed: () => unawaited(_permissions.openSettingsPage()),
+              )
+            : null,
+      ),
+    );
   }
 
   Future<void> _toggleAppLock(bool value) async {
