@@ -91,7 +91,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.pageDown, control: true):
+            _controller.selectNextTab,
+        const SingleActivator(LogicalKeyboardKey.pageUp, control: true):
+            _controller.selectPreviousTab,
+      },
+      child: AnimatedBuilder(
       animation: Listenable.merge([
         _controller,
         if (widget.sessionRegistry != null) widget.sessionRegistry!,
@@ -299,40 +306,72 @@ class _ChatScreenState extends State<ChatScreen> {
                 )
               : null,
           body: SafeArea(
-            child: Column(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // In short viewports (landscape, or portrait with the keyboard
+                // open) the chrome around the message list (status/topic
+                // banners on top, composer + its bars on the bottom) can be
+                // taller than the available height and would crush the list to
+                // zero. When space is tight, cap the top/bottom chrome and let
+                // each scroll internally so the message list always keeps room
+                // and nothing overflows. In normal viewports the caps are the
+                // full height (a no-op), so interactive banners such as the DCC
+                // accept/decline actions stay at their natural, hittable size.
+                final tight = constraints.maxHeight < 380;
+                final topChromeMaxHeight =
+                    tight ? constraints.maxHeight * 0.35 : constraints.maxHeight;
+                final bottomClusterMaxHeight =
+                    tight ? constraints.maxHeight * 0.5 : constraints.maxHeight;
+                return Column(
               children: [
-                _ConnectionBanner(
-                  controller: _controller,
-                  network: _controller.network,
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: topChromeMaxHeight),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _ConnectionBanner(
+                          controller: _controller,
+                          network: _controller.network,
+                        ),
+                        if (_messageSearchVisible)
+                          _InlineMessageSearchBar(
+                            controller: _messageSearchController,
+                            filter: _messageSearchFilter,
+                            resultCount: visibleMessages.length,
+                            onFilterChanged: (filter) => setState(
+                              () => _messageSearchFilter = filter,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                            onClose: _toggleMessageSearch,
+                          ),
+                        if ((_controller.activeChannelTopic ?? '')
+                            .trim()
+                            .isNotEmpty)
+                          _ChannelTopicBar(
+                            topic: _controller.activeChannelTopic!.trim(),
+                          ),
+                        if (_controller.activeTab.type == ChatTabType.dcc &&
+                            _controller.activeDccSession != null)
+                          _DccSessionBanner(
+                            session: _controller.activeDccSession!,
+                            onAccept: _controller.acceptActiveDccSession,
+                            onDecline: _controller.declineActiveDccSession,
+                            onClose: _controller.closeActiveDccSession,
+                          ),
+                        if (_controller.activeTab.type == ChatTabType.server)
+                          _ServiceQuickActions(
+                            onRun: (service, command) async {
+                              await _controller.sendServiceShortcut(
+                                service,
+                                command,
+                              );
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
-                if (_messageSearchVisible)
-                  _InlineMessageSearchBar(
-                    controller: _messageSearchController,
-                    filter: _messageSearchFilter,
-                    resultCount: visibleMessages.length,
-                    onFilterChanged: (filter) =>
-                        setState(() => _messageSearchFilter = filter),
-                    onChanged: (_) => setState(() {}),
-                    onClose: _toggleMessageSearch,
-                  ),
-                if ((_controller.activeChannelTopic ?? '').trim().isNotEmpty)
-                  _ChannelTopicBar(
-                    topic: _controller.activeChannelTopic!.trim(),
-                  ),
-                if (_controller.activeTab.type == ChatTabType.dcc &&
-                    _controller.activeDccSession != null)
-                  _DccSessionBanner(
-                    session: _controller.activeDccSession!,
-                    onAccept: _controller.acceptActiveDccSession,
-                    onDecline: _controller.declineActiveDccSession,
-                    onClose: _controller.closeActiveDccSession,
-                  ),
-                if (_controller.activeTab.type == ChatTabType.server)
-                  _ServiceQuickActions(
-                    onRun: (service, command) async {
-                      await _controller.sendServiceShortcut(service, command);
-                    },
-                  ),
                 Expanded(
                   child: _MessageList(
                     messages: visibleMessages,
@@ -366,21 +405,35 @@ class _ChatScreenState extends State<ChatScreen> {
                         : null,
                   ),
                 ),
-                if (_controller.commandHistory.isNotEmpty)
-                  _CommandHistoryBar(
-                    entries: _controller.commandHistory,
-                    onSelect: (value) =>
-                        setState(() => _composerController.text = value),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: bottomClusterMaxHeight,
                   ),
-                if (_controller.activeTypingUsers.isNotEmpty)
-                  _TypingIndicator(users: _controller.activeTypingUsers),
-                if (_pendingReplyMessage != null)
-                  _PendingReplyBar(
-                    message: _pendingReplyMessage!,
-                    onCancel: () => setState(() => _pendingReplyMessage = null),
-                  ),
-                const Divider(height: 1),
-                _ComposerArea(
+                  child: SingleChildScrollView(
+                    reverse: true,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_controller.commandHistory.isNotEmpty)
+                          _CommandHistoryBar(
+                            entries: _controller.commandHistory,
+                            onSelect: (value) => setState(
+                              () => _composerController.text = value,
+                            ),
+                          ),
+                        if (_controller.activeTypingUsers.isNotEmpty)
+                          _TypingIndicator(
+                            users: _controller.activeTypingUsers,
+                          ),
+                        if (_pendingReplyMessage != null)
+                          _PendingReplyBar(
+                            message: _pendingReplyMessage!,
+                            onCancel: () => setState(
+                              () => _pendingReplyMessage = null,
+                            ),
+                          ),
+                        const Divider(height: 1),
+                        _ComposerArea(
                   suggestions: _composerSuggestions,
                   autocompleteSuggestions: _autocompleteSuggestions,
                   controller: _composerController,
@@ -409,12 +462,19 @@ class _ChatScreenState extends State<ChatScreen> {
                     ImageSource.camera,
                     video: true,
                   ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ],
+                );
+              },
             ),
           ),
         );
       },
+      ),
     );
   }
 
@@ -1835,8 +1895,12 @@ class _MessageList extends StatelessWidget {
   Widget build(BuildContext context) {
     final ircTheme = context.ircUiTheme;
     if (messages.isEmpty) {
+      // Shrink-to-fit so the placeholder never overflows a short viewport
+      // (landscape / keyboard open).
       return Center(
-        child: Column(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
@@ -1850,6 +1914,7 @@ class _MessageList extends StatelessWidget {
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],
+          ),
         ),
       );
     }
@@ -1873,9 +1938,6 @@ class _MessageList extends StatelessWidget {
           );
         }
         final message = messages[messages.length - 1 - index];
-        final align = message.isOwn
-            ? CrossAxisAlignment.end
-            : CrossAxisAlignment.start;
         final isRedacted = message.tags['redacted'] == 'true';
         final reactions = resolveReactions(message);
         final bubbleColor = switch (message.kind) {
@@ -1890,50 +1952,42 @@ class _MessageList extends StatelessWidget {
           IrcMessageKind.notice =>
             message.isOwn ? ircTheme.messageOwn : ircTheme.messageOther,
         };
+        final messageStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
+          fontSize: ircTheme.messageFontSize,
+          fontFamily: ircTheme.messageFontFamily,
+          fontStyle: isRedacted ? FontStyle.italic : null,
+          color: isRedacted
+              ? Theme.of(context).colorScheme.onSurfaceVariant
+              : null,
+        );
+        final metaStyle = messageStyle?.copyWith(
+          fontSize: (ircTheme.messageFontSize - 2).clamp(9, 100).toDouble(),
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        );
+        final leadingSpans = <InlineSpan>[
+          TextSpan(
+            text: message.sender,
+            style: messageStyle?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: ircTheme.nickColorFor(message.sender) ??
+                  Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+          if (showTimestamps)
+            TextSpan(
+              text: '  ${_formatClock(message.timestamp)}',
+              style: metaStyle,
+            ),
+          if (message.isPlayback)
+            TextSpan(text: '  · history', style: metaStyle),
+          const TextSpan(text: '   '),
+        ];
         return Padding(
           padding: EdgeInsets.only(bottom: ircTheme.messageSpacing),
-          child: Column(
-            crossAxisAlignment: align,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    message.sender,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color:
-                          ircTheme.nickColorFor(message.sender) ??
-                          Theme.of(context).textTheme.labelMedium?.color,
-                    ),
-                  ),
-                  if (showTimestamps) ...[
-                    const SizedBox(width: 6),
-                    Text(
-                      _formatClock(message.timestamp),
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ],
-                  if (message.isPlayback) ...[
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        'History',
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              const SizedBox(height: 3),
-              GestureDetector(
+          child: Align(
+            alignment:
+                message.isOwn ? Alignment.centerRight : Alignment.centerLeft,
+            child: GestureDetector(
                 onLongPress: () => _showMessageActions(context, message),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
@@ -1959,23 +2013,8 @@ class _MessageList extends StatelessWidget {
                           ),
                         _IrcFormattedText(
                           message.content,
-                          baseStyle: isRedacted
-                              ? Theme.of(
-                                  context,
-                                ).textTheme.bodyMedium?.copyWith(
-                                  fontSize: ircTheme.messageFontSize,
-                                  fontFamily: ircTheme.messageFontFamily,
-                                  fontStyle: FontStyle.italic,
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                                )
-                              : Theme.of(
-                                  context,
-                                ).textTheme.bodyMedium?.copyWith(
-                                  fontSize: ircTheme.messageFontSize,
-                                  fontFamily: ircTheme.messageFontFamily,
-                                ),
+                          baseStyle: messageStyle,
+                          leading: leadingSpans,
                         ),
                         if (showAttachmentPreviews && !isRedacted)
                           _MessageAttachments(
@@ -2002,7 +2041,6 @@ class _MessageList extends StatelessWidget {
                   ),
                 ),
               ),
-            ],
           ),
         );
       },
@@ -2149,6 +2187,7 @@ class _IrcFormattedText extends StatelessWidget {
     this.baseStyle,
     this.maxLines,
     this.overflow,
+    this.leading,
   });
 
   final String text;
@@ -2156,22 +2195,17 @@ class _IrcFormattedText extends StatelessWidget {
   final int? maxLines;
   final TextOverflow? overflow;
 
+  /// Inline spans (e.g. sender + timestamp) rendered before the content so the
+  /// message flows on one line and only wraps when it is long.
+  final List<InlineSpan>? leading;
+
   @override
   Widget build(BuildContext context) {
     final segments = parseIrcTextWithLinks(text);
-    if (segments.isEmpty) {
-      return Text(
-        text,
-        style: baseStyle,
-        maxLines: maxLines,
-        overflow: overflow,
-      );
-    }
-
-    return Text.rich(
-      TextSpan(
-        children: segments
-            .map(
+    final contentSpans = segments.isEmpty
+        ? <InlineSpan>[TextSpan(text: text, style: baseStyle)]
+        : segments
+            .map<InlineSpan>(
               (segment) => TextSpan(
                 text: segment.text,
                 style: _resolveTextStyle(baseStyle, segment),
@@ -2181,8 +2215,10 @@ class _IrcFormattedText extends StatelessWidget {
                     : null,
               ),
             )
-            .toList(growable: false),
-      ),
+            .toList(growable: false);
+
+    return Text.rich(
+      TextSpan(children: [...?leading, ...contentSpans]),
       style: baseStyle,
       maxLines: maxLines,
       overflow: overflow,

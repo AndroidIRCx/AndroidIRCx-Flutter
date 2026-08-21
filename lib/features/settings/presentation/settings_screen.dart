@@ -513,6 +513,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _settings.copyWith(appLockEnabled: value),
                         ),
                       ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-screenshot-protection'),
+                        secondary: const Icon(Icons.screenshot_monitor_outlined),
+                        title: const Text('Block screenshots'),
+                        subtitle: const Text(
+                          'Prevent screenshots and screen recording (Android).',
+                        ),
+                        value: _settings.screenshotProtection,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(screenshotProtection: value),
+                        ),
+                      ),
                     ],
                   ),
                   _SettingsSection(

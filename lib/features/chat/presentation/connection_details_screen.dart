@@ -30,6 +30,8 @@ class ConnectionDetailsScreen extends StatelessWidget {
                 if ((controller.connection.message ?? '').isNotEmpty)
                   _row('Detail', controller.connection.message!),
                 _row('Nick', controller.currentNick),
+                if (controller.lag != null)
+                  _row('Lag', '${controller.lag!.inMilliseconds} ms'),
                 _row(
                   'Capabilities',
                   '${enabled.length} enabled / ${available.length} advertised',

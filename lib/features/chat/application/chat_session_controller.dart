@@ -388,6 +388,24 @@ class ChatSessionController extends ChangeNotifier {
   /// is attached), so the UI can offer a "load earlier messages" affordance.
   bool get hasPersistentHistory => _historyRepository != null;
 
+  /// Selects the next tab (for keyboard navigation), wrapping around.
+  void selectNextTab() => _cycleTab(1);
+
+  /// Selects the previous tab, wrapping around.
+  void selectPreviousTab() => _cycleTab(-1);
+
+  void _cycleTab(int delta) {
+    if (_tabs.length < 2) {
+      return;
+    }
+    final index = _tabs.indexWhere((tab) => tab.id == _activeTabId);
+    if (index == -1) {
+      return;
+    }
+    final next = (index + delta) % _tabs.length;
+    selectTab(_tabs[next < 0 ? next + _tabs.length : next].id);
+  }
+
   IrcMessage? messageByMsgId(String tabId, String msgid) {
     final normalized = msgid.trim();
     if (normalized.isEmpty) {
@@ -1832,6 +1850,30 @@ class ChatSessionController extends ChangeNotifier {
   bool _channelListInProgress = false;
   Timer? _autoAwayTimer;
   bool _autoAwayActive = false;
+  Timer? _lagTimer;
+  Duration? _lag;
+
+  /// Round-trip lag to the server from the most recent PING/PONG, or null.
+  Duration? get lag => _lag;
+
+  /// Sends a timestamped PING so the next PONG can measure lag.
+  Future<void> measureLag() async {
+    if (_connection.phase != ConnectionPhase.connected) {
+      return;
+    }
+    await _ircService.sendRaw(
+      'PING :LAG${DateTime.now().millisecondsSinceEpoch}',
+    );
+  }
+
+  void _scheduleLagMeasurement() {
+    _lagTimer?.cancel();
+    _lagTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => unawaited(measureLag()),
+    );
+    unawaited(measureLag());
+  }
 
   /// Channels collected from the most recent server LIST (numeric 322).
   List<ChannelListEntry> get channelListing =>
@@ -3082,6 +3124,7 @@ class ChatSessionController extends ChangeNotifier {
           unawaited(_sendServiceAuthFallbackIfNeeded());
           _announceBouncerCompatibility();
           _scheduleAutoAway();
+          _scheduleLagMeasurement();
         }
         if (frame.command == '376' || frame.command == '422') {
           unawaited(_runPostRegistrationActions());
@@ -3654,6 +3697,20 @@ class ChatSessionController extends ChangeNotifier {
               '${frame.senderNick ?? '*'} is now known as ${frame.trailing ?? _firstOrNull(frame.params) ?? '?'}',
           kind: IrcMessageKind.event,
         );
+      case 'PONG':
+        final token = (frame.trailing ??
+                (frame.params.isEmpty ? '' : frame.params.last))
+            .trim();
+        if (token.startsWith('LAG')) {
+          final sentMs = int.tryParse(token.substring(3));
+          if (sentMs != null) {
+            final elapsed = DateTime.now().millisecondsSinceEpoch - sentMs;
+            if (elapsed >= 0) {
+              _lag = Duration(milliseconds: elapsed);
+              notifyListeners();
+            }
+          }
+        }
       case 'CAP':
         _handleCapabilityFrame(frame);
       case 'ACCOUNT':
@@ -6182,6 +6239,7 @@ class ChatSessionController extends ChangeNotifier {
     }
     _commandTimers.clear();
     _autoAwayTimer?.cancel();
+    _lagTimer?.cancel();
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }
