@@ -705,17 +705,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: 'Help',
                     children: [
                       ListTile(
-                        key: const Key('settings-help-topic'),
-                        leading: const Icon(Icons.help_outline),
-                        title: const Text('IRC help'),
-                        subtitle: const Text(
-                          'Connection, SASL, channel keys, DCC, and proxy notes.',
-                        ),
-                        onTap: () =>
-                            _showInfoDialog(title: 'IRC help', body: _helpText),
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
                         key: const Key('settings-privacy-topic'),
                         leading: const Icon(Icons.privacy_tip_outlined),
                         title: const Text('Privacy'),
@@ -751,32 +740,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           MaterialPageRoute<void>(
                             builder: (_) => const BackupScreen(),
                           ),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        key: const Key('settings-support-topic'),
-                        leading: const Icon(Icons.support_agent_outlined),
-                        title: const Text('Support'),
-                        subtitle: const Text(
-                          'What to include when reporting a connection issue.',
-                        ),
-                        onTap: () => _showInfoDialog(
-                          title: 'Support',
-                          body: _supportText,
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        key: const Key('settings-release-audit-topic'),
-                        leading: const Icon(Icons.verified_outlined),
-                        title: const Text('Release audit'),
-                        subtitle: const Text(
-                          'Package, version, permissions, and signing gates.',
-                        ),
-                        onTap: () => _showInfoDialog(
-                          title: 'Release audit',
-                          body: _releaseAuditText,
                         ),
                       ),
                       const Divider(height: 1),
@@ -1031,41 +994,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-const String _helpText = '''
-Use TLS where the network supports it. SASL PLAIN, SCRAM-SHA-256, and EXTERNAL are negotiated through IRCv3 CAP.
-
-NickServ fallback is only sent when SASL is configured but unavailable, rejected, or incomplete after registration. The fallback uses the SASL account and password and redacts the password from raw logs.
-
-Auto-join channel keys are stored with other network secrets and are redacted from public JSON and raw JOIN logs.
-
-DCC SEND and CHAT run through foreground transfer state. Reverse/passive DCC support depends on the other client and the network path.
-
-SOCKS5 proxy mode sends the IRC host name to the proxy for remote DNS, which is required for Tor-style routing.
-''';
-
 const String _privacyText = '''
 Network passwords, SASL passwords, proxy passwords, and auto-join channel keys are stored through the configured SecretStorage backend.
 
 IRC messages are sent to the networks you connect to. DCC transfers connect directly to the peer or through reverse/passive negotiation when available.
 
 The app does not include ads, analytics, crash reporting, WebRTC calls, scripting, or E2EE in the current release slice.
-''';
-
-const String _supportText = '''
-For connection issues, include the network host, port, TLS setting, SASL mechanism, proxy setting, Android version, and the redacted raw server-tab log.
-
-Do not send server passwords, SASL passwords, proxy passwords, channel keys, private keys, or downloaded file paths.
-''';
-
-const String _releaseAuditText = '''
-Android package: com.androidircx.flutter
-Version source: pubspec.yaml
-
-Permissions: INTERNET, ACCESS_NETWORK_STATE, FOREGROUND_SERVICE, FOREGROUND_SERVICE_REMOTE_MESSAGING, POST_NOTIFICATIONS.
-
-Release signing: android/key.properties is used when present. Local builds fall back to debug signing and are not Play Store upload artifacts.
-
-Device smoke gates: background connection runtime, multi-network foreground service, DCC transfer lifetime, notifications, and proxy/Tor connection.
 ''';
 
 class _SettingsSection extends StatelessWidget {
