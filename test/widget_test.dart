@@ -301,7 +301,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Privacy step: consent required before Next is enabled.
-    await tester.tap(find.byType(Checkbox));
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Next'));
     await tester.pumpAndSettle();

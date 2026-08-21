@@ -111,6 +111,33 @@ void main() {
     expect(saved.notificationsEnabled, isFalse);
   });
 
+  testWidgets('analytics consent toggle saves the setting', (tester) async {
+    final perms = _FakePermissions();
+    await tester.pumpWidget(
+      MaterialApp(home: SettingsScreen(permissions: perms)),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-analytics-consent')),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(
+      find.byKey(const Key('settings-analytics-consent')),
+    );
+    await tester.pumpAndSettle();
+
+    var saved = await SharedPrefsSettingsRepository().loadSettings();
+    expect(saved.analyticsConsent, isFalse);
+
+    await tester.tap(find.byKey(const Key('settings-analytics-consent')));
+    await tester.pumpAndSettle();
+
+    saved = await SharedPrefsSettingsRepository().loadSettings();
+    expect(saved.analyticsConsent, isTrue);
+  });
+
   testWidgets('granting camera permission shows granted state', (tester) async {
     final perms = _FakePermissions(camResult: AppPermissionResult.granted);
     await tester.pumpWidget(

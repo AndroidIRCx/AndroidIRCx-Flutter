@@ -46,3 +46,6 @@ app.*.map.json
 /secrets/
 /android/build/reports/problems/problems-report.html
 /android/.kotlin/
+
+# Firebase config (kept out of the repo)
+/android/app/google-services.json

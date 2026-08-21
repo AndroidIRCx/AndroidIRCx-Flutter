@@ -50,6 +50,10 @@ dependencies:
   in_app_review: ^2.0.12
   video_player: ^2.9.2
   permission_handler: ^11.3.1
+  firebase_core: ^4.13.0
+  firebase_analytics: ^12.4.6
+  firebase_crashlytics: ^5.2.7
+  firebase_app_check: ^0.4.6
 
 dev_dependencies:
   flutter_test:

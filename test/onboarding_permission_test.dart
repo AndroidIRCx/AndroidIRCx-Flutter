@@ -39,7 +39,7 @@ class _MemSettingsRepository implements SettingsRepository {
 Future<void> _toNotificationsStep(WidgetTester tester) async {
   await tester.tap(find.text('Next')); // welcome
   await tester.pumpAndSettle();
-  await tester.tap(find.byType(Checkbox)); // privacy consent
+  await tester.tap(find.byType(Checkbox).first); // privacy consent (terms)
   await tester.pumpAndSettle();
   await tester.tap(find.text('Next')); // privacy
   await tester.pumpAndSettle();
@@ -76,6 +76,45 @@ void main() {
     expect(perms.notifRequests, 1);
     expect(settings.settings.notificationsEnabled, isTrue);
     expect(find.text('Notifications enabled.'), findsOneWidget);
+  });
+
+  testWidgets('opting into analytics in onboarding saves consent', (
+    tester,
+  ) async {
+    final settings = _MemSettingsRepository();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: OnboardingScreen(
+          networkRepository: InMemoryNetworkRepository(const []),
+          onCompleted: () async {},
+          permissions: _FakePermissions(AppPermissionResult.granted),
+          settingsRepository: settings,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Welcome -> Privacy.
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+    // Accept terms + opt into analytics.
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('onboarding-analytics-consent')));
+    await tester.pumpAndSettle();
+    // Advance to the end and finish.
+    await tester.tap(find.text('Next')); // privacy
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next')); // identity
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next')); // network
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next')); // channels -> notifications
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Finish'));
+    await tester.pumpAndSettle();
+
+    expect(settings.settings.analyticsConsent, isTrue);
   });
 
   testWidgets('denying notifications in onboarding leaves the setting off', (

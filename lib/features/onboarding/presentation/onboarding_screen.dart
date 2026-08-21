@@ -38,6 +38,7 @@ enum _NetworkMode { dbase, custom, later }
 class _OnboardingScreenState extends State<OnboardingScreen> {
   int _step = 0;
   bool _consentAccepted = false;
+  bool _shareAnalytics = false;
   bool _saving = false;
   bool _notificationsAsked = false;
   bool _notificationsGranted = false;
@@ -114,6 +115,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     setState(() => _saving = true);
     if (_networkMode != _NetworkMode.later) {
       await widget.networkRepository.saveNetwork(_buildNetwork());
+    }
+    if (_shareAnalytics) {
+      try {
+        final settings = await _settingsRepository.loadSettings();
+        await _settingsRepository.saveSettings(
+          settings.copyWith(analyticsConsent: true),
+        );
+      } catch (_) {
+        // Best effort; the user can still opt in from Settings.
+      }
     }
     await widget.onCompleted();
   }
@@ -359,9 +370,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'AndroidIRCX stores your data on this device only — no account, no '
-          'cloud sync, no ads or analytics. History is encrypted behind your '
-          'fingerprint/PIN and secrets live in secure storage.',
+          'AndroidIRCX keeps your chat data on this device — no account and no '
+          'cloud sync of messages. History is encrypted behind your '
+          'fingerprint/PIN and secrets live in secure storage. Anonymous usage '
+          'analytics and crash reports are optional and stay off unless you '
+          'turn them on below.',
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
@@ -381,6 +394,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               setState(() => _consentAccepted = value ?? false),
           title: const Text(
             'I have read and accept the privacy policy and terms.',
+          ),
+        ),
+        CheckboxListTile(
+          key: const Key('onboarding-analytics-consent'),
+          contentPadding: EdgeInsets.zero,
+          value: _shareAnalytics,
+          onChanged: (value) =>
+              setState(() => _shareAnalytics = value ?? false),
+          title: const Text(
+            'Share anonymous usage & crash data to improve the app (optional).',
           ),
         ),
       ],

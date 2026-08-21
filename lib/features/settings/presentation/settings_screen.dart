@@ -560,6 +560,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             : const Text('Grant'),
                         onTap: _cameraGranted ? null : _requestCameraPermission,
                       ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-analytics-consent'),
+                        secondary: const Icon(Icons.insights_outlined),
+                        title: const Text('Share anonymous usage & crash data'),
+                        subtitle: const Text(
+                          'Send anonymized analytics and crash reports (Firebase) '
+                          'to help improve the app. Off by default.',
+                        ),
+                        value: _settings.analyticsConsent,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(analyticsConsent: value),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -1137,7 +1151,7 @@ Network passwords, SASL passwords, proxy passwords, and auto-join channel keys a
 
 IRC messages are sent to the networks you connect to. DCC transfers connect directly to the peer or through reverse/passive negotiation when available.
 
-The app does not include ads, analytics, crash reporting, WebRTC calls, scripting, or E2EE in the current release slice.
+No ads at the moment :). Anonymous usage analytics and crash reports (Firebase Analytics/Crashlytics) are off by default and only collected if you opt in under Permissions; you can turn them off any time.
 ''';
 
 class _SettingsSection extends StatelessWidget {

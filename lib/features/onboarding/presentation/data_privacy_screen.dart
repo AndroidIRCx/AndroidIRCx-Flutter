@@ -47,9 +47,13 @@ class DataPrivacyScreen extends StatelessWidget {
                   'protocol; use TLS and SASL for privacy in transit.',
             ),
             const _PrivacyPoint(
-              icon: Icons.cloud_off_outlined,
-              title: 'No analytics or ads',
-              body: 'This build contains no advertising or analytics SDKs.',
+              icon: Icons.insights_outlined,
+              title: 'Optional analytics & crash reports',
+              body:
+                  'No ads at the moment 🙂. Anonymous usage analytics and crash '
+                  'reports (Firebase Analytics/Crashlytics) are OFF by default '
+                  'and only collected if you opt in; you can change this any '
+                  'time in Settings.',
             ),
             const SizedBox(height: 16),
             FilledButton.icon(
