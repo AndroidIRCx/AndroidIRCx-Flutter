@@ -11,6 +11,7 @@ import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/data/channel_notes_repository.dart';
+import 'package:androidircx/features/chat/data/user_notes_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
@@ -38,6 +39,7 @@ class ChatScreen extends StatefulWidget {
     this.onSwitchNetwork,
     this.onManageNetworks,
     this.channelNotesRepository,
+    this.userNotesRepository,
   });
 
   final ChatSessionController controller;
@@ -47,6 +49,10 @@ class ChatScreen extends StatefulWidget {
   /// Local per-channel notes store; defaults to a shared-preferences backed
   /// instance. Injectable for tests.
   final ChannelNotesRepository? channelNotesRepository;
+
+  /// Local per-user (nick) notes store; defaults to a shared-preferences
+  /// backed instance. Injectable for tests.
+  final UserNotesRepository? userNotesRepository;
 
   /// Live sessions across all networks, used by the in-chat network switcher.
   final SessionRegistry? sessionRegistry;
@@ -85,6 +91,10 @@ class _ChatScreenState extends State<ChatScreen> {
   ChannelNotesRepository get _channelNotesRepository =>
       widget.channelNotesRepository ??
       (_defaultChannelNotes ??= ChannelNotesRepository());
+  UserNotesRepository? _defaultUserNotes;
+  UserNotesRepository get _userNotesRepository =>
+      widget.userNotesRepository ??
+      (_defaultUserNotes ??= UserNotesRepository());
 
   @override
   void initState() {
@@ -672,6 +682,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _showChannelUserActions(String nick) async {
+    final network = _controller.network.id;
+    final note = await _userNotesRepository.getNote(network, nick);
+    if (!mounted) {
+      return;
+    }
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -687,7 +702,8 @@ class _ChatScreenState extends State<ChatScreen> {
         }
 
         return SafeArea(
-          child: Column(
+          child: SingleChildScrollView(
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
@@ -695,9 +711,19 @@ class _ChatScreenState extends State<ChatScreen> {
                   nick,
                   style: Theme.of(sheetContext).textTheme.titleMedium,
                 ),
-                subtitle: const Text('Channel user actions'),
+                subtitle: Text(
+                  note.isEmpty ? 'Channel user actions' : 'Note: $note',
+                ),
               ),
               const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.sticky_note_2_outlined),
+                title: Text(note.isEmpty ? 'Add note' : 'Edit note'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  unawaited(_showUserNoteDialog(nick, note));
+                },
+              ),
               action('WHOIS', Icons.badge_outlined, ChannelUserAction.whois),
               action(
                 'Open query',
@@ -719,6 +745,7 @@ class _ChatScreenState extends State<ChatScreen> {
               action('Kick', Icons.logout, ChannelUserAction.kick),
               action('Ban', Icons.block, ChannelUserAction.ban),
             ],
+            ),
           ),
         );
       },
@@ -856,8 +883,11 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     final result = await showDialog<String>(
       context: context,
-      builder: (context) =>
-          _ChannelNoteDialog(channel: tab.name, initialText: existing),
+      builder: (context) => _NoteDialog(
+        title: 'Note for ${tab.name}',
+        hint: 'Notes for this channel (stored only on this device)',
+        initialText: existing,
+      ),
     );
     if (result == null) {
       return;
@@ -870,6 +900,32 @@ class _ChatScreenState extends State<ChatScreen> {
       SnackBar(
         content: Text(
           result.trim().isEmpty ? 'Channel note cleared.' : 'Channel note saved.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showUserNoteDialog(String nick, String existing) async {
+    final network = _controller.network.id;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => _NoteDialog(
+        title: 'Note for $nick',
+        hint: 'Notes about this user (stored only on this device)',
+        initialText: existing,
+      ),
+    );
+    if (result == null) {
+      return;
+    }
+    await _userNotesRepository.setNote(network, nick, result);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.trim().isEmpty ? 'User note cleared.' : 'User note saved.',
         ),
       ),
     );
@@ -1906,17 +1962,22 @@ class _ServiceQuickActions extends StatelessWidget {
   }
 }
 
-class _ChannelNoteDialog extends StatefulWidget {
-  const _ChannelNoteDialog({required this.channel, required this.initialText});
+class _NoteDialog extends StatefulWidget {
+  const _NoteDialog({
+    required this.title,
+    required this.hint,
+    required this.initialText,
+  });
 
-  final String channel;
+  final String title;
+  final String hint;
   final String initialText;
 
   @override
-  State<_ChannelNoteDialog> createState() => _ChannelNoteDialogState();
+  State<_NoteDialog> createState() => _NoteDialogState();
 }
 
-class _ChannelNoteDialogState extends State<_ChannelNoteDialog> {
+class _NoteDialogState extends State<_NoteDialog> {
   late final TextEditingController _controller = TextEditingController(
     text: widget.initialText,
   );
@@ -1930,15 +1991,13 @@ class _ChannelNoteDialogState extends State<_ChannelNoteDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text('Note for ${widget.channel}'),
+      title: Text(widget.title),
       content: TextField(
         controller: _controller,
         autofocus: true,
         minLines: 3,
         maxLines: 6,
-        decoration: const InputDecoration(
-          hintText: 'Notes for this channel (stored only on this device)',
-        ),
+        decoration: InputDecoration(hintText: widget.hint),
       ),
       actions: [
         TextButton(
