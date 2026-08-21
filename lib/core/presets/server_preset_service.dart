@@ -73,7 +73,8 @@ class ServerPresetService {
           uri: url,
         );
       }
-      return response.transform(utf8.decoder).join();
+      final body = await response.transform(utf8.decoder).join();
+      return body;
     } finally {
       client.close(force: true);
     }
