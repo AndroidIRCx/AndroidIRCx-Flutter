@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:androidircx/core/models/identity_profile.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/storage/identity_profile_repository.dart';
+import 'package:androidircx/dcc/services/dcc_file_picker.dart';
+import 'package:androidircx/features/connections/data/pem_bundle.dart';
 import 'package:flutter/material.dart';
 
 class NetworkFormResult {
@@ -68,13 +71,26 @@ class NetworkFormResult {
 }
 
 class NetworkFormScreen extends StatefulWidget {
-  const NetworkFormScreen({super.key, this.initialValue, this.profileRepository});
+  const NetworkFormScreen({
+    super.key,
+    this.initialValue,
+    this.profileRepository,
+    this.certificateFilePicker,
+    this.certificateFileReader,
+  });
 
   final NetworkConfig? initialValue;
 
   /// Source of identity profiles for the attach-profile picker; defaults to
   /// shared-prefs storage.
   final IdentityProfileRepository? profileRepository;
+
+  /// Picks a certificate/key file to import; defaults to the native document
+  /// picker. Injectable for tests.
+  final DccFilePicker? certificateFilePicker;
+
+  /// Reads the picked file's text; defaults to `dart:io`. Injectable for tests.
+  final Future<String> Function(String path)? certificateFileReader;
 
   @override
   State<NetworkFormScreen> createState() => _NetworkFormScreenState();
@@ -223,6 +239,56 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     super.dispose();
   }
 
+  void _showFormSnack(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _importCertificateFile() async {
+    final picker =
+        widget.certificateFilePicker ?? const MethodChannelDccFilePicker();
+    final path = await picker.pickFile();
+    if (path == null || !mounted) {
+      return;
+    }
+    String content;
+    try {
+      final reader = widget.certificateFileReader ?? _defaultReadCertFile;
+      content = await reader(path);
+    } catch (_) {
+      _showFormSnack('Could not read the selected file.');
+      return;
+    }
+    final bundle = PemBundle.parse(content);
+    if (bundle.isEmpty) {
+      _showFormSnack(
+        'No PEM data found. For a .p12/.pfx file, convert it first: '
+        'openssl pkcs12 -in cert.p12 -out cert.pem -nodes',
+      );
+      return;
+    }
+    setState(() {
+      if (bundle.hasCertificate) {
+        _clientCertController.text = bundle.certificate!;
+      }
+      if (bundle.hasPrivateKey) {
+        _clientKeyController.text = bundle.privateKey!;
+      }
+    });
+    final parts = <String>[
+      if (bundle.hasCertificate) 'certificate',
+      if (bundle.hasPrivateKey) 'private key',
+    ].join(' and ');
+    _showFormSnack('Imported $parts from file.');
+  }
+
+  static Future<String> _defaultReadCertFile(String path) =>
+      File(path).readAsString();
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -331,6 +397,16 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                       setState(() => _useClientCertificate = value),
                 ),
                 if (_useClientCertificate) ...[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: const Key('network-form-import-cert'),
+                      onPressed: () => unawaited(_importCertificateFile()),
+                      icon: const Icon(Icons.file_open_outlined),
+                      label: const Text('Import from file (.pem)'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   TextFormField(
                     controller: _clientCertController,
                     minLines: 2,
@@ -338,7 +414,7 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                     decoration: const InputDecoration(
                       labelText: 'Client certificate PEM',
                       helperText:
-                          'Paste -----BEGIN CERTIFICATE-----; leave empty to keep the stored one.',
+                          'Paste or import -----BEGIN CERTIFICATE-----; leave empty to keep the stored one.',
                     ),
                   ),
                   const SizedBox(height: 16),
