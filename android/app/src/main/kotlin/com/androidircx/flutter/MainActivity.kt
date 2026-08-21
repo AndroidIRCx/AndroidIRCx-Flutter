@@ -7,13 +7,13 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.WindowManager
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileOutputStream
 
-class MainActivity : FlutterActivity() {
+class MainActivity : FlutterFragmentActivity() {
     private var pendingDccFilePickerResult: MethodChannel.Result? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {

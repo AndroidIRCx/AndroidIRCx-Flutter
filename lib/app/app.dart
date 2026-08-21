@@ -72,11 +72,12 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
             title: 'AndroidIRCx Flutter',
             debugShowCheckedModeBanner: false,
             theme: buildAppTheme(_settingsController.settings),
-            home: AppLockGate(
+            builder: (context, child) => AppLockGate(
               enabled: !_settingsController.isLoading &&
                   _settingsController.settings.appLockEnabled,
-              child: _buildHome(),
+              child: child ?? const SizedBox.shrink(),
             ),
+            home: _buildHome(),
           );
         },
       ),
