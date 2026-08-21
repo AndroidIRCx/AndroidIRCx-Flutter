@@ -91,7 +91,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.pageDown, control: true):
+            _controller.selectNextTab,
+        const SingleActivator(LogicalKeyboardKey.pageUp, control: true):
+            _controller.selectPreviousTab,
+      },
+      child: AnimatedBuilder(
       animation: Listenable.merge([
         _controller,
         if (widget.sessionRegistry != null) widget.sessionRegistry!,
@@ -415,6 +422,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       },
+      ),
     );
   }
 

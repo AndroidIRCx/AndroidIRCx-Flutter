@@ -388,6 +388,24 @@ class ChatSessionController extends ChangeNotifier {
   /// is attached), so the UI can offer a "load earlier messages" affordance.
   bool get hasPersistentHistory => _historyRepository != null;
 
+  /// Selects the next tab (for keyboard navigation), wrapping around.
+  void selectNextTab() => _cycleTab(1);
+
+  /// Selects the previous tab, wrapping around.
+  void selectPreviousTab() => _cycleTab(-1);
+
+  void _cycleTab(int delta) {
+    if (_tabs.length < 2) {
+      return;
+    }
+    final index = _tabs.indexWhere((tab) => tab.id == _activeTabId);
+    if (index == -1) {
+      return;
+    }
+    final next = (index + delta) % _tabs.length;
+    selectTab(_tabs[next < 0 ? next + _tabs.length : next].id);
+  }
+
   IrcMessage? messageByMsgId(String tabId, String msgid) {
     final normalized = msgid.trim();
     if (normalized.isEmpty) {
