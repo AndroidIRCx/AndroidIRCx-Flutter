@@ -1,5 +1,8 @@
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/platform/app_permissions.dart';
 import 'package:androidircx/core/storage/network_repository.dart';
+import 'package:androidircx/core/storage/settings_repository.dart';
+import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
 import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
 import 'package:flutter/material.dart';
 
@@ -13,10 +16,18 @@ class OnboardingScreen extends StatefulWidget {
     super.key,
     required this.networkRepository,
     required this.onCompleted,
+    this.permissions,
+    this.settingsRepository,
   });
 
   final NetworkRepository networkRepository;
   final Future<void> Function() onCompleted;
+
+  /// Runtime OS permissions; injectable for tests.
+  final AppPermissions? permissions;
+
+  /// Where the notification opt-in is persisted; injectable for tests.
+  final SettingsRepository? settingsRepository;
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -28,6 +39,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   int _step = 0;
   bool _consentAccepted = false;
   bool _saving = false;
+  bool _notificationsAsked = false;
+  bool _notificationsGranted = false;
+
+  AppPermissions get _permissions =>
+      widget.permissions ?? const PermissionHandlerAppPermissions();
+  SettingsRepository get _settingsRepository =>
+      widget.settingsRepository ?? SharedPrefsSettingsRepository();
 
   final _nickname = TextEditingController(text: 'AndroidIRCX');
   final _altNick = TextEditingController(text: 'AndroidIRCX_');
@@ -47,6 +65,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     'Set up your identity',
     'Choose your network',
     'Choose your channels',
+    'Notifications',
   ];
 
   @override
@@ -228,9 +247,91 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         return _buildIdentity(context);
       case 3:
         return _buildNetworkStep(context);
-      default:
+      case 4:
         return _buildChannels(context);
+      default:
+        return _buildPermissions(context);
     }
+  }
+
+  Future<void> _requestOnboardingNotifications() async {
+    final result = await _permissions.requestNotifications();
+    if (!mounted) {
+      return;
+    }
+    final granted = result == AppPermissionResult.granted;
+    if (granted) {
+      try {
+        final settings = await _settingsRepository.loadSettings();
+        await _settingsRepository.saveSettings(
+          settings.copyWith(notificationsEnabled: true),
+        );
+      } catch (_) {
+        // Best effort; the user can still enable it in Settings.
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _notificationsAsked = true;
+        _notificationsGranted = granted;
+      });
+    }
+  }
+
+  Widget _buildPermissions(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.notifications_active_outlined,
+          size: 56,
+          color: theme.colorScheme.primary,
+        ),
+        const SizedBox(height: 16),
+        Text('Stay reachable in the background', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(
+          'Allow notifications so highlights and private messages can alert you, '
+          'and so AndroidIRCX can show an ongoing notice while it keeps your '
+          'connection alive in the background. You can fine-tune or turn these '
+          'off any time in Settings.',
+          style: theme.textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 20),
+        if (_notificationsAsked)
+          Row(
+            children: [
+              Icon(
+                _notificationsGranted
+                    ? Icons.check_circle_outline
+                    : Icons.info_outline,
+                color: _notificationsGranted
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _notificationsGranted
+                      ? 'Notifications enabled.'
+                      : 'No problem — you can enable notifications later in Settings.',
+                ),
+              ),
+            ],
+          )
+        else
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              key: const Key('onboarding-allow-notifications'),
+              onPressed: () => _requestOnboardingNotifications(),
+              icon: const Icon(Icons.notifications_active_outlined),
+              label: const Text('Allow notifications'),
+            ),
+          ),
+      ],
+    );
   }
 
   Widget _buildWelcome(BuildContext context) {

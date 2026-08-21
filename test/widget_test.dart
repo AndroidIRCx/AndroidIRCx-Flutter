@@ -314,7 +314,12 @@ void main() {
     await tester.tap(find.text('Next'));
     await tester.pumpAndSettle();
 
-    // Channels step -> Finish.
+    // Channels step -> Next.
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Notifications step -> Finish (permission prompt skipped).
+    expect(find.text('Notifications'), findsWidgets);
     await tester.tap(find.text('Finish'));
     await tester.pumpAndSettle();
 
