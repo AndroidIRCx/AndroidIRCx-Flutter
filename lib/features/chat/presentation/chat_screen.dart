@@ -11,8 +11,10 @@ import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/data/channel_notes_repository.dart';
+import 'package:androidircx/features/chat/data/user_list_entry.dart';
 import 'package:androidircx/features/chat/data/user_notes_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
+import 'package:androidircx/features/chat/presentation/auto_mode_lists_screen.dart';
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
 import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
@@ -262,6 +264,20 @@ class _ChatScreenState extends State<ChatScreen> {
                         MaterialPageRoute<void>(
                           builder: (_) =>
                               IgnoreListScreen(controller: _controller),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.rule_outlined),
+                    title: const Text('Auto-mode lists'),
+                    subtitle: const Text('Auto-op, auto-halfop, auto-voice'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              AutoModeListsScreen(controller: _controller),
                         ),
                       );
                     },
@@ -724,6 +740,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   unawaited(_showUserNoteDialog(nick, note));
                 },
               ),
+              for (final type in UserListType.values)
+                _autoModeToggleTile(sheetContext, nick, type),
+              const Divider(height: 1),
               action('WHOIS', Icons.badge_outlined, ChannelUserAction.whois),
               action(
                 'Open query',
@@ -926,6 +945,74 @@ class _ChatScreenState extends State<ChatScreen> {
       SnackBar(
         content: Text(
           result.trim().isEmpty ? 'User note cleared.' : 'User note saved.',
+        ),
+      ),
+    );
+  }
+
+  UserListEntry? _existingAutoModeEntry(String nick, UserListType type) {
+    final normalized = '${nick.trim().toLowerCase()}!*@*';
+    for (final entry in _controller.autoModeEntries) {
+      if (entry.type == type &&
+          entry.normalizedMask.toLowerCase() == normalized &&
+          (entry.network == null || entry.network == _controller.network.id)) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  Widget _autoModeToggleTile(
+    BuildContext sheetContext,
+    String nick,
+    UserListType type,
+  ) {
+    final existing = _existingAutoModeEntry(nick, type);
+    final active = existing != null;
+    return ListTile(
+      leading: Icon(
+        switch (type) {
+          UserListType.autoOp => Icons.shield_moon_outlined,
+          UserListType.autoHalfOp => Icons.shield_outlined,
+          UserListType.autoVoice => Icons.record_voice_over_outlined,
+        },
+      ),
+      title: Text(type.label),
+      trailing: active
+          ? const Icon(Icons.check, size: 18)
+          : const Icon(Icons.add, size: 18),
+      onTap: () {
+        Navigator.of(sheetContext).pop();
+        unawaited(_toggleAutoMode(nick, type, existing));
+      },
+    );
+  }
+
+  Future<void> _toggleAutoMode(
+    String nick,
+    UserListType type,
+    UserListEntry? existing,
+  ) async {
+    if (existing != null) {
+      await _controller.removeAutoModeEntry(existing);
+    } else {
+      await _controller.addAutoModeEntry(
+        UserListEntry(
+          type: type,
+          mask: nick,
+          network: _controller.network.id,
+        ),
+      );
+    }
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          existing != null
+              ? 'Removed $nick from ${type.label}.'
+              : 'Added $nick to ${type.label}.',
         ),
       ),
     );

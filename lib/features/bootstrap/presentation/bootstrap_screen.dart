@@ -11,6 +11,7 @@ import 'package:androidircx/features/chat/application/chat_session_controller.da
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/data/encrypted_history_database.dart';
 import 'package:androidircx/features/chat/data/message_history_repository.dart';
+import 'package:androidircx/features/chat/data/user_lists_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/connections/presentation/network_list_screen.dart';
 import 'package:flutter/material.dart';
@@ -52,6 +53,7 @@ class _BootstrapScreenState extends State<BootstrapScreen>
   late final ForegroundConnectionService _foregroundConnectionService;
   late final NetworkListController _controller;
   late final SessionRegistry _sessionRegistry;
+  final UserListsRepository _userListsRepository = UserListsRepository();
   MessageHistoryRepository? _historyRepository;
   bool _bootstrapComplete = false;
 
@@ -65,6 +67,7 @@ class _BootstrapScreenState extends State<BootstrapScreen>
       sessionFactory: (network) => ChatSessionController(
         network: network,
         historyRepository: _historyRepository,
+        userListsRepository: _userListsRepository,
       ),
     );
     _controller = NetworkListController(
