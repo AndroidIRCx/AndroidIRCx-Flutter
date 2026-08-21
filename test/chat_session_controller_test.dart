@@ -2303,11 +2303,20 @@ void main() {
     dccBackend.connection.emitBytes([1, 2, 3, 4]);
     await Future<void>.delayed(Duration.zero);
     await dccBackend.connection.finish();
-    for (var i = 0; i < 10; i += 1) {
-      if (controller.activeDccSession?.status == DccSessionStatus.closed) {
+    // Wait for the transfer to fully settle (status + file write + log line).
+    // A short fixed poll was flaky on slow CI runners, so wait up to ~3s for
+    // the actual completion condition instead of a handful of 1ms ticks.
+    for (var i = 0; i < 300; i += 1) {
+      final session = controller.activeDccSession;
+      final finished = controller.activeMessages.any(
+        (message) => message.content.contains('DCC SEND finished'),
+      );
+      if (session?.status == DccSessionStatus.closed &&
+          session?.bytesTransferred == 4 &&
+          finished) {
         break;
       }
-      await Future<void>.delayed(const Duration(milliseconds: 1));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
 
     expect(
