@@ -2717,6 +2717,37 @@ void main() {
     },
   );
 
+  test('measures server lag from PING/PONG', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    transport.emit(':server 001 AndroidIRCX :Welcome');
+    await Future<void>.delayed(Duration.zero);
+    await controller.measureLag();
+    final pingLine =
+        transport.sentLines.lastWhere((line) => line.startsWith('PING :LAG'));
+    final token = pingLine.substring('PING :'.length);
+    transport.emit(':server PONG server :$token');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.lag, isNotNull);
+    expect(controller.lag!.inMilliseconds >= 0, isTrue);
+
+    controller.dispose();
+  });
+
   test('auto-rejoins a channel after being kicked', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);
