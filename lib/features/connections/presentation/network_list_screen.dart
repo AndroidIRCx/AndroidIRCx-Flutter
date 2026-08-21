@@ -157,6 +157,7 @@ class NetworkListScreen extends StatelessWidget {
       useClientCertificate: result.useClientCertificate,
       clientCertificatePem: result.clientCertificatePem,
       clientPrivateKeyPem: result.clientPrivateKeyPem,
+      clientPkcs12Base64: result.clientPkcs12Base64,
       clientKeyPassphrase: result.clientKeyPassphrase,
       networkId: initialValue?.id,
     );

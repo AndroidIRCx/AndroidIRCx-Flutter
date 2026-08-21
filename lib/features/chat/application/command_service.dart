@@ -701,6 +701,48 @@ class CommandService {
       description: 'Send a command to BotServ',
       kind: CommandKind.service,
     ),
+    CommandDefinition(
+      name: 'autovoice',
+      usage: '/autovoice <nick|mask> [#chan,#chan]',
+      description: 'Auto-voice matching users on join',
+      kind: CommandKind.channel,
+    ),
+    CommandDefinition(
+      name: 'unautovoice',
+      usage: '/unautovoice <nick|mask>',
+      description: 'Remove an auto-voice rule',
+      kind: CommandKind.channel,
+    ),
+    CommandDefinition(
+      name: 'autoop',
+      usage: '/autoop <nick|mask> [#chan,#chan]',
+      description: 'Auto-op matching users on join',
+      kind: CommandKind.channel,
+    ),
+    CommandDefinition(
+      name: 'unautoop',
+      usage: '/unautoop <nick|mask>',
+      description: 'Remove an auto-op rule',
+      kind: CommandKind.channel,
+    ),
+    CommandDefinition(
+      name: 'autohalfop',
+      usage: '/autohalfop <nick|mask> [#chan,#chan]',
+      description: 'Auto-halfop matching users on join',
+      kind: CommandKind.channel,
+    ),
+    CommandDefinition(
+      name: 'unautohalfop',
+      usage: '/unautohalfop <nick|mask>',
+      description: 'Remove an auto-halfop rule',
+      kind: CommandKind.channel,
+    ),
+    CommandDefinition(
+      name: 'autolist',
+      usage: '/autolist',
+      description: 'List configured auto-mode rules',
+      kind: CommandKind.local,
+    ),
   ];
 
   static final Map<String, CommandDefinition> _commandRegistry = {

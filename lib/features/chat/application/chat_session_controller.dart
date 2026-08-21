@@ -15,6 +15,8 @@ import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
 import 'package:androidircx/features/chat/data/message_history_repository.dart';
+import 'package:androidircx/features/chat/data/user_list_entry.dart';
+import 'package:androidircx/features/chat/data/user_lists_repository.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/core/models/channel_list_entry.dart';
 import 'package:androidircx/core/security/certificate_store.dart';
@@ -66,6 +68,7 @@ class ChatSessionController extends ChangeNotifier {
     MessageHistoryRepository? historyRepository,
     SettingsRepository? settingsRepository,
     CommandService? commandService,
+    UserListsRepository? userListsRepository,
     int maxReconnectAttempts = 6,
     Duration reconnectBaseDelay = const Duration(seconds: 2),
     Duration reconnectMaxDelay = const Duration(seconds: 60),
@@ -82,6 +85,7 @@ class ChatSessionController extends ChangeNotifier {
        _settingsRepository =
            settingsRepository ?? SharedPrefsSettingsRepository(),
        _commandService = commandService ?? CommandService(),
+       _userListsRepository = userListsRepository,
        _maxReconnectAttempts = maxReconnectAttempts,
        _reconnectBaseDelay = reconnectBaseDelay,
        _reconnectMaxDelay = reconnectMaxDelay,
@@ -106,6 +110,9 @@ class ChatSessionController extends ChangeNotifier {
   final MessageHistoryRepository? _historyRepository;
   final SettingsRepository _settingsRepository;
   final CommandService _commandService;
+  final UserListsRepository? _userListsRepository;
+  List<UserListEntry> _autoModeEntries = const <UserListEntry>[];
+  bool _autoModeEntriesLoaded = false;
   final int _maxReconnectAttempts;
   final Duration _reconnectBaseDelay;
   final Duration _reconnectMaxDelay;
@@ -690,6 +697,103 @@ class ChatSessionController extends ChangeNotifier {
     users.putIfAbsent(key, () => <String>{}).addAll(modes);
   }
 
+  /// Automatic-mode rules (auto-op / auto-halfop / auto-voice) applied when a
+  /// matching user joins a channel where we hold the needed privilege.
+  List<UserListEntry> get autoModeEntries =>
+      List<UserListEntry>.unmodifiable(_autoModeEntries);
+
+  Future<void> _loadAutoModeEntries() async {
+    if (_autoModeEntriesLoaded) {
+      return;
+    }
+    final repository = _userListsRepository;
+    if (repository != null) {
+      try {
+        _autoModeEntries = await repository.loadAll();
+      } catch (_) {
+        _autoModeEntries = const <UserListEntry>[];
+      }
+    }
+    _autoModeEntriesLoaded = true;
+  }
+
+  Future<void> addAutoModeEntry(UserListEntry entry) async {
+    final repository = _userListsRepository;
+    if (repository != null) {
+      _autoModeEntries = await repository.add(entry);
+    } else {
+      _autoModeEntries = <UserListEntry>[
+        ..._autoModeEntries.where((e) => e.key != entry.key),
+        entry,
+      ];
+    }
+    _autoModeEntriesLoaded = true;
+    notifyListeners();
+  }
+
+  Future<void> removeAutoModeEntry(UserListEntry entry) async {
+    final repository = _userListsRepository;
+    if (repository != null) {
+      _autoModeEntries = await repository.remove(entry);
+    } else {
+      _autoModeEntries =
+          _autoModeEntries.where((e) => e.key != entry.key).toList();
+    }
+    notifyListeners();
+  }
+
+  /// When [nick] joins [channel], grants the highest auto-mode we are entitled
+  /// to and the user is listed for. No-op for our own joins or when we lack the
+  /// needed channel privilege.
+  void _maybeApplyAutoModes(
+    String channel,
+    String nick,
+    String tabId, {
+    String? ident,
+    String? host,
+  }) {
+    if (_autoModeEntries.isEmpty || _isSelfNick(nick)) {
+      return;
+    }
+    final ownModes =
+        _channelUserModes[tabId]?[currentNick.trim().toLowerCase()] ??
+        const <String>{};
+    final hasOp = ownModes.contains('o') ||
+        ownModes.contains('q') ||
+        ownModes.contains('a');
+    final hasHalfOp = ownModes.contains('h');
+    for (final type in const [
+      UserListType.autoOp,
+      UserListType.autoHalfOp,
+      UserListType.autoVoice,
+    ]) {
+      final matched = _autoModeEntries.any(
+        (entry) =>
+            entry.type == type &&
+            entry.matches(
+              nick: nick,
+              ident: ident,
+              host: host,
+              channel: channel,
+              networkId: network.id,
+            ),
+      );
+      if (!matched) {
+        continue;
+      }
+      final canApply = switch (type) {
+        UserListType.autoOp || UserListType.autoHalfOp => hasOp,
+        UserListType.autoVoice => hasOp || hasHalfOp,
+      };
+      if (canApply) {
+        unawaited(
+          _ircService.sendRaw('MODE $channel +${type.modeChar} $nick'),
+        );
+        return;
+      }
+    }
+  }
+
   Future<void> start() {
     if (_isDisposed) {
       return Future<void>.value();
@@ -713,6 +817,7 @@ class ChatSessionController extends ChangeNotifier {
     if (!_isBootstrapped) {
       await _commandService.load();
       await _loadPersistedState();
+      await _loadAutoModeEntries();
       if (_isDisposed) {
         return;
       }
@@ -2565,9 +2670,131 @@ class ChatSessionController extends ChangeNotifier {
       case 'disconnect':
         await _ircService.disconnect(rest.isEmpty ? null : rest);
         return;
+      case 'autovoice':
+        await _handleAutoModeCommand(UserListType.autoVoice, rest, remove: false);
+        return;
+      case 'unautovoice':
+        await _handleAutoModeCommand(UserListType.autoVoice, rest, remove: true);
+        return;
+      case 'autoop':
+        await _handleAutoModeCommand(UserListType.autoOp, rest, remove: false);
+        return;
+      case 'unautoop':
+        await _handleAutoModeCommand(UserListType.autoOp, rest, remove: true);
+        return;
+      case 'autohalfop':
+        await _handleAutoModeCommand(
+          UserListType.autoHalfOp,
+          rest,
+          remove: false,
+        );
+        return;
+      case 'unautohalfop':
+        await _handleAutoModeCommand(
+          UserListType.autoHalfOp,
+          rest,
+          remove: true,
+        );
+        return;
+      case 'autolist':
+      case 'autolists':
+        _handleAutoListCommand();
+        return;
       default:
         await _ircService.sendRaw(commandLine);
         return;
+    }
+  }
+
+  Future<void> _handleAutoModeCommand(
+    UserListType type,
+    String rest, {
+    required bool remove,
+  }) async {
+    final tokens = rest
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((token) => token.isNotEmpty)
+        .toList();
+    if (tokens.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content:
+            'Usage: /${remove ? 'un' : ''}${type.id} <nick|mask> [#chan,#chan]',
+        kind: IrcMessageKind.error,
+      );
+      return;
+    }
+    final mask = tokens.first;
+    final channels = tokens.length > 1
+        ? tokens[1].split(',').map((c) => c.trim()).where((c) => c.isNotEmpty).toList()
+        : const <String>[];
+
+    if (remove) {
+      final normalized = UserListEntry(type: type, mask: mask)
+          .normalizedMask
+          .toLowerCase();
+      final matches = _autoModeEntries
+          .where(
+            (entry) =>
+                entry.type == type &&
+                entry.normalizedMask.toLowerCase() == normalized &&
+                (entry.network == null || entry.network == network.id),
+          )
+          .toList();
+      for (final match in matches) {
+        await removeAutoModeEntry(match);
+      }
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: matches.isEmpty
+            ? '$mask was not on ${type.label}.'
+            : 'Removed $mask from ${type.label}.',
+        kind: IrcMessageKind.system,
+      );
+      return;
+    }
+
+    await addAutoModeEntry(
+      UserListEntry(
+        type: type,
+        mask: mask,
+        channels: channels,
+        network: network.id,
+      ),
+    );
+    _appendMessage(
+      tabId: activeTab.id,
+      sender: '*',
+      content: channels.isEmpty
+          ? 'Added $mask to ${type.label}.'
+          : 'Added $mask to ${type.label} (${channels.join(', ')}).',
+      kind: IrcMessageKind.system,
+    );
+  }
+
+  void _handleAutoListCommand() {
+    if (_autoModeEntries.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: 'No auto-mode rules configured.',
+        kind: IrcMessageKind.system,
+      );
+      return;
+    }
+    for (final entry in _autoModeEntries) {
+      final scope = entry.channels.isEmpty
+          ? 'all channels'
+          : entry.channels.join(', ');
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: '${entry.type.label}: ${entry.mask} · $scope',
+        kind: IrcMessageKind.system,
+      );
     }
   }
 
@@ -3618,6 +3845,14 @@ class ChatSessionController extends ChangeNotifier {
           );
           if (nick == (_ircService.currentNick ?? network.nickname)) {
             _activeTabId = tab.id;
+          } else {
+            _maybeApplyAutoModes(
+              channel,
+              nick,
+              tab.id,
+              ident: identity.ident,
+              host: identity.host,
+            );
           }
         }
       case 'PART':

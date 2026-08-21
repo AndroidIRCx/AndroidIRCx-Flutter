@@ -47,8 +47,10 @@ class _AppLockGateState extends State<AppLockGate>
     if (!widget.enabled) {
       _unlocked = true;
     } else if (!oldWidget.enabled && widget.enabled) {
-      _unlocked = false;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _attemptUnlock());
+      // Just enabled at runtime: the user is already in the app (and confirmed
+      // authentication in Settings), so stay unlocked now. The lock engages on
+      // the next time the app is backgrounded and resumed.
+      _unlocked = true;
     }
   }
 

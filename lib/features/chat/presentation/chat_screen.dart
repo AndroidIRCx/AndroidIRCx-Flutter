@@ -10,9 +10,14 @@ import 'package:androidircx/dcc/services/dcc_file_picker.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
+import 'package:androidircx/features/chat/data/channel_notes_repository.dart';
+import 'package:androidircx/features/chat/data/user_list_entry.dart';
+import 'package:androidircx/features/chat/data/user_notes_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
+import 'package:androidircx/features/chat/presentation/auto_mode_lists_screen.dart';
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
+import 'package:androidircx/features/chat/presentation/media_player_screen.dart';
 import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
@@ -36,11 +41,21 @@ class ChatScreen extends StatefulWidget {
     this.networkController,
     this.onSwitchNetwork,
     this.onManageNetworks,
+    this.channelNotesRepository,
+    this.userNotesRepository,
   });
 
   final ChatSessionController controller;
   final DccFilePicker? filePicker;
   final MediaDownloadService? mediaDownloadService;
+
+  /// Local per-channel notes store; defaults to a shared-preferences backed
+  /// instance. Injectable for tests.
+  final ChannelNotesRepository? channelNotesRepository;
+
+  /// Local per-user (nick) notes store; defaults to a shared-preferences
+  /// backed instance. Injectable for tests.
+  final UserNotesRepository? userNotesRepository;
 
   /// Live sessions across all networks, used by the in-chat network switcher.
   final SessionRegistry? sessionRegistry;
@@ -75,6 +90,14 @@ class _ChatScreenState extends State<ChatScreen> {
       widget.filePicker ?? const MethodChannelDccFilePicker();
   MediaDownloadService get _mediaDownloadService =>
       widget.mediaDownloadService ?? createMediaDownloadService();
+  ChannelNotesRepository? _defaultChannelNotes;
+  ChannelNotesRepository get _channelNotesRepository =>
+      widget.channelNotesRepository ??
+      (_defaultChannelNotes ??= ChannelNotesRepository());
+  UserNotesRepository? _defaultUserNotes;
+  UserNotesRepository get _userNotesRepository =>
+      widget.userNotesRepository ??
+      (_defaultUserNotes ??= UserNotesRepository());
 
   @override
   void initState() {
@@ -242,6 +265,20 @@ class _ChatScreenState extends State<ChatScreen> {
                         MaterialPageRoute<void>(
                           builder: (_) =>
                               IgnoreListScreen(controller: _controller),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.rule_outlined),
+                    title: const Text('Auto-mode lists'),
+                    subtitle: const Text('Auto-op, auto-halfop, auto-voice'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              AutoModeListsScreen(controller: _controller),
                         ),
                       );
                     },
@@ -662,6 +699,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _showChannelUserActions(String nick) async {
+    final network = _controller.network.id;
+    final note = await _userNotesRepository.getNote(network, nick);
+    if (!mounted) {
+      return;
+    }
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -677,7 +719,8 @@ class _ChatScreenState extends State<ChatScreen> {
         }
 
         return SafeArea(
-          child: Column(
+          child: SingleChildScrollView(
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
@@ -685,8 +728,21 @@ class _ChatScreenState extends State<ChatScreen> {
                   nick,
                   style: Theme.of(sheetContext).textTheme.titleMedium,
                 ),
-                subtitle: const Text('Channel user actions'),
+                subtitle: Text(
+                  note.isEmpty ? 'Channel user actions' : 'Note: $note',
+                ),
               ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.sticky_note_2_outlined),
+                title: Text(note.isEmpty ? 'Add note' : 'Edit note'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  unawaited(_showUserNoteDialog(nick, note));
+                },
+              ),
+              for (final type in UserListType.values)
+                _autoModeToggleTile(sheetContext, nick, type),
               const Divider(height: 1),
               action('WHOIS', Icons.badge_outlined, ChannelUserAction.whois),
               action(
@@ -709,6 +765,7 @@ class _ChatScreenState extends State<ChatScreen> {
               action('Kick', Icons.logout, ChannelUserAction.kick),
               action('Ban', Icons.block, ChannelUserAction.ban),
             ],
+            ),
           ),
         );
       },
@@ -829,6 +886,136 @@ class _ChatScreenState extends State<ChatScreen> {
         _controller.selectTab(tab.id);
         Navigator.of(context).pop();
       },
+      onLongPress: tab.type == ChatTabType.channel
+          ? () {
+              Navigator.of(context).pop();
+              unawaited(_showChannelNoteDialog(tab));
+            }
+          : null,
+    );
+  }
+
+  Future<void> _showChannelNoteDialog(ChatTab tab) async {
+    final network = _controller.network.id;
+    final existing = await _channelNotesRepository.getNote(network, tab.name);
+    if (!mounted) {
+      return;
+    }
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => _NoteDialog(
+        title: 'Note for ${tab.name}',
+        hint: 'Notes for this channel (stored only on this device)',
+        initialText: existing,
+      ),
+    );
+    if (result == null) {
+      return;
+    }
+    await _channelNotesRepository.setNote(network, tab.name, result);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.trim().isEmpty ? 'Channel note cleared.' : 'Channel note saved.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showUserNoteDialog(String nick, String existing) async {
+    final network = _controller.network.id;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => _NoteDialog(
+        title: 'Note for $nick',
+        hint: 'Notes about this user (stored only on this device)',
+        initialText: existing,
+      ),
+    );
+    if (result == null) {
+      return;
+    }
+    await _userNotesRepository.setNote(network, nick, result);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.trim().isEmpty ? 'User note cleared.' : 'User note saved.',
+        ),
+      ),
+    );
+  }
+
+  UserListEntry? _existingAutoModeEntry(String nick, UserListType type) {
+    final normalized = '${nick.trim().toLowerCase()}!*@*';
+    for (final entry in _controller.autoModeEntries) {
+      if (entry.type == type &&
+          entry.normalizedMask.toLowerCase() == normalized &&
+          (entry.network == null || entry.network == _controller.network.id)) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  Widget _autoModeToggleTile(
+    BuildContext sheetContext,
+    String nick,
+    UserListType type,
+  ) {
+    final existing = _existingAutoModeEntry(nick, type);
+    final active = existing != null;
+    return ListTile(
+      leading: Icon(
+        switch (type) {
+          UserListType.autoOp => Icons.shield_moon_outlined,
+          UserListType.autoHalfOp => Icons.shield_outlined,
+          UserListType.autoVoice => Icons.record_voice_over_outlined,
+        },
+      ),
+      title: Text(type.label),
+      trailing: active
+          ? const Icon(Icons.check, size: 18)
+          : const Icon(Icons.add, size: 18),
+      onTap: () {
+        Navigator.of(sheetContext).pop();
+        unawaited(_toggleAutoMode(nick, type, existing));
+      },
+    );
+  }
+
+  Future<void> _toggleAutoMode(
+    String nick,
+    UserListType type,
+    UserListEntry? existing,
+  ) async {
+    if (existing != null) {
+      await _controller.removeAutoModeEntry(existing);
+    } else {
+      await _controller.addAutoModeEntry(
+        UserListEntry(
+          type: type,
+          mask: nick,
+          network: _controller.network.id,
+        ),
+      );
+    }
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          existing != null
+              ? 'Removed $nick from ${type.label}.'
+              : 'Added $nick to ${type.label}.',
+        ),
+      ),
     );
   }
 
@@ -1863,6 +2050,57 @@ class _ServiceQuickActions extends StatelessWidget {
   }
 }
 
+class _NoteDialog extends StatefulWidget {
+  const _NoteDialog({
+    required this.title,
+    required this.hint,
+    required this.initialText,
+  });
+
+  final String title;
+  final String hint;
+  final String initialText;
+
+  @override
+  State<_NoteDialog> createState() => _NoteDialogState();
+}
+
+class _NoteDialogState extends State<_NoteDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialText,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        minLines: 3,
+        maxLines: 6,
+        decoration: InputDecoration(hintText: widget.hint),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
 class _MessageList extends StatelessWidget {
   const _MessageList({
     required this.messages,
@@ -2462,11 +2700,20 @@ class _AttachmentCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: url == null
-            ? null
-            : () => isImage
-                  ? _showImagePreview(context, url)
-                  : _openExternalUrl(url),
+        onTap: () {
+          switch (attachmentTapAction(attachment)) {
+            case AttachmentTapAction.none:
+              break;
+            case AttachmentTapAction.imagePreview:
+              unawaited(_showImagePreview(context, url!));
+            case AttachmentTapAction.playVideo:
+              _openMediaPlayer(context, url!, isAudio: false, title: title);
+            case AttachmentTapAction.playAudio:
+              _openMediaPlayer(context, url!, isAudio: true, title: title);
+            case AttachmentTapAction.external:
+              unawaited(_openExternalUrl(url!));
+          }
+        },
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: Column(
@@ -2784,6 +3031,51 @@ Future<void> _openExternalUrl(String rawUrl) async {
   }
 
   await launchUrl(uri, mode: LaunchMode.platformDefault);
+}
+
+/// How tapping an attachment should behave. Extracted for testing.
+enum AttachmentTapAction { none, imagePreview, playVideo, playAudio, external }
+
+AttachmentTapAction attachmentTapAction(IrcMessageAttachment attachment) {
+  final url = attachment.uri;
+  if (url == null) {
+    return AttachmentTapAction.none;
+  }
+  switch (attachment.type) {
+    case IrcMessageAttachmentType.image:
+      return AttachmentTapAction.imagePreview;
+    case IrcMessageAttachmentType.video:
+      return AttachmentTapAction.playVideo;
+    case IrcMessageAttachmentType.audio:
+      return AttachmentTapAction.playAudio;
+    case IrcMessageAttachmentType.url:
+      if (isVideoUrl(url)) {
+        return AttachmentTapAction.playVideo;
+      }
+      if (isAudioUrl(url)) {
+        return AttachmentTapAction.playAudio;
+      }
+      return AttachmentTapAction.external;
+    case IrcMessageAttachmentType.file:
+    case IrcMessageAttachmentType.media:
+    case IrcMessageAttachmentType.dccChat:
+    case IrcMessageAttachmentType.dccSend:
+      return AttachmentTapAction.external;
+  }
+}
+
+void _openMediaPlayer(
+  BuildContext context,
+  String url, {
+  required bool isAudio,
+  String? title,
+}) {
+  Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) =>
+          MediaPlayerScreen(url: url, isAudio: isAudio, title: title),
+    ),
+  );
 }
 
 Future<void> _copyToClipboard(BuildContext context, String text) async {

@@ -16,7 +16,8 @@ enum NetworkSecretField {
   proxyPassword('proxyPassword'),
   clientCertificate('clientCertificate'),
   clientPrivateKey('clientPrivateKey'),
-  clientKeyPassphrase('clientKeyPassphrase');
+  clientKeyPassphrase('clientKeyPassphrase'),
+  clientPkcs12('clientPkcs12');
 
   const NetworkSecretField(this.jsonKey);
 

@@ -675,6 +675,16 @@ void main() {
     await tester.pump();
     await tester.pump();
 
+    Future<void> scrollTo(String key) async {
+      await tester.scrollUntilVisible(
+        find.byKey(Key(key)),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await scrollTo('settings-theme-preset');
     await tester.tap(find.byKey(const Key('settings-theme-preset')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Custom').last);
@@ -682,6 +692,7 @@ void main() {
 
     const customJson =
         '{"brightness":"dark","primary":"#336699","messageDcc":"#224433"}';
+    await scrollTo('settings-custom-theme-json');
     await tester.enterText(
       find.byKey(const Key('settings-custom-theme-json')),
       customJson,
@@ -689,20 +700,19 @@ void main() {
     await tester.tap(find.byTooltip('Save custom theme'));
     await tester.pumpAndSettle();
 
+    await scrollTo('settings-message-density');
     await tester.tap(find.byKey(const Key('settings-message-density')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Compact').last);
     await tester.pumpAndSettle();
 
-    await tester.drag(find.byType(ListView), const Offset(0, -350));
-    await tester.pumpAndSettle();
+    await scrollTo('settings-monospace-messages');
     await tester.tap(
       find.byKey(const Key('settings-monospace-messages')).first,
     );
     await tester.pumpAndSettle();
 
-    await tester.drag(find.byType(ListView), const Offset(0, -220));
-    await tester.pumpAndSettle();
+    await scrollTo('settings-nick-color-mode');
     await tester.tap(find.byKey(const Key('settings-nick-color-mode')).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Vivid').last);
@@ -726,11 +736,16 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     final settingsScrollable = find.byType(Scrollable).first;
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('settings-help-topic')),
-      500,
-      scrollable: settingsScrollable,
-    );
+    Future<void> scrollTo(String key) async {
+      await tester.scrollUntilVisible(
+        find.byKey(Key(key)),
+        200,
+        scrollable: settingsScrollable,
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await scrollTo('settings-help-topic');
     await tester.tap(find.byKey(const Key('settings-help-topic')));
     await tester.pumpAndSettle();
     expect(find.text('IRC help'), findsWidgets);
@@ -738,6 +753,7 @@ void main() {
     await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
 
+    await scrollTo('settings-privacy-topic');
     await tester.tap(find.byKey(const Key('settings-privacy-topic')));
     await tester.pumpAndSettle();
     expect(find.text('Privacy'), findsWidgets);
@@ -745,6 +761,7 @@ void main() {
     await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
 
+    await scrollTo('settings-support-topic');
     await tester.tap(find.byKey(const Key('settings-support-topic')));
     await tester.pumpAndSettle();
     expect(find.text('Support'), findsWidgets);
@@ -752,6 +769,7 @@ void main() {
     await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
 
+    await scrollTo('settings-release-audit-topic');
     await tester.tap(find.byKey(const Key('settings-release-audit-topic')));
     await tester.pumpAndSettle();
     expect(find.text('Release audit'), findsWidgets);

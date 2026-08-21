@@ -9,9 +9,11 @@ import 'package:androidircx/features/connections/presentation/profiles_screen.da
 import 'package:androidircx/features/connections/presentation/server_directory_picker.dart';
 import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
 import 'package:androidircx/features/settings/presentation/backup_screen.dart';
+import 'package:androidircx/features/settings/presentation/crash_reports_screen.dart';
 import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:local_auth/local_auth.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -20,6 +22,7 @@ class SettingsScreen extends StatefulWidget {
     this.settingsController,
     this.networkController,
     this.presetService,
+    this.appLockAuthenticator,
   });
 
   final SettingsRepository? repository;
@@ -29,6 +32,10 @@ class SettingsScreen extends StatefulWidget {
   /// network from the online presets API.
   final NetworkListController? networkController;
   final ServerPresetService? presetService;
+
+  /// Confirms the user can authenticate before app lock is enabled. Overridable
+  /// for tests; defaults to a biometric/PIN prompt.
+  final Future<bool> Function()? appLockAuthenticator;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -91,6 +98,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  _SettingsSection(
+                    title: 'Connections',
+                    children: [
+                      if (widget.networkController != null)
+                        ListTile(
+                          leading: const Icon(Icons.public),
+                          title: const Text('Server directory'),
+                          subtitle: const Text(
+                            'Add a network from the online IRC server list.',
+                          ),
+                          onTap: () => showServerDirectoryPicker(
+                            context,
+                            widget.networkController!,
+                            presetService: widget.presetService,
+                          ),
+                        ),
+                      ListTile(
+                        leading: const Icon(Icons.badge_outlined),
+                        title: const Text('Identity profiles'),
+                        subtitle: const Text(
+                          'Reusable nick/realname identities to attach to networks.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const ProfilesScreen(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
                   _SettingsSection(
                     title: 'Appearance',
                     children: [
@@ -389,6 +427,281 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: 12),
                   _SettingsSection(
+                    title: 'Security',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-app-lock'),
+                        secondary: const Icon(Icons.lock_outline),
+                        title: const Text('App lock'),
+                        subtitle: const Text(
+                          'Require fingerprint/PIN to open the app.',
+                        ),
+                        value: _settings.appLockEnabled,
+                        onChanged: (value) => _toggleAppLock(value),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-screenshot-protection'),
+                        secondary: const Icon(Icons.screenshot_monitor_outlined),
+                        title: const Text('Block screenshots'),
+                        subtitle: const Text(
+                          'Prevent screenshots and screen recording (Android).',
+                        ),
+                        value: _settings.screenshotProtection,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(screenshotProtection: value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Notifications',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-notify-highlights'),
+                        title: const Text('Highlights'),
+                        subtitle: const Text('Your nick or highlight words.'),
+                        value: _settings.notifyHighlights,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notifyHighlights: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-notify-pm'),
+                        title: const Text('Private messages'),
+                        value: _settings.notifyPrivateMessages,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notifyPrivateMessages: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-notify-dcc'),
+                        title: const Text('DCC offers'),
+                        value: _settings.notifyDccOffers,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notifyDccOffers: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-notify-errors'),
+                        title: const Text('Errors'),
+                        value: _settings.notifyErrors,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notifyErrors: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-notify-sound'),
+                        title: const Text('Notification sound'),
+                        value: _settings.notificationSound,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(notificationSound: value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Display',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-hide-jpq'),
+                        title: const Text('Hide join/part/quit'),
+                        subtitle: const Text(
+                          'Hide channel join, part, quit, and nick-change events.',
+                        ),
+                        value: _settings.hideJoinPartQuit,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(hideJoinPartQuit: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-show-timestamps'),
+                        title: const Text('Show timestamps'),
+                        value: _settings.showTimestamps,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(showTimestamps: value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Writing',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-enter-to-send'),
+                        title: const Text('Enter key sends'),
+                        subtitle: const Text(
+                          'When off, Enter inserts a newline; use the Send button.',
+                        ),
+                        value: _settings.enterToSend,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(enterToSend: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-show-send-button'),
+                        title: const Text('Show send button'),
+                        value: _settings.showSendButton,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(showSendButton: value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Highlighting',
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                        child: TextField(
+                          key: const Key('settings-highlight-words'),
+                          controller: _highlightWordsController,
+                          decoration: InputDecoration(
+                            labelText: 'Highlight words',
+                            helperText:
+                                'Comma-separated. Notify when a message '
+                                'mentions your nick or any of these.',
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.save_outlined),
+                              onPressed: () => _saveHighlightWords(
+                                _highlightWordsController.text,
+                              ),
+                            ),
+                          ),
+                          onSubmitted: _saveHighlightWords,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Away',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-auto-away'),
+                        title: const Text('Auto-away when idle'),
+                        value: _settings.autoAwayEnabled,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(autoAwayEnabled: value),
+                        ),
+                      ),
+                      ListTile(
+                        title: const Text('Idle timeout'),
+                        trailing: DropdownButton<int>(
+                          key: const Key('settings-auto-away-minutes'),
+                          value: _settings.autoAwayMinutes,
+                          items: const [5, 10, 15, 30, 60]
+                              .map(
+                                (m) => DropdownMenuItem<int>(
+                                  value: m,
+                                  child: Text('$m min'),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              _saveSettings(
+                                _settings.copyWith(autoAwayMinutes: value),
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                        child: TextField(
+                          key: const Key('settings-away-message'),
+                          controller: _awayMessageController,
+                          decoration: InputDecoration(
+                            labelText: 'Away message',
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.save_outlined),
+                              onPressed: () => _saveSettings(
+                                _settings.copyWith(
+                                  awayMessage:
+                                      _awayMessageController.text.trim().isEmpty
+                                      ? 'Away'
+                                      : _awayMessageController.text.trim(),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Message history',
+                    children: [
+                      ListTile(
+                        title: const Text('Keep per tab'),
+                        subtitle: const Text(
+                          'Older encrypted messages are trimmed on load.',
+                        ),
+                        trailing: DropdownButton<int>(
+                          key: const Key('settings-history-retention'),
+                          value: _settings.historyRetentionPerTab,
+                          items: const [
+                            DropdownMenuItem<int>(
+                              value: 1000,
+                              child: Text('1000'),
+                            ),
+                            DropdownMenuItem<int>(
+                              value: 5000,
+                              child: Text('5000'),
+                            ),
+                            DropdownMenuItem<int>(
+                              value: 20000,
+                              child: Text('20000'),
+                            ),
+                            DropdownMenuItem<int>(
+                              value: 0,
+                              child: Text('Unlimited'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              _saveSettings(
+                                _settings.copyWith(
+                                  historyRetentionPerTab: value,
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Channels',
+                    children: [
+                      SwitchListTile(
+                        key: const Key('settings-auto-rejoin'),
+                        title: const Text('Auto-rejoin on kick'),
+                        subtitle: const Text(
+                          'Rejoin a channel automatically after being kicked.',
+                        ),
+                        value: _settings.autoRejoinOnKick,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(autoRejoinOnKick: value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
                     title: 'Help',
                     children: [
                       ListTile(
@@ -466,303 +779,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           body: _releaseAuditText,
                         ),
                       ),
-                    ],
-                  ),
-                  _SettingsSection(
-                    title: 'Connections',
-                    children: [
-                      if (widget.networkController != null)
-                        ListTile(
-                          leading: const Icon(Icons.public),
-                          title: const Text('Server directory'),
-                          subtitle: const Text(
-                            'Add a network from the online IRC server list.',
-                          ),
-                          onTap: () => showServerDirectoryPicker(
-                            context,
-                            widget.networkController!,
-                            presetService: widget.presetService,
-                          ),
-                        ),
+                      const Divider(height: 1),
                       ListTile(
-                        leading: const Icon(Icons.badge_outlined),
-                        title: const Text('Identity profiles'),
+                        key: const Key('settings-crash-reports'),
+                        leading: const Icon(Icons.bug_report_outlined),
+                        title: const Text('Crash reports'),
                         subtitle: const Text(
-                          'Reusable nick/realname identities to attach to networks.',
+                          'Review and email crash reports to the AndroidIRCX team.',
                         ),
                         onTap: () => Navigator.of(context).push<void>(
                           MaterialPageRoute<void>(
-                            builder: (_) => const ProfilesScreen(),
+                            builder: (_) => CrashReportsScreen(),
                           ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  _SettingsSection(
-                    title: 'Security',
-                    children: [
-                      SwitchListTile(
-                        key: const Key('settings-app-lock'),
-                        secondary: const Icon(Icons.lock_outline),
-                        title: const Text('App lock'),
-                        subtitle: const Text(
-                          'Require fingerprint/PIN to open the app.',
-                        ),
-                        value: _settings.appLockEnabled,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(appLockEnabled: value),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        key: const Key('settings-screenshot-protection'),
-                        secondary: const Icon(Icons.screenshot_monitor_outlined),
-                        title: const Text('Block screenshots'),
-                        subtitle: const Text(
-                          'Prevent screenshots and screen recording (Android).',
-                        ),
-                        value: _settings.screenshotProtection,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(screenshotProtection: value),
-                        ),
-                      ),
-                    ],
-                  ),
-                  _SettingsSection(
-                    title: 'Notifications',
-                    children: [
-                      SwitchListTile(
-                        key: const Key('settings-notify-highlights'),
-                        title: const Text('Highlights'),
-                        subtitle: const Text('Your nick or highlight words.'),
-                        value: _settings.notifyHighlights,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notifyHighlights: value),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        key: const Key('settings-notify-pm'),
-                        title: const Text('Private messages'),
-                        value: _settings.notifyPrivateMessages,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notifyPrivateMessages: value),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        key: const Key('settings-notify-dcc'),
-                        title: const Text('DCC offers'),
-                        value: _settings.notifyDccOffers,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notifyDccOffers: value),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        key: const Key('settings-notify-errors'),
-                        title: const Text('Errors'),
-                        value: _settings.notifyErrors,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notifyErrors: value),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        key: const Key('settings-notify-sound'),
-                        title: const Text('Notification sound'),
-                        value: _settings.notificationSound,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(notificationSound: value),
-                        ),
-                      ),
-                    ],
-                  ),
-                  _SettingsSection(
-                    title: 'Display',
-                    children: [
-                      SwitchListTile(
-                        key: const Key('settings-hide-jpq'),
-                        title: const Text('Hide join/part/quit'),
-                        subtitle: const Text(
-                          'Hide channel join, part, quit, and nick-change events.',
-                        ),
-                        value: _settings.hideJoinPartQuit,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(hideJoinPartQuit: value),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        key: const Key('settings-show-timestamps'),
-                        title: const Text('Show timestamps'),
-                        value: _settings.showTimestamps,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(showTimestamps: value),
-                        ),
-                      ),
-                    ],
-                  ),
-                  _SettingsSection(
-                    title: 'Writing',
-                    children: [
-                      SwitchListTile(
-                        key: const Key('settings-enter-to-send'),
-                        title: const Text('Enter key sends'),
-                        subtitle: const Text(
-                          'When off, Enter inserts a newline; use the Send button.',
-                        ),
-                        value: _settings.enterToSend,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(enterToSend: value),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        key: const Key('settings-show-send-button'),
-                        title: const Text('Show send button'),
-                        value: _settings.showSendButton,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(showSendButton: value),
-                        ),
-                      ),
-                    ],
-                  ),
-                  _SettingsSection(
-                    title: 'Highlighting',
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                        child: TextField(
-                          key: const Key('settings-highlight-words'),
-                          controller: _highlightWordsController,
-                          decoration: InputDecoration(
-                            labelText: 'Highlight words',
-                            helperText:
-                                'Comma-separated. Notify when a message '
-                                'mentions your nick or any of these.',
-                            suffixIcon: IconButton(
-                              icon: const Icon(Icons.save_outlined),
-                              onPressed: () => _saveHighlightWords(
-                                _highlightWordsController.text,
-                              ),
-                            ),
-                          ),
-                          onSubmitted: _saveHighlightWords,
-                        ),
-                      ),
-                    ],
-                  ),
-                  _SettingsSection(
-                    title: 'Away',
-                    children: [
-                      SwitchListTile(
-                        key: const Key('settings-auto-away'),
-                        title: const Text('Auto-away when idle'),
-                        value: _settings.autoAwayEnabled,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(autoAwayEnabled: value),
-                        ),
-                      ),
-                      ListTile(
-                        title: const Text('Idle timeout'),
-                        trailing: DropdownButton<int>(
-                          key: const Key('settings-auto-away-minutes'),
-                          value: _settings.autoAwayMinutes,
-                          items: const [5, 10, 15, 30, 60]
-                              .map(
-                                (m) => DropdownMenuItem<int>(
-                                  value: m,
-                                  child: Text('$m min'),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            if (value != null) {
-                              _saveSettings(
-                                _settings.copyWith(autoAwayMinutes: value),
-                              );
-                            }
-                          },
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                        child: TextField(
-                          key: const Key('settings-away-message'),
-                          controller: _awayMessageController,
-                          decoration: InputDecoration(
-                            labelText: 'Away message',
-                            suffixIcon: IconButton(
-                              icon: const Icon(Icons.save_outlined),
-                              onPressed: () => _saveSettings(
-                                _settings.copyWith(
-                                  awayMessage:
-                                      _awayMessageController.text.trim().isEmpty
-                                      ? 'Away'
-                                      : _awayMessageController.text.trim(),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  _SettingsSection(
-                    title: 'Message history',
-                    children: [
-                      ListTile(
-                        title: const Text('Keep per tab'),
-                        subtitle: const Text(
-                          'Older encrypted messages are trimmed on load.',
-                        ),
-                        trailing: DropdownButton<int>(
-                          key: const Key('settings-history-retention'),
-                          value: _settings.historyRetentionPerTab,
-                          items: const [
-                            DropdownMenuItem<int>(
-                              value: 1000,
-                              child: Text('1000'),
-                            ),
-                            DropdownMenuItem<int>(
-                              value: 5000,
-                              child: Text('5000'),
-                            ),
-                            DropdownMenuItem<int>(
-                              value: 20000,
-                              child: Text('20000'),
-                            ),
-                            DropdownMenuItem<int>(
-                              value: 0,
-                              child: Text('Unlimited'),
-                            ),
-                          ],
-                          onChanged: (value) {
-                            if (value != null) {
-                              _saveSettings(
-                                _settings.copyWith(
-                                  historyRetentionPerTab: value,
-                                ),
-                              );
-                            }
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  _SettingsSection(
-                    title: 'Channels',
-                    children: [
-                      SwitchListTile(
-                        key: const Key('settings-auto-rejoin'),
-                        title: const Text('Auto-rejoin on kick'),
-                        subtitle: const Text(
-                          'Rejoin a channel automatically after being kicked.',
-                        ),
-                        value: _settings.autoRejoinOnKick,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(autoRejoinOnKick: value),
                         ),
                       ),
                     ],
@@ -864,6 +892,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _saveDccDownloadDirectory(String value) {
     return _saveSettings(
       _settings.copyWith(dccDownloadDirectoryPath: value.trim()),
+    );
+  }
+
+  Future<bool> _defaultAppLockAuth() async {
+    try {
+      final auth = LocalAuthentication();
+      final supported =
+          await auth.isDeviceSupported() || await auth.canCheckBiometrics;
+      if (!supported) {
+        return false;
+      }
+      return await auth.authenticate(
+        localizedReason: 'Confirm your fingerprint or PIN to enable app lock',
+        biometricOnly: false,
+        persistAcrossBackgrounding: true,
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _toggleAppLock(bool value) async {
+    // Turning off is immediate. Turning on first confirms the user can actually
+    // authenticate, so enabling it can never lock them out of the app.
+    if (!value) {
+      await _saveSettings(_settings.copyWith(appLockEnabled: false));
+      return;
+    }
+    final confirmed =
+        await (widget.appLockAuthenticator ?? _defaultAppLockAuth)();
+    if (!mounted) {
+      return;
+    }
+    if (!confirmed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'App lock not enabled: could not verify fingerprint or PIN. '
+            'Set up a screen lock on your device first.',
+          ),
+        ),
+      );
+      return;
+    }
+    await _saveSettings(_settings.copyWith(appLockEnabled: true));
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('App lock enabled. It will lock when you leave the app.'),
+      ),
     );
   }
 

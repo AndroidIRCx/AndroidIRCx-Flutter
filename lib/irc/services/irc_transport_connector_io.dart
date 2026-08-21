@@ -21,6 +21,22 @@ Future<IrcTransport> connectDefaultTransport(
 /// SASL EXTERNAL / CertFP.
 SecurityContext buildClientSecurityContext(ClientCertificate certificate) {
   final context = SecurityContext(withTrustedRoots: true);
+  if (certificate.isPkcs12) {
+    // Dart's SecurityContext parses PKCS#12 natively for both the certificate
+    // chain and the private key, using the import password.
+    final bytes = base64.decode(
+      certificate.pkcs12Base64!.replaceAll(RegExp(r'\s'), ''),
+    );
+    context.useCertificateChainBytes(
+      bytes,
+      password: certificate.privateKeyPassphrase,
+    );
+    context.usePrivateKeyBytes(
+      bytes,
+      password: certificate.privateKeyPassphrase,
+    );
+    return context;
+  }
   context.useCertificateChainBytes(utf8.encode(certificate.certificatePem));
   context.usePrivateKeyBytes(
     utf8.encode(certificate.privateKeyPem),
