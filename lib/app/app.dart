@@ -1,5 +1,8 @@
 import 'package:androidircx/app/theme/app_theme.dart';
+import 'dart:async';
+
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
+import 'package:androidircx/core/platform/screen_security.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/core/settings/app_settings_controller.dart';
 import 'package:androidircx/core/storage/network_repository.dart';
@@ -31,6 +34,7 @@ class AndroidIrcxApp extends StatefulWidget {
 
 class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
   late final AppSettingsController _settingsController;
+  bool? _appliedScreenSecure;
 
   @override
   void initState() {
@@ -38,11 +42,21 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
     _settingsController = AppSettingsController(
       repository: widget.settingsRepository,
     );
+    _settingsController.addListener(_applyScreenSecurity);
     _settingsController.load();
+  }
+
+  void _applyScreenSecurity() {
+    final secure = _settingsController.settings.screenshotProtection;
+    if (secure != _appliedScreenSecure) {
+      _appliedScreenSecure = secure;
+      unawaited(const ScreenSecurity().setSecure(secure));
+    }
   }
 
   @override
   void dispose() {
+    _settingsController.removeListener(_applyScreenSecurity);
     _settingsController.dispose();
     super.dispose();
   }

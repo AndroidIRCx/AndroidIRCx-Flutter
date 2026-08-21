@@ -37,6 +37,7 @@ class AppSettings {
     this.awayMessage = 'Away',
     this.historyRetentionPerTab = 5000,
     this.autoRejoinOnKick = true,
+    this.screenshotProtection = false,
   });
 
   final bool showRawEvents;
@@ -83,6 +84,9 @@ class AppSettings {
   /// Whether to rejoin a channel automatically after being kicked.
   final bool autoRejoinOnKick;
 
+  /// Whether to block screenshots/screen recording (Android FLAG_SECURE).
+  final bool screenshotProtection;
+
   AppSettings copyWith({
     bool? showRawEvents,
     NoticeRoutingMode? noticeRouting,
@@ -113,6 +117,7 @@ class AppSettings {
     String? awayMessage,
     int? historyRetentionPerTab,
     bool? autoRejoinOnKick,
+    bool? screenshotProtection,
   }) {
     return AppSettings(
       showRawEvents: showRawEvents ?? this.showRawEvents,
@@ -152,6 +157,7 @@ class AppSettings {
       historyRetentionPerTab:
           historyRetentionPerTab ?? this.historyRetentionPerTab,
       autoRejoinOnKick: autoRejoinOnKick ?? this.autoRejoinOnKick,
+      screenshotProtection: screenshotProtection ?? this.screenshotProtection,
     );
   }
 
@@ -186,6 +192,7 @@ class AppSettings {
       'awayMessage': awayMessage,
       'historyRetentionPerTab': historyRetentionPerTab,
       'autoRejoinOnKick': autoRejoinOnKick,
+      'screenshotProtection': screenshotProtection,
     };
   }
 
@@ -243,6 +250,7 @@ class AppSettings {
       historyRetentionPerTab:
           (json['historyRetentionPerTab'] as num?)?.toInt() ?? 5000,
       autoRejoinOnKick: (json['autoRejoinOnKick'] as bool?) ?? true,
+      screenshotProtection: (json['screenshotProtection'] as bool?) ?? false,
     );
   }
 }
