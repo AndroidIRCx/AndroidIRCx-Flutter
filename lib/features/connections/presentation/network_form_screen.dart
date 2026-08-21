@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:androidircx/core/models/identity_profile.dart';
@@ -37,6 +38,7 @@ class NetworkFormResult {
     this.useClientCertificate = false,
     this.clientCertificatePem,
     this.clientPrivateKeyPem,
+    this.clientPkcs12Base64,
     this.clientKeyPassphrase,
   });
 
@@ -67,6 +69,7 @@ class NetworkFormResult {
   final bool useClientCertificate;
   final String? clientCertificatePem;
   final String? clientPrivateKeyPem;
+  final String? clientPkcs12Base64;
   final String? clientKeyPassphrase;
 }
 
@@ -89,8 +92,9 @@ class NetworkFormScreen extends StatefulWidget {
   /// picker. Injectable for tests.
   final DccFilePicker? certificateFilePicker;
 
-  /// Reads the picked file's text; defaults to `dart:io`. Injectable for tests.
-  final Future<String> Function(String path)? certificateFileReader;
+  /// Reads the picked file's bytes; defaults to `dart:io`. Injectable for
+  /// tests. PEM files decode as text; binary .p12/.pfx are kept as bytes.
+  final Future<List<int>> Function(String path)? certificateFileReader;
 
   @override
   State<NetworkFormScreen> createState() => _NetworkFormScreenState();
@@ -128,6 +132,7 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
   late final TextEditingController _clientKeyController;
   late final TextEditingController _clientKeyPassphraseController;
   late bool _useClientCertificate;
+  String? _clientPkcs12Base64;
 
   @override
   void initState() {
@@ -255,39 +260,56 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     if (path == null || !mounted) {
       return;
     }
-    String content;
+    List<int> bytes;
     try {
-      final reader = widget.certificateFileReader ?? _defaultReadCertFile;
-      content = await reader(path);
+      final reader = widget.certificateFileReader ?? _defaultReadCertBytes;
+      bytes = await reader(path);
     } catch (_) {
       _showFormSnack('Could not read the selected file.');
       return;
     }
-    final bundle = PemBundle.parse(content);
-    if (bundle.isEmpty) {
-      _showFormSnack(
-        'No PEM data found. For a .p12/.pfx file, convert it first: '
-        'openssl pkcs12 -in cert.p12 -out cert.pem -nodes',
-      );
+
+    // Decode as UTF-8 to detect PEM; binary .p12/.pfx will either fail to
+    // decode or contain no PEM blocks.
+    String? text;
+    try {
+      text = utf8.decode(bytes);
+    } catch (_) {
+      text = null;
+    }
+    final bundle = text == null ? const PemBundle() : PemBundle.parse(text);
+
+    if (!bundle.isEmpty) {
+      setState(() {
+        _clientPkcs12Base64 = null;
+        if (bundle.hasCertificate) {
+          _clientCertController.text = bundle.certificate!;
+        }
+        if (bundle.hasPrivateKey) {
+          _clientKeyController.text = bundle.privateKey!;
+        }
+      });
+      final parts = <String>[
+        if (bundle.hasCertificate) 'certificate',
+        if (bundle.hasPrivateKey) 'private key',
+      ].join(' and ');
+      _showFormSnack('Imported $parts from file.');
       return;
     }
+
+    // Binary PKCS#12 (.p12/.pfx): keep the bytes, TLS parses them natively.
     setState(() {
-      if (bundle.hasCertificate) {
-        _clientCertController.text = bundle.certificate!;
-      }
-      if (bundle.hasPrivateKey) {
-        _clientKeyController.text = bundle.privateKey!;
-      }
+      _clientPkcs12Base64 = base64.encode(bytes);
+      _clientCertController.clear();
+      _clientKeyController.clear();
     });
-    final parts = <String>[
-      if (bundle.hasCertificate) 'certificate',
-      if (bundle.hasPrivateKey) 'private key',
-    ].join(' and ');
-    _showFormSnack('Imported $parts from file.');
+    _showFormSnack(
+      'Imported PKCS#12 bundle. Enter its password below if it has one.',
+    );
   }
 
-  static Future<String> _defaultReadCertFile(String path) =>
-      File(path).readAsString();
+  static Future<List<int>> _defaultReadCertBytes(String path) =>
+      File(path).readAsBytes();
 
   @override
   Widget build(BuildContext context) {
@@ -403,35 +425,54 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                       key: const Key('network-form-import-cert'),
                       onPressed: () => unawaited(_importCertificateFile()),
                       icon: const Icon(Icons.file_open_outlined),
-                      label: const Text('Import from file (.pem)'),
+                      label: const Text('Import from file (.pem / .p12)'),
                     ),
                   ),
                   const SizedBox(height: 8),
-                  TextFormField(
-                    controller: _clientCertController,
-                    minLines: 2,
-                    maxLines: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'Client certificate PEM',
-                      helperText:
-                          'Paste or import -----BEGIN CERTIFICATE-----; leave empty to keep the stored one.',
+                  if (_clientPkcs12Base64 != null)
+                    ListTile(
+                      key: const Key('network-form-pkcs12-loaded'),
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.lock_outline),
+                      title: const Text('PKCS#12 bundle loaded'),
+                      subtitle: const Text(
+                        'The .p12/.pfx will be used for the TLS handshake.',
+                      ),
+                      trailing: TextButton(
+                        onPressed: () =>
+                            setState(() => _clientPkcs12Base64 = null),
+                        child: const Text('Clear'),
+                      ),
+                    )
+                  else ...[
+                    TextFormField(
+                      controller: _clientCertController,
+                      minLines: 2,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Client certificate PEM',
+                        helperText:
+                            'Paste or import -----BEGIN CERTIFICATE-----; leave empty to keep the stored one.',
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _clientKeyController,
-                    minLines: 2,
-                    maxLines: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'Private key PEM',
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _clientKeyController,
+                      minLines: 2,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Private key PEM',
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
+                    const SizedBox(height: 16),
+                  ],
                   TextFormField(
                     controller: _clientKeyPassphraseController,
                     obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Private key passphrase (optional)',
+                    decoration: InputDecoration(
+                      labelText: _clientPkcs12Base64 != null
+                          ? 'PKCS#12 password (optional)'
+                          : 'Private key passphrase (optional)',
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -742,6 +783,7 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
         useClientCertificate: _useClientCertificate,
         clientCertificatePem: _clientCertController.text,
         clientPrivateKeyPem: _clientKeyController.text,
+        clientPkcs12Base64: _clientPkcs12Base64,
         clientKeyPassphrase: _clientKeyPassphraseController.text,
       ),
     );

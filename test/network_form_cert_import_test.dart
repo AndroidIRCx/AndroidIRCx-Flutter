@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:androidircx/dcc/services/dcc_file_picker.dart';
 import 'package:androidircx/features/connections/presentation/network_form_screen.dart';
 import 'package:flutter/material.dart';
@@ -42,7 +44,7 @@ void main() {
       MaterialApp(
         home: NetworkFormScreen(
           certificateFilePicker: const _FakePicker('/tmp/cert.pem'),
-          certificateFileReader: (_) async => '$_cert\n$_key\n',
+          certificateFileReader: (_) async => utf8.encode('$_cert\n$_key\n'),
         ),
       ),
     );
@@ -59,12 +61,15 @@ void main() {
     expect(find.textContaining('MIIEvKEY'), findsWidgets);
   });
 
-  testWidgets('shows a convert hint for non-pem (.p12) files', (tester) async {
+  testWidgets('loads a binary .p12 bundle', (tester) async {
+    // Bytes that are not valid UTF-8 and contain no PEM blocks -> treated as a
+    // PKCS#12 bundle.
+    final p12Bytes = <int>[0x30, 0x82, 0x04, 0xff, 0xfe, 0x00, 0x01];
     await tester.pumpWidget(
       MaterialApp(
         home: NetworkFormScreen(
           certificateFilePicker: const _FakePicker('/tmp/cert.p12'),
-          certificateFileReader: (_) async => 'binary-pkcs12-bytes',
+          certificateFileReader: (_) async => p12Bytes,
         ),
       ),
     );
@@ -73,6 +78,10 @@ void main() {
     await tester.tap(find.byKey(const Key('network-form-import-cert')));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('openssl pkcs12'), findsOneWidget);
+    expect(
+      find.byKey(const Key('network-form-pkcs12-loaded')),
+      findsOneWidget,
+    );
+    expect(find.text('PKCS#12 bundle loaded'), findsOneWidget);
   });
 }

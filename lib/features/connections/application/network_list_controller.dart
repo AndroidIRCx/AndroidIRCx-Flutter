@@ -60,6 +60,7 @@ class NetworkListController extends ChangeNotifier {
     bool useClientCertificate = false,
     String? clientCertificatePem,
     String? clientPrivateKeyPem,
+    String? clientPkcs12Base64,
     String? clientKeyPassphrase,
     String? networkId,
   }) async {
@@ -102,15 +103,27 @@ class NetworkListController extends ChangeNotifier {
 
     final certPem = (clientCertificatePem ?? '').trim();
     final keyPem = (clientPrivateKeyPem ?? '').trim();
-    if (useClientCertificate && certPem.isNotEmpty && keyPem.isNotEmpty) {
+    final pkcs12 = (clientPkcs12Base64 ?? '').trim();
+    final passphrase = (clientKeyPassphrase ?? '').trim().isEmpty
+        ? null
+        : clientKeyPassphrase;
+    if (useClientCertificate && pkcs12.isNotEmpty) {
+      await _certificateStore.save(
+        network.id,
+        ClientCertificate(
+          pkcs12Base64: pkcs12,
+          privateKeyPassphrase: passphrase,
+        ),
+      );
+    } else if (useClientCertificate &&
+        certPem.isNotEmpty &&
+        keyPem.isNotEmpty) {
       await _certificateStore.save(
         network.id,
         ClientCertificate(
           certificatePem: certPem,
           privateKeyPem: keyPem,
-          privateKeyPassphrase: (clientKeyPassphrase ?? '').trim().isEmpty
-              ? null
-              : clientKeyPassphrase,
+          privateKeyPassphrase: passphrase,
         ),
       );
     }

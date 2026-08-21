@@ -8,19 +8,30 @@ import 'package:androidircx/core/storage/network_secret_keys.dart';
 /// config JSON, logs, or exports.
 class ClientCertificate {
   const ClientCertificate({
-    required this.certificatePem,
-    required this.privateKeyPem,
+    this.certificatePem = '',
+    this.privateKeyPem = '',
+    this.pkcs12Base64,
     this.privateKeyPassphrase,
   });
 
   final String certificatePem;
   final String privateKeyPem;
+
+  /// Base64-encoded PKCS#12 (.p12/.pfx) bundle. When set, TLS uses this bundle
+  /// (with [privateKeyPassphrase] as the import password) instead of the PEM
+  /// fields. Dart's [SecurityContext] parses PKCS#12 natively.
+  final String? pkcs12Base64;
+
   final String? privateKeyPassphrase;
+
+  /// Whether this certificate is backed by a PKCS#12 bundle.
+  bool get isPkcs12 => (pkcs12Base64 ?? '').isNotEmpty;
 
   @override
   String toString() =>
       'ClientCertificate(certificatePem: [REDACTED], '
       'privateKeyPem: [REDACTED], '
+      'pkcs12Base64: ${isPkcs12 ? '[REDACTED]' : 'null'}, '
       'privateKeyPassphrase: ${privateKeyPassphrase == null ? 'null' : '[REDACTED]'})';
 }
 
@@ -55,12 +66,32 @@ class CertificateStore {
       certificate.privateKeyPem.trim(),
     );
     await _storage.setSecret(
+      _key(networkId, NetworkSecretField.clientPkcs12),
+      certificate.pkcs12Base64?.trim(),
+    );
+    await _storage.setSecret(
       _key(networkId, NetworkSecretField.clientKeyPassphrase),
       certificate.privateKeyPassphrase,
     );
   }
 
   Future<ClientCertificate?> read(String networkId) async {
+    final passphrase = await _storage.getSecret(
+      _key(networkId, NetworkSecretField.clientKeyPassphrase),
+    );
+    final normalizedPassphrase =
+        (passphrase == null || passphrase.isEmpty) ? null : passphrase;
+
+    final pkcs12 = await _storage.getSecret(
+      _key(networkId, NetworkSecretField.clientPkcs12),
+    );
+    if (pkcs12 != null && pkcs12.isNotEmpty) {
+      return ClientCertificate(
+        pkcs12Base64: pkcs12,
+        privateKeyPassphrase: normalizedPassphrase,
+      );
+    }
+
     final certificatePem = await _storage.getSecret(
       _key(networkId, NetworkSecretField.clientCertificate),
     );
@@ -73,18 +104,20 @@ class CertificateStore {
         privateKeyPem.isEmpty) {
       return null;
     }
-    final passphrase = await _storage.getSecret(
-      _key(networkId, NetworkSecretField.clientKeyPassphrase),
-    );
     return ClientCertificate(
       certificatePem: certificatePem,
       privateKeyPem: privateKeyPem,
-      privateKeyPassphrase:
-          (passphrase == null || passphrase.isEmpty) ? null : passphrase,
+      privateKeyPassphrase: normalizedPassphrase,
     );
   }
 
   Future<bool> has(String networkId) async {
+    final pkcs12 = await _storage.getSecret(
+      _key(networkId, NetworkSecretField.clientPkcs12),
+    );
+    if (pkcs12 != null && pkcs12.isNotEmpty) {
+      return true;
+    }
     final certificatePem = await _storage.getSecret(
       _key(networkId, NetworkSecretField.clientCertificate),
     );
@@ -105,6 +138,9 @@ class CertificateStore {
       _key(networkId, NetworkSecretField.clientPrivateKey),
     );
     await _storage.removeSecret(
+      _key(networkId, NetworkSecretField.clientPkcs12),
+    );
+    await _storage.removeSecret(
       _key(networkId, NetworkSecretField.clientKeyPassphrase),
     );
   }
@@ -119,6 +155,15 @@ class CertificateStore {
 /// This is a structural check (well-formed BEGIN/END blocks with base64 bodies),
 /// not a cryptographic verification — the TLS stack performs the real handshake.
 void validateClientCertificate(ClientCertificate certificate) {
+  if (certificate.isPkcs12) {
+    final body = certificate.pkcs12Base64!.replaceAll(RegExp(r'\s'), '');
+    if (body.isEmpty || !_isBase64(body)) {
+      throw const CertificateFormatException(
+        'PKCS#12 bundle must be base64-encoded .p12/.pfx data.',
+      );
+    }
+    return;
+  }
   if (!_isPemBlock(
     certificate.certificatePem,
     const ['CERTIFICATE'],

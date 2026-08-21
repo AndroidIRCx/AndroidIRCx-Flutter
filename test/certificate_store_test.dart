@@ -114,6 +114,60 @@ void main() {
       );
     });
 
+    test('saves and reads a PKCS#12 bundle', () async {
+      final storage = InMemorySecretStorage();
+      final store = CertificateStore(storage);
+      const p12 = 'YWJjZGVmMTIzNDU2Nzg5MA==';
+
+      await store.save(
+        'net-1',
+        const ClientCertificate(pkcs12Base64: p12, privateKeyPassphrase: 'pw'),
+      );
+
+      expect(await store.has('net-1'), isTrue);
+      final read = await store.read('net-1');
+      expect(read, isNotNull);
+      expect(read!.isPkcs12, isTrue);
+      expect(read.pkcs12Base64, p12);
+      expect(read.privateKeyPassphrase, 'pw');
+      expect(read.certificatePem, isEmpty);
+    });
+
+    test('switching from PKCS#12 to PEM clears the bundle', () async {
+      final storage = InMemorySecretStorage();
+      final store = CertificateStore(storage);
+      await store.save(
+        'net-1',
+        const ClientCertificate(pkcs12Base64: 'YWJjZA=='),
+      );
+      await store.save(
+        'net-1',
+        const ClientCertificate(certificatePem: _certPem, privateKeyPem: _keyPem),
+      );
+      final read = await store.read('net-1');
+      expect(read!.isPkcs12, isFalse);
+      expect(read.certificatePem, _certPem);
+    });
+
+    test('delete removes a PKCS#12 bundle', () async {
+      final store = CertificateStore(InMemorySecretStorage());
+      await store.save(
+        'net-1',
+        const ClientCertificate(pkcs12Base64: 'YWJjZA=='),
+      );
+      await store.delete('net-1');
+      expect(await store.has('net-1'), isFalse);
+    });
+
+    test('rejects a non-base64 PKCS#12 bundle', () {
+      expect(
+        () => validateClientCertificate(
+          const ClientCertificate(pkcs12Base64: 'not base64 !!!'),
+        ),
+        throwsA(isA<CertificateFormatException>()),
+      );
+    });
+
     test('save rejects invalid material before writing to storage', () async {
       final storage = InMemorySecretStorage();
       final store = CertificateStore(storage);
