@@ -13,6 +13,7 @@ import 'package:androidircx/features/settings/presentation/crash_reports_screen.
 import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:local_auth/local_auth.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -21,6 +22,7 @@ class SettingsScreen extends StatefulWidget {
     this.settingsController,
     this.networkController,
     this.presetService,
+    this.appLockAuthenticator,
   });
 
   final SettingsRepository? repository;
@@ -30,6 +32,10 @@ class SettingsScreen extends StatefulWidget {
   /// network from the online presets API.
   final NetworkListController? networkController;
   final ServerPresetService? presetService;
+
+  /// Confirms the user can authenticate before app lock is enabled. Overridable
+  /// for tests; defaults to a biometric/PIN prompt.
+  final Future<bool> Function()? appLockAuthenticator;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -524,9 +530,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           'Require fingerprint/PIN to open the app.',
                         ),
                         value: _settings.appLockEnabled,
-                        onChanged: (value) => _saveSettings(
-                          _settings.copyWith(appLockEnabled: value),
-                        ),
+                        onChanged: (value) => _toggleAppLock(value),
                       ),
                       const Divider(height: 1),
                       SwitchListTile(
@@ -879,6 +883,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _saveDccDownloadDirectory(String value) {
     return _saveSettings(
       _settings.copyWith(dccDownloadDirectoryPath: value.trim()),
+    );
+  }
+
+  Future<bool> _defaultAppLockAuth() async {
+    try {
+      final auth = LocalAuthentication();
+      final supported =
+          await auth.isDeviceSupported() || await auth.canCheckBiometrics;
+      if (!supported) {
+        return false;
+      }
+      return await auth.authenticate(
+        localizedReason: 'Confirm your fingerprint or PIN to enable app lock',
+        biometricOnly: false,
+        persistAcrossBackgrounding: true,
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _toggleAppLock(bool value) async {
+    // Turning off is immediate. Turning on first confirms the user can actually
+    // authenticate, so enabling it can never lock them out of the app.
+    if (!value) {
+      await _saveSettings(_settings.copyWith(appLockEnabled: false));
+      return;
+    }
+    final confirmed =
+        await (widget.appLockAuthenticator ?? _defaultAppLockAuth)();
+    if (!mounted) {
+      return;
+    }
+    if (!confirmed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'App lock not enabled: could not verify fingerprint or PIN. '
+            'Set up a screen lock on your device first.',
+          ),
+        ),
+      );
+      return;
+    }
+    await _saveSettings(_settings.copyWith(appLockEnabled: true));
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('App lock enabled. It will lock when you leave the app.'),
+      ),
     );
   }
 
