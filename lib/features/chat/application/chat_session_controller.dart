@@ -5436,6 +5436,16 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   bool _notificationEnabledFor(ForegroundNotificationChannelKind kind) {
+    // The ongoing connection/foreground-service notice is always attempted so
+    // the app is reachable from the background; the OS shows it once the user
+    // has granted notification permission.
+    if (kind == ForegroundNotificationChannelKind.connection) {
+      return true;
+    }
+    // Every other alert requires the user to have opted into notifications.
+    if (!_settings.notificationsEnabled) {
+      return false;
+    }
     switch (kind) {
       case ForegroundNotificationChannelKind.highlights:
         return _settings.notifyHighlights;

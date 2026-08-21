@@ -22,6 +22,8 @@ class AppSettings {
     this.nickColorMode = NickColorMode.soft,
     this.onboardingCompleted = false,
     this.appLockEnabled = false,
+    this.analyticsConsent = false,
+    this.notificationsEnabled = false,
     this.notifyHighlights = true,
     this.notifyPrivateMessages = true,
     this.notifyDccOffers = true,
@@ -60,6 +62,14 @@ class AppSettings {
   final bool appLockEnabled;
 
   // Notifications.
+  /// Whether the user consented to Firebase Analytics + Crashlytics data
+  /// collection. Off by default; collection stays disabled until this is true.
+  final bool analyticsConsent;
+
+  /// Master switch for notifications. Stays false until the OS notification
+  /// permission (POST_NOTIFICATIONS) is granted; the per-type toggles below
+  /// only take effect while this is true.
+  final bool notificationsEnabled;
   final bool notifyHighlights;
   final bool notifyPrivateMessages;
   final bool notifyDccOffers;
@@ -102,6 +112,8 @@ class AppSettings {
     NickColorMode? nickColorMode,
     bool? onboardingCompleted,
     bool? appLockEnabled,
+    bool? analyticsConsent,
+    bool? notificationsEnabled,
     bool? notifyHighlights,
     bool? notifyPrivateMessages,
     bool? notifyDccOffers,
@@ -140,6 +152,8 @@ class AppSettings {
       nickColorMode: nickColorMode ?? this.nickColorMode,
       onboardingCompleted: onboardingCompleted ?? this.onboardingCompleted,
       appLockEnabled: appLockEnabled ?? this.appLockEnabled,
+      analyticsConsent: analyticsConsent ?? this.analyticsConsent,
+      notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
       notifyHighlights: notifyHighlights ?? this.notifyHighlights,
       notifyPrivateMessages:
           notifyPrivateMessages ?? this.notifyPrivateMessages,
@@ -177,6 +191,8 @@ class AppSettings {
       'nickColorMode': nickColorMode.name,
       'onboardingCompleted': onboardingCompleted,
       'appLockEnabled': appLockEnabled,
+      'analyticsConsent': analyticsConsent,
+      'notificationsEnabled': notificationsEnabled,
       'notifyHighlights': notifyHighlights,
       'notifyPrivateMessages': notifyPrivateMessages,
       'notifyDccOffers': notifyDccOffers,
@@ -232,6 +248,8 @@ class AppSettings {
       ),
       onboardingCompleted: (json['onboardingCompleted'] as bool?) ?? false,
       appLockEnabled: (json['appLockEnabled'] as bool?) ?? false,
+      analyticsConsent: (json['analyticsConsent'] as bool?) ?? false,
+      notificationsEnabled: (json['notificationsEnabled'] as bool?) ?? false,
       notifyHighlights: (json['notifyHighlights'] as bool?) ?? true,
       notifyPrivateMessages: (json['notifyPrivateMessages'] as bool?) ?? true,
       notifyDccOffers: (json['notifyDccOffers'] as bool?) ?? true,

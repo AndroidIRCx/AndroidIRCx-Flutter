@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/network_config.dart';
+import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
@@ -235,6 +237,7 @@ void main() {
         network: network,
         ircService: IrcService(transportConnector: (_) async => transport),
         reconnectJitterFactor: 0,
+        settingsRepository: const _NotificationsOnSettingsRepository(),
       ),
     );
     const network = NetworkConfig(
@@ -360,4 +363,15 @@ void main() {
 
     registry.dispose();
   });
+}
+
+class _NotificationsOnSettingsRepository implements SettingsRepository {
+  const _NotificationsOnSettingsRepository();
+
+  @override
+  Future<AppSettings> loadSettings() async =>
+      const AppSettings(notificationsEnabled: true);
+
+  @override
+  Future<void> saveSettings(AppSettings settings) async {}
 }

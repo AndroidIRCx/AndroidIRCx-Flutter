@@ -29,6 +29,7 @@ Future<void> showServerDirectoryPicker(
   final selected = await showModalBottomSheet<ServerPreset>(
     context: context,
     isScrollControlled: true,
+    useSafeArea: true,
     builder: (sheetContext) {
       return SafeArea(
         child: ListView(

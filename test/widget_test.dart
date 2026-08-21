@@ -301,7 +301,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Privacy step: consent required before Next is enabled.
-    await tester.tap(find.byType(Checkbox));
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Next'));
     await tester.pumpAndSettle();
@@ -314,7 +314,12 @@ void main() {
     await tester.tap(find.text('Next'));
     await tester.pumpAndSettle();
 
-    // Channels step -> Finish.
+    // Channels step -> Next.
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    // Notifications step -> Finish (permission prompt skipped).
+    expect(find.text('Notifications'), findsWidgets);
     await tester.tap(find.text('Finish'));
     await tester.pumpAndSettle();
 
@@ -726,34 +731,20 @@ void main() {
     expect(settings.nickColorMode, NickColorMode.vivid);
   });
 
-  testWidgets('settings shows help privacy support and release audit docs', (
-    tester,
-  ) async {
+  testWidgets('settings shows the privacy doc', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    final settingsScrollable = find.byType(Scrollable).first;
-    Future<void> scrollTo(String key) async {
-      await tester.scrollUntilVisible(
-        find.byKey(Key(key)),
-        200,
-        scrollable: settingsScrollable,
-      );
-      await tester.pumpAndSettle();
-    }
-
-    await scrollTo('settings-help-topic');
-    await tester.tap(find.byKey(const Key('settings-help-topic')));
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-privacy-topic')),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.byKey(const Key('settings-privacy-topic')));
     await tester.pumpAndSettle();
-    expect(find.text('IRC help'), findsWidgets);
-    expect(find.textContaining('NickServ fallback'), findsOneWidget);
-    await tester.tap(find.text('Close'));
-    await tester.pumpAndSettle();
-
-    await scrollTo('settings-privacy-topic');
     await tester.tap(find.byKey(const Key('settings-privacy-topic')));
     await tester.pumpAndSettle();
     expect(find.text('Privacy'), findsWidgets);
@@ -761,19 +752,13 @@ void main() {
     await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
 
-    await scrollTo('settings-support-topic');
-    await tester.tap(find.byKey(const Key('settings-support-topic')));
-    await tester.pumpAndSettle();
-    expect(find.text('Support'), findsWidgets);
-    expect(find.textContaining('redacted raw server-tab log'), findsOneWidget);
-    await tester.tap(find.text('Close'));
-    await tester.pumpAndSettle();
-
-    await scrollTo('settings-release-audit-topic');
-    await tester.tap(find.byKey(const Key('settings-release-audit-topic')));
-    await tester.pumpAndSettle();
-    expect(find.text('Release audit'), findsWidgets);
-    expect(find.textContaining('com.androidircx.flutter'), findsOneWidget);
+    // IRC help, Support and Release audit were removed from the menu.
+    expect(find.byKey(const Key('settings-help-topic')), findsNothing);
+    expect(find.byKey(const Key('settings-support-topic')), findsNothing);
+    expect(
+      find.byKey(const Key('settings-release-audit-topic')),
+      findsNothing,
+    );
   });
 
   testWidgets('shows IRC services quick actions on the server tab', (

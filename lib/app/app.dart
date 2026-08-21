@@ -1,6 +1,7 @@
 import 'package:androidircx/app/theme/app_theme.dart';
 import 'dart:async';
 
+import 'package:androidircx/core/firebase/firebase_service.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/core/platform/screen_security.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
@@ -35,6 +36,7 @@ class AndroidIrcxApp extends StatefulWidget {
 class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
   late final AppSettingsController _settingsController;
   bool? _appliedScreenSecure;
+  bool? _appliedAnalyticsConsent;
 
   @override
   void initState() {
@@ -42,21 +44,25 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
     _settingsController = AppSettingsController(
       repository: widget.settingsRepository,
     );
-    _settingsController.addListener(_applyScreenSecurity);
+    _settingsController.addListener(_applySettingsSideEffects);
     _settingsController.load();
   }
 
-  void _applyScreenSecurity() {
-    final secure = _settingsController.settings.screenshotProtection;
-    if (secure != _appliedScreenSecure) {
-      _appliedScreenSecure = secure;
-      unawaited(const ScreenSecurity().setSecure(secure));
+  void _applySettingsSideEffects() {
+    final settings = _settingsController.settings;
+    if (settings.screenshotProtection != _appliedScreenSecure) {
+      _appliedScreenSecure = settings.screenshotProtection;
+      unawaited(const ScreenSecurity().setSecure(settings.screenshotProtection));
+    }
+    if (settings.analyticsConsent != _appliedAnalyticsConsent) {
+      _appliedAnalyticsConsent = settings.analyticsConsent;
+      unawaited(FirebaseService.instance.setConsent(settings.analyticsConsent));
     }
   }
 
   @override
   void dispose() {
-    _settingsController.removeListener(_applyScreenSecurity);
+    _settingsController.removeListener(_applySettingsSideEffects);
     _settingsController.dispose();
     super.dispose();
   }
