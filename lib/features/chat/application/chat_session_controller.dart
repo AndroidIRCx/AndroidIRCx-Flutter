@@ -2670,9 +2670,131 @@ class ChatSessionController extends ChangeNotifier {
       case 'disconnect':
         await _ircService.disconnect(rest.isEmpty ? null : rest);
         return;
+      case 'autovoice':
+        await _handleAutoModeCommand(UserListType.autoVoice, rest, remove: false);
+        return;
+      case 'unautovoice':
+        await _handleAutoModeCommand(UserListType.autoVoice, rest, remove: true);
+        return;
+      case 'autoop':
+        await _handleAutoModeCommand(UserListType.autoOp, rest, remove: false);
+        return;
+      case 'unautoop':
+        await _handleAutoModeCommand(UserListType.autoOp, rest, remove: true);
+        return;
+      case 'autohalfop':
+        await _handleAutoModeCommand(
+          UserListType.autoHalfOp,
+          rest,
+          remove: false,
+        );
+        return;
+      case 'unautohalfop':
+        await _handleAutoModeCommand(
+          UserListType.autoHalfOp,
+          rest,
+          remove: true,
+        );
+        return;
+      case 'autolist':
+      case 'autolists':
+        _handleAutoListCommand();
+        return;
       default:
         await _ircService.sendRaw(commandLine);
         return;
+    }
+  }
+
+  Future<void> _handleAutoModeCommand(
+    UserListType type,
+    String rest, {
+    required bool remove,
+  }) async {
+    final tokens = rest
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((token) => token.isNotEmpty)
+        .toList();
+    if (tokens.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content:
+            'Usage: /${remove ? 'un' : ''}${type.id} <nick|mask> [#chan,#chan]',
+        kind: IrcMessageKind.error,
+      );
+      return;
+    }
+    final mask = tokens.first;
+    final channels = tokens.length > 1
+        ? tokens[1].split(',').map((c) => c.trim()).where((c) => c.isNotEmpty).toList()
+        : const <String>[];
+
+    if (remove) {
+      final normalized = UserListEntry(type: type, mask: mask)
+          .normalizedMask
+          .toLowerCase();
+      final matches = _autoModeEntries
+          .where(
+            (entry) =>
+                entry.type == type &&
+                entry.normalizedMask.toLowerCase() == normalized &&
+                (entry.network == null || entry.network == network.id),
+          )
+          .toList();
+      for (final match in matches) {
+        await removeAutoModeEntry(match);
+      }
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: matches.isEmpty
+            ? '$mask was not on ${type.label}.'
+            : 'Removed $mask from ${type.label}.',
+        kind: IrcMessageKind.system,
+      );
+      return;
+    }
+
+    await addAutoModeEntry(
+      UserListEntry(
+        type: type,
+        mask: mask,
+        channels: channels,
+        network: network.id,
+      ),
+    );
+    _appendMessage(
+      tabId: activeTab.id,
+      sender: '*',
+      content: channels.isEmpty
+          ? 'Added $mask to ${type.label}.'
+          : 'Added $mask to ${type.label} (${channels.join(', ')}).',
+      kind: IrcMessageKind.system,
+    );
+  }
+
+  void _handleAutoListCommand() {
+    if (_autoModeEntries.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: 'No auto-mode rules configured.',
+        kind: IrcMessageKind.system,
+      );
+      return;
+    }
+    for (final entry in _autoModeEntries) {
+      final scope = entry.channels.isEmpty
+          ? 'all channels'
+          : entry.channels.join(', ');
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: '${entry.type.label}: ${entry.mask} · $scope',
+        kind: IrcMessageKind.system,
+      );
     }
   }
 

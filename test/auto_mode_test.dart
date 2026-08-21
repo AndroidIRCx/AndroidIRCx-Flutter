@@ -91,6 +91,32 @@ void main() {
     controller.dispose();
   });
 
+  test('slash commands add and remove auto-mode rules', () async {
+    final (controller, _) = await _connected();
+
+    await controller.handleComposerSubmit('/autovoice bob #flutter,#dart');
+    expect(controller.autoModeEntries, hasLength(1));
+    final entry = controller.autoModeEntries.first;
+    expect(entry.type, UserListType.autoVoice);
+    expect(entry.mask, 'bob');
+    expect(entry.channels, ['#flutter', '#dart']);
+    expect(entry.network, 'dbase');
+
+    await controller.handleComposerSubmit(r'/autoop *!*@evil.host');
+    expect(controller.autoModeEntries, hasLength(2));
+
+    await controller.handleComposerSubmit('/unautovoice bob');
+    expect(
+      controller.autoModeEntries.where(
+        (e) => e.type == UserListType.autoVoice,
+      ),
+      isEmpty,
+    );
+    expect(controller.autoModeEntries, hasLength(1));
+
+    controller.dispose();
+  });
+
   test('auto-ops take priority and honor channel scope', () async {
     final (controller, transport) = await _connected();
     transport.emit(':AndroidIRCX!u@h JOIN #ops');
