@@ -9,6 +9,7 @@ import 'package:androidircx/features/connections/presentation/profiles_screen.da
 import 'package:androidircx/features/connections/presentation/server_directory_picker.dart';
 import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
 import 'package:androidircx/features/settings/presentation/backup_screen.dart';
+import 'package:androidircx/features/settings/presentation/crash_reports_screen.dart';
 import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -464,6 +465,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         onTap: () => _showInfoDialog(
                           title: 'Release audit',
                           body: _releaseAuditText,
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-crash-reports'),
+                        leading: const Icon(Icons.bug_report_outlined),
+                        title: const Text('Crash reports'),
+                        subtitle: const Text(
+                          'Review and email crash reports to the AndroidIRCX team.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => CrashReportsScreen(),
+                          ),
                         ),
                       ),
                     ],
