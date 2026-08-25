@@ -34,7 +34,9 @@ Implemented in the current Flutter app:
 
 Still outside the default-client release scope:
 
-- E2EE, ads/IAP, and scripting are later product/security decisions
+- E2EE and scripting are later product/security decisions
+- ads/IAP are now an explicit monetization slice: top banner ads, opt-in
+  rewarded ads for temporary banner-free time, and one-time no-ads purchases
 - WebRTC calling is not planned
 - upload/share endpoints are deferred until a concrete product endpoint exists
 

@@ -19,15 +19,14 @@ import 'package:androidircx/features/chat/presentation/channel_list_screen.dart'
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
 import 'package:androidircx/features/chat/presentation/media_player_screen.dart';
 import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
+import 'package:androidircx/features/chat/presentation/irc_formatted_text.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/features/chat/presentation/user_lists_screen.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
-import 'package:androidircx/irc/parser/interactive_message_parser.dart';
 import 'package:androidircx/irc/parser/message_content_parser.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:androidircx/media/services/link_preview_service.dart';
 import 'package:androidircx/media/services/media_download_service.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/services.dart';
@@ -81,11 +80,14 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _composerController = TextEditingController();
   final TextEditingController _messageSearchController =
       TextEditingController();
+  final TextEditingController _nickSearchController = TextEditingController();
   List<CommandSuggestion> _composerSuggestions = const [];
   List<ComposerAutocompleteSuggestion> _autocompleteSuggestions = const [];
   bool _messageSearchVisible = false;
   _HistoryKindFilter _messageSearchFilter = _HistoryKindFilter.all;
+  String _nickSearchQuery = '';
   IrcMessage? _pendingReplyMessage;
+  bool _connectedBannerDismissed = false;
 
   ChatSessionController get _controller => widget.controller;
   DccFilePicker get _filePicker =>
@@ -104,14 +106,39 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _controller.addListener(_syncConnectionBannerDismissal);
     _controller.start();
   }
 
   @override
+  void didUpdateWidget(covariant ChatScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller.removeListener(_syncConnectionBannerDismissal);
+      _connectedBannerDismissed = false;
+      _controller.addListener(_syncConnectionBannerDismissal);
+      _controller.start();
+    }
+  }
+
+  @override
   void dispose() {
+    _controller.removeListener(_syncConnectionBannerDismissal);
     _composerController.dispose();
     _messageSearchController.dispose();
+    _nickSearchController.dispose();
     super.dispose();
+  }
+
+  void _syncConnectionBannerDismissal() {
+    final snapshot = _controller.connection;
+    final stableConnected =
+        snapshot.phase == ConnectionPhase.connected &&
+        _controller.pendingReconnectDelay == null;
+    if (stableConnected || !_connectedBannerDismissed) {
+      return;
+    }
+    setState(() => _connectedBannerDismissed = false);
   }
 
   @override
@@ -307,50 +334,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             endDrawer: _controller.activeTab.type == ChatTabType.channel
-                ? Drawer(
-                    child: SafeArea(
-                      child: Column(
-                        children: [
-                          ListTile(
-                            title: Text(_controller.activeTab.name),
-                            subtitle: Text(
-                              '${_controller.activeChannelUsers.length} users',
-                            ),
-                          ),
-                          const Divider(height: 1),
-                          Expanded(
-                            child: _controller.activeChannelUsers.isEmpty
-                                ? const Center(child: Text('No nick list yet.'))
-                                : ListView.builder(
-                                    itemCount: _controller
-                                        .activeChannelUserDetails
-                                        .length,
-                                    itemBuilder: (context, index) {
-                                      final entry = _controller
-                                          .activeChannelUserDetails[index];
-                                      final nick = entry.nick;
-                                      return ListTile(
-                                        leading: const Icon(
-                                          Icons.person_outline,
-                                        ),
-                                        title: Text(nick),
-                                        subtitle: entry.details.isEmpty
-                                            ? null
-                                            : Text(entry.details),
-                                        onTap: () {
-                                          Navigator.of(context).pop();
-                                          unawaited(
-                                            _showChannelUserActions(nick),
-                                          );
-                                        },
-                                      );
-                                    },
-                                  ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
+                ? _buildNickListDrawer(context)
                 : null,
             body: SafeArea(
               child: LayoutBuilder(
@@ -384,6 +368,11 @@ class _ChatScreenState extends State<ChatScreen> {
                               _ConnectionBanner(
                                 controller: _controller,
                                 network: _controller.network,
+                                connectedBannerDismissed:
+                                    _connectedBannerDismissed,
+                                onDismissConnectedBanner: () => setState(
+                                  () => _connectedBannerDismissed = true,
+                                ),
                               ),
                               if (_messageSearchVisible)
                                 _InlineMessageSearchBar(
@@ -990,6 +979,99 @@ class _ChatScreenState extends State<ChatScreen> {
       case ConnectionPhase.error:
         return snapshot.message ?? 'Connection error';
     }
+  }
+
+  Widget _buildNickListDrawer(BuildContext context) {
+    final allEntries = _controller.activeChannelUserDetails;
+    final normalizedQuery = _nickSearchQuery.trim().toLowerCase();
+    final filteredEntries = normalizedQuery.isEmpty
+        ? allEntries
+        : allEntries
+              .where(
+                (entry) =>
+                    entry.nick.toLowerCase().contains(normalizedQuery) ||
+                    entry.details.toLowerCase().contains(normalizedQuery),
+              )
+              .toList(growable: false);
+    final groups = _groupChannelUsers(filteredEntries);
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          children: [
+            ListTile(
+              title: Text(_controller.activeTab.name),
+              subtitle: Text(
+                normalizedQuery.isEmpty
+                    ? '${allEntries.length} users'
+                    : '${filteredEntries.length} of ${allEntries.length} users',
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: TextField(
+                key: const ValueKey('channel-user-search'),
+                controller: _nickSearchController,
+                decoration: InputDecoration(
+                  hintText: 'Search users',
+                  isDense: true,
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _nickSearchQuery.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          icon: const Icon(Icons.clear),
+                          onPressed: () {
+                            setState(() {
+                              _nickSearchController.clear();
+                              _nickSearchQuery = '';
+                            });
+                          },
+                        ),
+                  border: const OutlineInputBorder(),
+                ),
+                textInputAction: TextInputAction.search,
+                onChanged: (value) {
+                  setState(() {
+                    _nickSearchQuery = value;
+                  });
+                },
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: allEntries.isEmpty
+                  ? const Center(child: Text('No nick list yet.'))
+                  : filteredEntries.isEmpty
+                  ? const Center(child: Text('No matching users.'))
+                  : ListView(
+                      children: [
+                        for (final group in groups) ...[
+                          _NickStatusHeader(
+                            group: group,
+                            color: _nickStatusColor(colorScheme, group.prefix),
+                          ),
+                          for (final entry in group.entries)
+                            _NickStatusTile(
+                              entry: entry,
+                              color: _nickStatusColor(
+                                colorScheme,
+                                entry.prefix,
+                              ),
+                              onTap: () {
+                                Navigator.of(context).pop();
+                                unawaited(_showChannelUserActions(entry.nick));
+                              },
+                            ),
+                        ],
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildNetworkSwitchTile(NetworkConfig network) {
@@ -2763,7 +2845,7 @@ class _ChannelTopicBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: ircTheme.messageBorder),
       ),
-      child: _IrcFormattedText(
+      child: IrcFormattedText(
         topic,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
@@ -3090,7 +3172,7 @@ class _MessageList extends StatelessWidget {
                           ),
                           replyId: message.tags['draft/reply']!.trim(),
                         ),
-                      _IrcFormattedText(
+                      IrcFormattedText(
                         message.content,
                         baseStyle: messageStyle,
                         leading: leadingSpans,
@@ -3287,188 +3369,130 @@ class _MessageList extends StatelessWidget {
   }
 }
 
-class _IrcFormattedText extends StatelessWidget {
-  const _IrcFormattedText(
-    this.text, {
-    this.baseStyle,
-    this.maxLines,
-    this.overflow,
-    this.leading,
-    this.knownNicks = const <String>{},
-    this.channelPrefixes = '#&',
-    this.nickPrefixes = '~&@%+',
-    this.contextNick,
-    this.onNickTap,
-    this.onNickLongPress,
-    this.onChannelTap,
+class _NickStatusGroup {
+  _NickStatusGroup({
+    required this.prefix,
+    required this.title,
+    required this.entries,
   });
 
-  final String text;
-  final TextStyle? baseStyle;
-  final int? maxLines;
-  final TextOverflow? overflow;
+  final String? prefix;
+  final String title;
+  final List<ChannelUserDetails> entries;
+}
 
-  /// Inline spans (e.g. sender + timestamp) rendered before the content so the
-  /// message flows on one line and only wraps when it is long.
-  final List<InlineSpan>? leading;
-  final Set<String> knownNicks;
-  final String channelPrefixes;
-  final String nickPrefixes;
-  final String? contextNick;
-  final ValueChanged<String>? onNickTap;
-  final ValueChanged<String>? onNickLongPress;
-  final ValueChanged<String>? onChannelTap;
+List<_NickStatusGroup> _groupChannelUsers(List<ChannelUserDetails> entries) {
+  final groups = <_NickStatusGroup>[
+    _NickStatusGroup(prefix: '~', title: 'Owners', entries: []),
+    _NickStatusGroup(prefix: '&', title: 'Admins', entries: []),
+    _NickStatusGroup(prefix: '@', title: 'Operators', entries: []),
+    _NickStatusGroup(prefix: '%', title: 'Half operators', entries: []),
+    _NickStatusGroup(prefix: '+', title: 'Voiced', entries: []),
+    _NickStatusGroup(prefix: null, title: 'Regular', entries: []),
+  ];
+
+  for (final entry in entries) {
+    final rank = entry.statusRank;
+    if (rank >= 0 && rank < groups.length - 1) {
+      groups[rank].entries.add(entry);
+    } else {
+      groups.last.entries.add(entry);
+    }
+  }
+
+  for (final group in groups) {
+    group.entries.sort(
+      (a, b) => a.nick.toLowerCase().compareTo(b.nick.toLowerCase()),
+    );
+  }
+  return groups.where((group) => group.entries.isNotEmpty).toList();
+}
+
+Color _nickStatusColor(ColorScheme colorScheme, String? prefix) {
+  return switch (prefix) {
+    '~' => const Color(0xFF9C27B0),
+    '&' => const Color(0xFFF44336),
+    '@' => const Color(0xFFFF9800),
+    '%' => const Color(0xFF2196F3),
+    '+' => const Color(0xFF4CAF50),
+    _ => colorScheme.onSurfaceVariant,
+  };
+}
+
+class _NickStatusHeader extends StatelessWidget {
+  const _NickStatusHeader({required this.group, required this.color});
+
+  final _NickStatusGroup group;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final segments = parseInteractiveMessageTokens(
-      text,
-      knownNicks: knownNicks,
-      channelPrefixes: channelPrefixes,
-      nickPrefixes: nickPrefixes,
-      contextNick: contextNick,
-    );
-    final contentSpans = segments.isEmpty
-        ? <InlineSpan>[TextSpan(text: text, style: baseStyle)]
-        : segments
-              .map<InlineSpan>((segment) => _spanForToken(context, segment))
-              .toList(growable: false);
-
-    return Text.rich(
-      TextSpan(children: [...?leading, ...contentSpans]),
-      style: baseStyle,
-      maxLines: maxLines,
-      overflow: overflow,
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      width: double.infinity,
+      color: color.withValues(alpha: 0.10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Text(
+        group.prefix == null
+            ? '${group.title} (${group.entries.length})'
+            : '${group.prefix} ${group.title} (${group.entries.length})',
+        style: textTheme.labelLarge?.copyWith(
+          color: color,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
+}
 
-  InlineSpan _spanForToken(
-    BuildContext context,
-    InteractiveMessageToken token,
-  ) {
-    final style = _resolveTextStyle(baseStyle, token);
-    switch (token.type) {
-      case InteractiveMessageTokenType.url:
-        return TextSpan(
-          text: token.text,
-          style: style,
-          recognizer: TapGestureRecognizer()
-            ..onTap = () => _openExternalUrl(token.url!),
-        );
-      case InteractiveMessageTokenType.channel:
-        final target = token.value;
-        if (target == null || onChannelTap == null) {
-          return TextSpan(text: token.text, style: style);
-        }
-        return WidgetSpan(
-          alignment: PlaceholderAlignment.baseline,
-          baseline: TextBaseline.alphabetic,
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: () => onChannelTap!(target),
-            child: RichText(
-              text: TextSpan(text: token.text, style: style),
+class _NickStatusTile extends StatelessWidget {
+  const _NickStatusTile({
+    required this.entry,
+    required this.color,
+    required this.onTap,
+  });
+
+  final ChannelUserDetails entry;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final prefix = entry.prefix;
+    return ListTile(
+      leading: SizedBox.square(
+        dimension: 40,
+        child: DecoratedBox(
+          decoration: ShapeDecoration(
+            color: color.withValues(alpha: 0.12),
+            shape: CircleBorder(
+              side: BorderSide(color: color.withValues(alpha: 0.35)),
             ),
           ),
-        );
-      case InteractiveMessageTokenType.nick:
-      case InteractiveMessageTokenType.hostmask:
-      case InteractiveMessageTokenType.userHost:
-        final target = token.value;
-        if (target == null || (onNickTap == null && onNickLongPress == null)) {
-          return TextSpan(text: token.text, style: style);
-        }
-        return WidgetSpan(
-          alignment: PlaceholderAlignment.baseline,
-          baseline: TextBaseline.alphabetic,
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: onNickTap == null ? null : () => onNickTap!(target),
-            onLongPress: onNickLongPress == null
-                ? null
-                : () => onNickLongPress!(target),
-            child: RichText(
-              text: TextSpan(text: token.text, style: style),
-            ),
+          child: Center(
+            child: prefix == null
+                ? Icon(Icons.person_outline, size: 20, color: color)
+                : Text(
+                    prefix,
+                    style: TextStyle(
+                      color: color,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                    ),
+                  ),
           ),
-        );
-      case InteractiveMessageTokenType.text:
-        return TextSpan(text: token.text, style: style);
-    }
-  }
-
-  TextStyle _resolveTextStyle(
-    TextStyle? base,
-    InteractiveMessageToken segment,
-  ) {
-    final style = segment.style;
-    final isLink =
-        segment.type == InteractiveMessageTokenType.url ||
-        segment.type == InteractiveMessageTokenType.channel ||
-        segment.type == InteractiveMessageTokenType.nick ||
-        segment.type == InteractiveMessageTokenType.hostmask ||
-        segment.type == InteractiveMessageTokenType.userHost;
-    var foregroundHex =
-        style.colorHex ??
-        (style.color == null ? null : getIrcColorHex(style.color!));
-    var backgroundHex =
-        style.backgroundHex ??
-        (style.background == null ? null : getIrcColorHex(style.background!));
-
-    if (style.reverse && foregroundHex != null && backgroundHex != null) {
-      final swappedForeground = backgroundHex;
-      backgroundHex = foregroundHex;
-      foregroundHex = swappedForeground;
-    } else if (style.reverse && foregroundHex != null) {
-      backgroundHex = foregroundHex;
-      foregroundHex = null;
-    } else if (style.reverse && backgroundHex != null) {
-      foregroundHex = backgroundHex;
-      backgroundHex = null;
-    }
-
-    var textStyle = base ?? const TextStyle();
-    if (foregroundHex != null) {
-      textStyle = textStyle.copyWith(color: _parseHexColor(foregroundHex));
-    }
-    if (backgroundHex != null) {
-      textStyle = textStyle.copyWith(
-        backgroundColor: _parseHexColor(backgroundHex),
-      );
-    }
-    if (style.bold) {
-      textStyle = textStyle.copyWith(fontWeight: FontWeight.bold);
-    }
-    if (style.italic) {
-      textStyle = textStyle.copyWith(fontStyle: FontStyle.italic);
-    }
-    if (style.monospace) {
-      textStyle = textStyle.copyWith(fontFamily: 'monospace');
-    }
-
-    final decorations = <TextDecoration>{};
-    if (style.underline || isLink) {
-      decorations.add(TextDecoration.underline);
-    }
-    if (style.strikethrough) {
-      decorations.add(TextDecoration.lineThrough);
-    }
-    if (decorations.isNotEmpty) {
-      textStyle = textStyle.copyWith(
-        decoration: TextDecoration.combine(decorations.toList(growable: false)),
-      );
-    }
-
-    if (isLink && foregroundHex == null) {
-      textStyle = textStyle.copyWith(color: const Color(0xFF1565C0));
-    }
-
-    return textStyle;
-  }
-
-  Color _parseHexColor(String value) {
-    final normalized = value.replaceFirst('#', '');
-    return Color(int.parse('FF$normalized', radix: 16));
+        ),
+      ),
+      title: Text(
+        entry.nick,
+        style: TextStyle(
+          color: color,
+          fontWeight: prefix == null ? FontWeight.w500 : FontWeight.w700,
+        ),
+      ),
+      subtitle: entry.details.isEmpty ? null : Text(entry.details),
+      onTap: onTap,
+    );
   }
 }
 
@@ -3854,10 +3878,17 @@ bool _canDownloadAttachment(IrcMessageAttachment attachment) {
 }
 
 class _ConnectionBanner extends StatelessWidget {
-  const _ConnectionBanner({required this.controller, required this.network});
+  const _ConnectionBanner({
+    required this.controller,
+    required this.network,
+    required this.connectedBannerDismissed,
+    required this.onDismissConnectedBanner,
+  });
 
   final ChatSessionController controller;
   final NetworkConfig network;
+  final bool connectedBannerDismissed;
+  final VoidCallback onDismissConnectedBanner;
 
   @override
   Widget build(BuildContext context) {
@@ -3865,12 +3896,15 @@ class _ConnectionBanner extends StatelessWidget {
     final reconnectDelay = controller.pendingReconnectDelay;
     final theme = Theme.of(context);
     final statusColor = _colorForPhase(context, snapshot.phase);
+    final stableConnected =
+        snapshot.phase == ConnectionPhase.connected && reconnectDelay == null;
 
-    if (snapshot.phase == ConnectionPhase.connected &&
-        reconnectDelay == null &&
-        snapshot.message == null) {
+    if (stableConnected &&
+        (snapshot.message == null || connectedBannerDismissed)) {
       return const SizedBox.shrink();
     }
+
+    final canDismiss = stableConnected && (snapshot.message ?? '').isNotEmpty;
 
     return Container(
       width: double.infinity,
@@ -3894,6 +3928,14 @@ class _ConnectionBanner extends StatelessWidget {
                   style: theme.textTheme.titleSmall,
                 ),
               ),
+              if (canDismiss)
+                IconButton(
+                  key: const Key('connection-banner-dismiss'),
+                  onPressed: onDismissConnectedBanner,
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Dismiss connection message',
+                  visualDensity: VisualDensity.compact,
+                ),
             ],
           ),
           const SizedBox(height: 6),

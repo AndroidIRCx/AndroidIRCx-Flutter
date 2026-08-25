@@ -16,6 +16,7 @@ import 'package:androidircx/dcc/services/dcc_service.dart';
 import 'package:androidircx/dcc/services/dcc_socket_backend.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
+import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/chat_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
@@ -55,6 +56,22 @@ class _FakeTransport implements IrcTransport {
   void emit(String line) {
     _controller.add(line);
   }
+}
+
+bool _spanTreeContainsStyle(
+  InlineSpan span,
+  bool Function(TextStyle? style) predicate,
+) {
+  if (span is TextSpan) {
+    if (predicate(span.style)) {
+      return true;
+    }
+    return span.children?.any(
+          (child) => _spanTreeContainsStyle(child, predicate),
+        ) ??
+        false;
+  }
+  return false;
 }
 
 class _FakeDccConnection implements DccSocketConnection {
@@ -433,8 +450,10 @@ void main() {
     await tester.tap(find.text('Libera'));
     await tester.pumpAndSettle();
 
-    expect(controller.networks.any((network) => network.name == 'Libera'),
-        isTrue);
+    expect(
+      controller.networks.any((network) => network.name == 'Libera'),
+      isTrue,
+    );
 
     registry.dispose();
     controller.dispose();
@@ -755,10 +774,7 @@ void main() {
     // IRC help, Support and Release audit were removed from the menu.
     expect(find.byKey(const Key('settings-help-topic')), findsNothing);
     expect(find.byKey(const Key('settings-support-topic')), findsNothing);
-    expect(
-      find.byKey(const Key('settings-release-audit-topic')),
-      findsNothing,
-    );
+    expect(find.byKey(const Key('settings-release-audit-topic')), findsNothing);
   });
 
   testWidgets('shows IRC services quick actions on the server tab', (
@@ -790,6 +806,42 @@ void main() {
     await tester.tap(find.text('NickServ HELP'));
     await tester.pump();
     expect(find.text('NickServ'), findsWidgets);
+
+    controller.dispose();
+  });
+
+  testWidgets('dismisses connected status banner in chat screen', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+    transport.emit(':server 001 AndroidIRCX :Welcome to DBase');
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('connection-banner-dismiss')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('connection-banner-dismiss')));
+    await tester.pump();
+
+    expect(find.byKey(const Key('connection-banner-dismiss')), findsNothing);
 
     controller.dispose();
   });
@@ -1030,7 +1082,81 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('shows rich nick details in the channel user drawer', (
+  testWidgets(
+    'shows grouped searchable nick details in the channel user drawer',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      const network = NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.dbase.in.rs',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      );
+      final transport = _FakeTransport();
+      final controller = ChatSessionController(
+        network: network,
+        ircService: IrcService(transportConnector: (_) async => transport),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(home: ChatScreen(controller: controller)),
+      );
+      await tester.pump();
+
+      transport.emit(
+        ':server 005 AndroidIRCX CHANTYPES=#& PREFIX=(qaohv)~&@%+ :supported',
+      );
+      transport.emit(
+        ':alice!ident@example JOIN #room aliceAccount :Alice Example',
+      );
+      transport.emit(
+        ':server 353 AndroidIRCX = #room :~owner &admin @alice!ident@example %half +voice regular',
+      );
+      transport.emit(':alice!ident@example AWAY :coffee');
+      await tester.pump();
+      await tester.pump();
+      controller.selectTab(
+        controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+      );
+      await tester.pump();
+
+      await tester.tap(find.byIcon(Icons.people_outline));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Search users'), findsOneWidget);
+      expect(find.text('~ Owners (1)'), findsOneWidget);
+      expect(find.text('& Admins (1)'), findsOneWidget);
+      expect(find.text('@ Operators (1)'), findsOneWidget);
+      expect(find.text('% Half operators (1)'), findsOneWidget);
+      await tester.drag(find.byType(ListView).last, const Offset(0, -500));
+      await tester.pumpAndSettle();
+      expect(find.text('+ Voiced (1)'), findsOneWidget);
+      expect(find.text('Regular (1)'), findsOneWidget);
+      await tester.drag(find.byType(ListView).last, const Offset(0, 500));
+      await tester.pumpAndSettle();
+      expect(find.text('alice'), findsOneWidget);
+      expect(find.textContaining('account: aliceAccount'), findsWidgets);
+      expect(find.textContaining('away: coffee'), findsOneWidget);
+      expect(find.textContaining('mode: @'), findsWidgets);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('channel-user-search')),
+        'ali',
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 of 6 users'), findsOneWidget);
+      expect(find.text('@ Operators (1)'), findsOneWidget);
+      expect(find.text('alice'), findsOneWidget);
+      expect(find.text('owner'), findsNothing);
+
+      controller.dispose();
+    },
+  );
+
+  testWidgets('renders channel list topics with IRC formatting', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -1047,30 +1173,40 @@ void main() {
       network: network,
       ircService: IrcService(transportConnector: (_) async => transport),
     );
+    await controller.start();
 
     await tester.pumpWidget(
-      MaterialApp(home: ChatScreen(controller: controller)),
+      MaterialApp(home: ChannelListScreen(controller: controller)),
     );
     await tester.pump();
 
+    transport.emit(':server 321 AndroidIRCX Channel :Users Name');
     transport.emit(
-      ':alice!ident@example JOIN #room aliceAccount :Alice Example',
+      ':server 322 AndroidIRCX #color 5 :\u000304Red \u0002bold\u0002',
     );
-    transport.emit(':server 353 AndroidIRCX = #room :@alice!ident@example');
-    transport.emit(':alice!ident@example AWAY :coffee');
-    await tester.pump();
-    await tester.pump();
-    controller.selectTab(
-      controller.tabs.firstWhere((tab) => tab.name == '#room').id,
-    );
+    transport.emit(':server 323 AndroidIRCX :End of /LIST');
     await tester.pump();
 
-    await tester.tap(find.byIcon(Icons.people_outline));
-    await tester.pumpAndSettle();
+    expect(find.textContaining('\u0003'), findsNothing);
+    expect(find.textContaining('Red bold'), findsWidgets);
 
-    expect(find.text('alice'), findsOneWidget);
-    expect(find.textContaining('account: aliceAccount'), findsWidgets);
-    expect(find.textContaining('away: coffee'), findsOneWidget);
+    final topicRichText = tester
+        .widgetList<RichText>(find.byType(RichText))
+        .firstWhere((widget) => widget.text.toPlainText().contains('Red bold'));
+    expect(
+      _spanTreeContainsStyle(
+        topicRichText.text,
+        (style) => style?.color == const Color(0xFFFF0000),
+      ),
+      isTrue,
+    );
+    expect(
+      _spanTreeContainsStyle(
+        topicRichText.text,
+        (style) => style?.fontWeight == FontWeight.bold,
+      ),
+      isTrue,
+    );
 
     controller.dispose();
   });
