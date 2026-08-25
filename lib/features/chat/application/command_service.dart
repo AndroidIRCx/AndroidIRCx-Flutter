@@ -743,6 +743,49 @@ class CommandService {
       description: 'List configured auto-mode rules',
       kind: CommandKind.local,
     ),
+    CommandDefinition(
+      name: 'notify',
+      usage: '/notify <nick|mask>',
+      description: 'Add a nick to the notify/watch list',
+      kind: CommandKind.utility,
+    ),
+    CommandDefinition(
+      name: 'unnotify',
+      usage: '/unnotify <nick|mask>',
+      description: 'Remove a nick from the notify/watch list',
+      kind: CommandKind.utility,
+    ),
+    CommandDefinition(
+      name: 'protect',
+      usage: '/protect <nick|mask>',
+      description: 'Add a user to the protected list',
+      kind: CommandKind.utility,
+    ),
+    CommandDefinition(
+      name: 'unprotect',
+      usage: '/unprotect <nick|mask>',
+      description: 'Remove a user from the protected list',
+      kind: CommandKind.utility,
+    ),
+    CommandDefinition(
+      name: 'blacklist',
+      usage:
+          '/blacklist <nick|mask> [ignore|ban|kick_ban|quiet|custom] [reason]',
+      description: 'Add a blacklist rule and optional enforcement action',
+      kind: CommandKind.utility,
+    ),
+    CommandDefinition(
+      name: 'unblacklist',
+      usage: '/unblacklist <nick|mask>',
+      description: 'Remove a blacklist rule',
+      kind: CommandKind.utility,
+    ),
+    CommandDefinition(
+      name: 'userlist',
+      usage: '/userlist [notify|protected|other|blacklist|autoop|autovoice]',
+      description: 'List user-list entries',
+      kind: CommandKind.local,
+    ),
   ];
 
   static final Map<String, CommandDefinition> _commandRegistry = {

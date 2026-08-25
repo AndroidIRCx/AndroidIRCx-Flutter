@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.provider.Settings
 import io.flutter.embedding.engine.FlutterEngine
@@ -195,6 +196,9 @@ object AndroidIrcxEngineManager {
         }
         builder
             .setSmallIcon(R.drawable.ic_stat_androidircx)
+            .setLargeIcon(
+                BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher),
+            )
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(Notification.BigTextStyle().bigText(body))

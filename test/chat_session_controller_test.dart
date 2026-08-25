@@ -15,6 +15,7 @@ import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
 import 'package:androidircx/features/chat/data/message_history_repository.dart';
+import 'package:androidircx/features/chat/data/user_list_entry.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
@@ -3832,6 +3833,26 @@ void main() {
       );
       await controller.performChannelUserAction(
         'alice',
+        ChannelUserAction.whowas,
+      );
+      await controller.performChannelUserAction(
+        'alice',
+        ChannelUserAction.kickBan,
+      );
+      await controller.performChannelUserAction(
+        'alice',
+        ChannelUserAction.ignoreToggle,
+      );
+      await controller.performChannelUserAction(
+        'alice',
+        ChannelUserAction.ignoreToggle,
+      );
+      await controller.performChannelUserAction(
+        'alice',
+        ChannelUserAction.ctcpVersion,
+      );
+      await controller.performChannelUserAction(
+        'alice',
         ChannelUserAction.query,
       );
 
@@ -3845,6 +3866,20 @@ void main() {
       expect(
         transport.sentLines.any((line) => line.startsWith('WHOIS alice')),
         isTrue,
+      );
+      expect(
+        transport.sentLines.any((line) => line.startsWith('WHOWAS alice')),
+        isTrue,
+      );
+      expect(transport.sentLines, contains('MODE #room +b alice!*@*'));
+      expect(
+        transport.sentLines.any((line) => line.startsWith('KICK #room alice')),
+        isTrue,
+      );
+      expect(controller.ignoreMasks, isEmpty);
+      expect(
+        transport.sentLines,
+        contains('PRIVMSG alice :\u0001VERSION\u0001'),
       );
       expect(
         controller.tabs.any(
@@ -5037,6 +5072,197 @@ void main() {
       ),
       isTrue,
     );
+
+    controller.dispose();
+  });
+
+  test(
+    'stores rich WHOIS details and exposes clickable channel data',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      transport.emit(
+        ':server 311 AndroidIRCX alice ident host.example * :Alice',
+      );
+      transport.emit(':server 330 AndroidIRCX alice aliceAccount :logged in');
+      transport.emit(':server 312 AndroidIRCX alice irc.example.test :Server');
+      transport.emit(':server 317 AndroidIRCX alice 42 1700000000 :idle');
+      transport.emit(':server 319 AndroidIRCX alice :@#room +#dart');
+      transport.emit(':server 671 AndroidIRCX alice :secure connection');
+      transport.emit(':server 318 AndroidIRCX alice :End');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      final info = controller.userInfoForNick('alice');
+      expect(info.hostmask, 'alice!ident@host.example');
+      expect(info.account, 'aliceAccount');
+      expect(info.server, 'irc.example.test');
+      expect(info.idleSeconds, 42);
+      expect(info.isRegistered, isTrue);
+      expect(info.isSecure, isTrue);
+      expect(info.channels, ['#dart', '#room']);
+
+      controller.dispose();
+    },
+  );
+
+  test(
+    'user list commands add notify, protected, and blacklist entries',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      await controller.handleComposerSubmit('/notify alice');
+      await controller.handleComposerSubmit('/protect bob');
+      await controller.handleComposerSubmit(
+        '/blacklist bad!*@evil kick_ban spam',
+      );
+
+      expect(
+        controller.userListEntriesForType(UserListType.notify).single.mask,
+        'alice',
+      );
+      expect(
+        controller
+            .userListEntriesForType(UserListType.protectedUser)
+            .single
+            .mask,
+        'bob',
+      );
+      final blacklist = controller.blacklistEntries.single;
+      expect(blacklist.mask, 'bad!*@evil');
+      expect(blacklist.effectiveBlacklistAction, BlacklistAction.kickBan);
+      expect(blacklist.reason, 'spam');
+      expect(transport.sentLines, contains('MONITOR + alice'));
+
+      await controller.handleComposerSubmit('/unnotify alice');
+      expect(controller.userListEntriesForType(UserListType.notify), isEmpty);
+      expect(transport.sentLines, contains('MONITOR - alice'));
+
+      controller.dispose();
+    },
+  );
+
+  test(
+    'blacklist enforcement drops messages and emits moderation action',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+        ),
+        ircService: service,
+      );
+
+      await controller.start();
+      await controller.addUserListEntry(
+        const UserListEntry(
+          type: UserListType.blacklist,
+          mask: 'spammer!*@evil.example',
+          blacklistAction: BlacklistAction.kickBan,
+          reason: 'spam',
+        ),
+      );
+      transport.emit(':AndroidIRCX!me@host JOIN #room');
+      transport.emit(':server 353 AndroidIRCX = #room :@AndroidIRCX spammer');
+      transport.emit(':server 366 AndroidIRCX #room :End');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      final room = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(room.id);
+
+      transport.emit(':spammer!id@evil.example PRIVMSG #room :buy now');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content == 'buy now',
+        ),
+        isFalse,
+      );
+      expect(
+        transport.sentLines,
+        contains('MODE #room +b spammer!*@evil.example'),
+      );
+      expect(transport.sentLines, contains('KICK #room spammer :spam'));
+      expect(
+        controller.activeMessages.any(
+          (message) => message.content.contains('Blacklist kick + ban matched'),
+        ),
+        isTrue,
+      );
+
+      controller.dispose();
+    },
+  );
+
+  test('moderation action uses ban mask preview and timed removal', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    transport.emit(':AndroidIRCX!me@host JOIN #room');
+    transport.emit(
+      ':server 353 AndroidIRCX = #room :@AndroidIRCX alice!id@host.example',
+    );
+    transport.emit(':server 366 AndroidIRCX #room :End');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    final room = controller.tabs.firstWhere((tab) => tab.name == '#room');
+    controller.selectTab(room.id);
+
+    expect(controller.banMaskPreviewForNick('alice', 2), '*!*@host.example');
+    await controller.performChannelModerationAction(
+      nick: 'alice',
+      action: ChannelModerationAction.kickBan,
+      reason: 'cleanup',
+      banMaskType: 2,
+      timedRemoval: const Duration(milliseconds: 1),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(transport.sentLines, contains('MODE #room +b *!*@host.example'));
+    expect(transport.sentLines, contains('KICK #room alice :cleanup'));
+    expect(transport.sentLines, contains('MODE #room -b *!*@host.example'));
 
     controller.dispose();
   });
