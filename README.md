@@ -20,39 +20,32 @@ existing React Native application.
 
 ## Current Status
 
-This repository is an active rewrite in progress.
+This repository is an active Flutter rewrite in release hardening.
 
 Implemented in the current Flutter app:
 
-- network list and add/edit flow
-- basic IRC socket connection lifecycle
-- server, channel, and query tabs
-- basic message sending and receiving
-- local persistence for networks, tabs, message history, and a small settings set
-- reconnect banner and basic connection status UX
+- network list, server directory, add/edit flow, identity profiles, and in-chat network switching
+- TCP/TLS IRC transport, IRCv3 WebSocket transport, reconnect/backoff, and foreground-service integration
+- IRC parser, ISUPPORT, numerics, CAP 302, SASL PLAIN/SCRAM-SHA-256/EXTERNAL, CTCP, and IRCv3 message features
+- server, channel, query, notice, and DCC tabs with command suggestions and rich channel user actions
+- encrypted local message history with retention/search/export support
+- DCC CHAT/SEND, safe file picking, transfer progress, media cards, previews, downloads, camera/gallery capture, and in-app audio/video playback
+- onboarding, consent/privacy screens, app lock, notification/display/writing settings, themes, backup/restore, ignore lists, auto-away/highlights/sounds, auto-rejoin, diagnostics, and crash reporting
 
-Not implemented yet in full parity:
+Still outside the default-client release scope:
 
-- CAP/SASL full flow
-- multi-network orchestration parity
-- advanced numerics and command coverage
-- notifications/background behavior
-- encryption
-- DCC/media
-- monetization and security platform features
-
-The feature list below describes the target AndroidIRCx parity scope, not the current Flutter
-implementation status.
+- E2EE, ads/IAP, and scripting are later product/security decisions
+- WebRTC calling is not planned
+- upload/share endpoints are deferred until a concrete product endpoint exists
 
 ## 🔐 Security
 
 - **TLS/SSL** -- full encrypted connection support
 - **SASL** -- PLAIN, SCRAM-SHA-256, EXTERNAL (client certificates)
-- **E2E Encryption** -- libsodium XChaCha20-Poly1305 with context-bound AAD
-- **Secure Storage** -- device Keychain for secrets (AsyncStorage fallback with warning)
+- **Encrypted History** -- local message bodies encrypted with AES-256-GCM
+- **Secure Storage** -- platform-backed storage for server passwords, SASL secrets, channel keys, and certificates
 - **App Lock** -- PIN and biometric with auto-lock on background/launch
-- **Kill Switch** -- emergency disconnect and optional data wipe
-- **Play Integrity** -- Google Play Integrity verification
+- **Crash Reports** -- sanitized on-device reports with secret redaction
 
 
 ## 🤝 Contributing

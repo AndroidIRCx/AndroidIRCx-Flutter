@@ -736,8 +736,9 @@ class ChatSessionController extends ChangeNotifier {
     if (repository != null) {
       _autoModeEntries = await repository.remove(entry);
     } else {
-      _autoModeEntries =
-          _autoModeEntries.where((e) => e.key != entry.key).toList();
+      _autoModeEntries = _autoModeEntries
+          .where((e) => e.key != entry.key)
+          .toList();
     }
     notifyListeners();
   }
@@ -758,7 +759,8 @@ class ChatSessionController extends ChangeNotifier {
     final ownModes =
         _channelUserModes[tabId]?[currentNick.trim().toLowerCase()] ??
         const <String>{};
-    final hasOp = ownModes.contains('o') ||
+    final hasOp =
+        ownModes.contains('o') ||
         ownModes.contains('q') ||
         ownModes.contains('a');
     final hasHalfOp = ownModes.contains('h');
@@ -786,9 +788,7 @@ class ChatSessionController extends ChangeNotifier {
         UserListType.autoVoice => hasOp || hasHalfOp,
       };
       if (canApply) {
-        unawaited(
-          _ircService.sendRaw('MODE $channel +${type.modeChar} $nick'),
-        );
+        unawaited(_ircService.sendRaw('MODE $channel +${type.modeChar} $nick'));
         return;
       }
     }
@@ -2671,10 +2671,18 @@ class ChatSessionController extends ChangeNotifier {
         await _ircService.disconnect(rest.isEmpty ? null : rest);
         return;
       case 'autovoice':
-        await _handleAutoModeCommand(UserListType.autoVoice, rest, remove: false);
+        await _handleAutoModeCommand(
+          UserListType.autoVoice,
+          rest,
+          remove: false,
+        );
         return;
       case 'unautovoice':
-        await _handleAutoModeCommand(UserListType.autoVoice, rest, remove: true);
+        await _handleAutoModeCommand(
+          UserListType.autoVoice,
+          rest,
+          remove: true,
+        );
         return;
       case 'autoop':
         await _handleAutoModeCommand(UserListType.autoOp, rest, remove: false);
@@ -2728,13 +2736,18 @@ class ChatSessionController extends ChangeNotifier {
     }
     final mask = tokens.first;
     final channels = tokens.length > 1
-        ? tokens[1].split(',').map((c) => c.trim()).where((c) => c.isNotEmpty).toList()
+        ? tokens[1]
+              .split(',')
+              .map((c) => c.trim())
+              .where((c) => c.isNotEmpty)
+              .toList()
         : const <String>[];
 
     if (remove) {
-      final normalized = UserListEntry(type: type, mask: mask)
-          .normalizedMask
-          .toLowerCase();
+      final normalized = UserListEntry(
+        type: type,
+        mask: mask,
+      ).normalizedMask.toLowerCase();
       final matches = _autoModeEntries
           .where(
             (entry) =>
@@ -2812,8 +2825,9 @@ class ChatSessionController extends ChangeNotifier {
         kind: IrcMessageKind.system,
       );
     } else {
-      final names =
-          _commandService.commands.map((command) => '/${command.name}').join(' ');
+      final names = _commandService.commands
+          .map((command) => '/${command.name}')
+          .join(' ');
       _appendMessage(
         tabId: activeTab.id,
         sender: '*',
@@ -2851,7 +2865,9 @@ class ChatSessionController extends ChangeNotifier {
       _appendMessage(
         tabId: activeTab.id,
         sender: '*',
-        content: alreadyIgnored ? 'Already ignoring $mask' : 'Now ignoring $mask',
+        content: alreadyIgnored
+            ? 'Already ignoring $mask'
+            : 'Now ignoring $mask',
         kind: IrcMessageKind.system,
       );
     }
@@ -2911,8 +2927,9 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    final echoEnabled =
-        _ircService.enabledCapabilities.contains('echo-message');
+    final echoEnabled = _ircService.enabledCapabilities.contains(
+      'echo-message',
+    );
     for (final tab in channelTabs) {
       if (asAction) {
         await _ircService.sendAction(target: tab.name, text: text);
@@ -3014,8 +3031,9 @@ class ChatSessionController extends ChangeNotifier {
       }
       byHost.putIfAbsent(host, () => <String>[]).add(bare);
     }
-    final clones = byHost.entries.where((entry) => entry.value.length > 1).toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
+    final clones =
+        byHost.entries.where((entry) => entry.value.length > 1).toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
 
     if (clones.isEmpty) {
       _appendMessage(
@@ -3062,18 +3080,18 @@ class ChatSessionController extends ChangeNotifier {
       return false;
     }
     for (final mask in _ignoreMasks) {
-      if (_matchesIgnoreMask(mask, prefix: frame.prefix, nick: frame.senderNick)) {
+      if (_matchesIgnoreMask(
+        mask,
+        prefix: frame.prefix,
+        nick: frame.senderNick,
+      )) {
         return true;
       }
     }
     return false;
   }
 
-  static bool _matchesIgnoreMask(
-    String mask, {
-    String? prefix,
-    String? nick,
-  }) {
+  static bool _matchesIgnoreMask(String mask, {String? prefix, String? nick}) {
     final hasHostMask = mask.contains('!') || mask.contains('@');
     final target = hasHostMask ? (prefix ?? nick) : (nick ?? prefix);
     if (target == null || target.isEmpty) {
@@ -3101,7 +3119,9 @@ class ChatSessionController extends ChangeNotifier {
   void _handleFilterCommand(String rest) {
     final trimmed = rest.trim();
     // `-g` (global) is accepted for RN parity; filtering here is per-session.
-    final text = trimmed.startsWith('-g') ? trimmed.substring(2).trim() : trimmed;
+    final text = trimmed.startsWith('-g')
+        ? trimmed.substring(2).trim()
+        : trimmed;
     if (text.isEmpty) {
       _appendMessage(
         tabId: activeTab.id,
@@ -3144,8 +3164,9 @@ class ChatSessionController extends ChangeNotifier {
       _appendMessage(
         tabId: activeTab.id,
         sender: '*',
-        content:
-            removed ? 'No longer filtering "$text"' : 'Not filtering "$text"',
+        content: removed
+            ? 'No longer filtering "$text"'
+            : 'Not filtering "$text"',
         kind: IrcMessageKind.system,
       );
     }
@@ -3252,7 +3273,10 @@ class ChatSessionController extends ChangeNotifier {
     final delayMs = int.tryParse(parts[1]);
     final repetitions = int.tryParse(parts[2]);
     final command = parts.skip(3).join(' ');
-    if (delayMs == null || delayMs <= 0 || repetitions == null || repetitions < 0) {
+    if (delayMs == null ||
+        delayMs <= 0 ||
+        repetitions == null ||
+        repetitions < 0) {
       _appendMessage(
         tabId: activeTab.id,
         sender: 'error',
@@ -3265,19 +3289,18 @@ class ChatSessionController extends ChangeNotifier {
 
     _commandTimers.remove(name)?.cancel();
     var remaining = repetitions;
-    _commandTimers[name] = Timer.periodic(
-      Duration(milliseconds: delayMs),
-      (timer) {
-        unawaited(handleComposerSubmit(command));
-        if (repetitions != 0) {
-          remaining--;
-          if (remaining <= 0) {
-            timer.cancel();
-            _commandTimers.remove(name);
-          }
+    _commandTimers[name] = Timer.periodic(Duration(milliseconds: delayMs), (
+      timer,
+    ) {
+      unawaited(handleComposerSubmit(command));
+      if (repetitions != 0) {
+        remaining--;
+        if (remaining <= 0) {
+          timer.cancel();
+          _commandTimers.remove(name);
         }
-      },
-    );
+      }
+    });
     _appendMessage(
       tabId: activeTab.id,
       sender: '*',
@@ -3933,9 +3956,9 @@ class ChatSessionController extends ChangeNotifier {
           kind: IrcMessageKind.event,
         );
       case 'PONG':
-        final token = (frame.trailing ??
-                (frame.params.isEmpty ? '' : frame.params.last))
-            .trim();
+        final token =
+            (frame.trailing ?? (frame.params.isEmpty ? '' : frame.params.last))
+                .trim();
         if (token.startsWith('LAG')) {
           final sentMs = int.tryParse(token.substring(3));
           if (sentMs != null) {
@@ -4368,6 +4391,7 @@ class ChatSessionController extends ChangeNotifier {
     _serverSupport = _serverSupport.mergeFrame(frame);
     _nickPrefixChars = _serverSupport.nickPrefixSymbols;
     _channelPrefixChars = _serverSupport.channelTypes;
+    _dedupeEquivalentTabs();
     final tokens = isupportTokensFromFrame(frame);
     final supportText = tokens.join(' ');
 
@@ -5123,14 +5147,17 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   ChatTab _ensureChannelTab(String channel) {
-    final existing = _findTab(_channelTabId(network.id, channel));
+    final normalizedChannel = channel.trim();
+    final existing =
+        _findTab(_channelTabId(network.id, normalizedChannel)) ??
+        _findEquivalentTab(ChatTabType.channel, normalizedChannel);
     if (existing != null) {
       return existing;
     }
 
     final tab = ChatTab(
-      id: _channelTabId(network.id, channel),
-      name: channel,
+      id: _channelTabId(network.id, normalizedChannel),
+      name: normalizedChannel,
       type: ChatTabType.channel,
       networkId: network.id,
     );
@@ -5142,14 +5169,17 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   ChatTab _ensureQueryTab(String nick) {
-    final existing = _findTab(_queryTabId(network.id, nick));
+    final normalizedNick = nick.trim();
+    final existing =
+        _findTab(_queryTabId(network.id, normalizedNick)) ??
+        _findEquivalentTab(ChatTabType.query, normalizedNick);
     if (existing != null) {
       return existing;
     }
 
     final tab = ChatTab(
-      id: _queryTabId(network.id, nick),
-      name: nick,
+      id: _queryTabId(network.id, normalizedNick),
+      name: normalizedNick,
       type: ChatTabType.query,
       networkId: network.id,
     );
@@ -5335,6 +5365,159 @@ class ChatSessionController extends ChangeNotifier {
     return null;
   }
 
+  ChatTab? _findEquivalentTab(ChatTabType type, String name) {
+    final key = _ircCasefold(name);
+    for (final tab in _tabs) {
+      if (tab.type == type && _ircCasefold(tab.name) == key) {
+        return tab;
+      }
+    }
+    return null;
+  }
+
+  void _dedupeEquivalentTabs() {
+    final canonicalByKey = <String, ChatTab>{};
+    final aliases = <String, String>{};
+    final nextTabs = <ChatTab>[];
+
+    for (final tab in _tabs) {
+      if (tab.type != ChatTabType.channel && tab.type != ChatTabType.query) {
+        nextTabs.add(tab);
+        continue;
+      }
+
+      final key = '${tab.type.name}:${_ircCasefold(tab.name)}';
+      final canonical = canonicalByKey[key];
+      if (canonical == null) {
+        canonicalByKey[key] = tab;
+        nextTabs.add(tab);
+        continue;
+      }
+
+      aliases[tab.id] = canonical.id;
+      final canonicalIndex = nextTabs.indexWhere(
+        (item) => item.id == canonical.id,
+      );
+      if (canonicalIndex != -1) {
+        nextTabs[canonicalIndex] = canonical.copyWith(
+          hasActivity: canonical.hasActivity || tab.hasActivity,
+          unreadCount: canonical.unreadCount + tab.unreadCount,
+          isEncrypted: canonical.isEncrypted || tab.isEncrypted,
+        );
+        canonicalByKey[key] = nextTabs[canonicalIndex];
+      }
+    }
+
+    if (aliases.isEmpty) {
+      return;
+    }
+
+    _tabs = nextTabs;
+    _activeTabId = aliases[_activeTabId] ?? _activeTabId;
+    _rekeyMessages(aliases);
+    _rekeySetMap(_channelUsers, aliases);
+    _rekeyStringMap(_channelTopics, aliases);
+    _rekeyStringMap(_channelModes, aliases);
+    _rekeyNestedSetMap(_channelUserModes, aliases);
+    _rekeyDateTimeMap(_readMarkers, aliases);
+    _rekeyNestedSetMap(_messageReactions, aliases);
+    _rekeySetMap(_typingUsersByTab, aliases);
+  }
+
+  String _ircCasefold(String value) {
+    final lower = value.trim().toLowerCase();
+    return switch (_serverSupport.caseMapping.toLowerCase()) {
+      'ascii' => lower,
+      'strict-rfc1459' =>
+        lower.replaceAll('[', '{').replaceAll(']', '}').replaceAll(r'\', '|'),
+      _ =>
+        lower
+            .replaceAll('[', '{')
+            .replaceAll(']', '}')
+            .replaceAll(r'\', '|')
+            .replaceAll('^', '~'),
+    };
+  }
+
+  void _rekeyMessages(Map<String, String> aliases) {
+    final next = <String, List<IrcMessage>>{};
+    for (final entry in _messages.entries) {
+      final tabId = aliases[entry.key] ?? entry.key;
+      final messages = next.putIfAbsent(tabId, () => <IrcMessage>[]);
+      messages.addAll(
+        entry.value.map(
+          (message) =>
+              message.tabId == tabId ? message : message.copyWith(tabId: tabId),
+        ),
+      );
+    }
+    _messages
+      ..clear()
+      ..addAll(next);
+  }
+
+  void _rekeySetMap(Map<String, Set<String>> map, Map<String, String> aliases) {
+    final next = <String, Set<String>>{};
+    for (final entry in map.entries) {
+      next
+          .putIfAbsent(aliases[entry.key] ?? entry.key, () => <String>{})
+          .addAll(entry.value);
+    }
+    map
+      ..clear()
+      ..addAll(next);
+  }
+
+  void _rekeyStringMap(Map<String, String> map, Map<String, String> aliases) {
+    final next = <String, String>{};
+    for (final entry in map.entries) {
+      final tabId = aliases[entry.key] ?? entry.key;
+      final existing = next[tabId];
+      next[tabId] = existing == null || existing.trim().isEmpty
+          ? entry.value
+          : existing;
+    }
+    map
+      ..clear()
+      ..addAll(next);
+  }
+
+  void _rekeyNestedSetMap(
+    Map<String, Map<String, Set<String>>> map,
+    Map<String, String> aliases,
+  ) {
+    final next = <String, Map<String, Set<String>>>{};
+    for (final entry in map.entries) {
+      final tabId = aliases[entry.key] ?? entry.key;
+      final nested = next.putIfAbsent(tabId, () => <String, Set<String>>{});
+      for (final nestedEntry in entry.value.entries) {
+        nested
+            .putIfAbsent(nestedEntry.key, () => <String>{})
+            .addAll(nestedEntry.value);
+      }
+    }
+    map
+      ..clear()
+      ..addAll(next);
+  }
+
+  void _rekeyDateTimeMap(
+    Map<String, DateTime> map,
+    Map<String, String> aliases,
+  ) {
+    final next = <String, DateTime>{};
+    for (final entry in map.entries) {
+      final tabId = aliases[entry.key] ?? entry.key;
+      final existing = next[tabId];
+      next[tabId] = existing == null || entry.value.isAfter(existing)
+          ? entry.value
+          : existing;
+    }
+    map
+      ..clear()
+      ..addAll(next);
+  }
+
   IrcMessage? _appendMessage({
     required String tabId,
     required String sender,
@@ -5381,9 +5564,7 @@ class ChatSessionController extends ChangeNotifier {
     final appended = list.last;
     final repository = _historyRepository;
     if (repository != null) {
-      unawaited(
-        repository.append(networkId: network.id, message: appended),
-      );
+      unawaited(repository.append(networkId: network.id, message: appended));
     }
     return appended;
   }
@@ -5636,6 +5817,7 @@ class ChatSessionController extends ChangeNotifier {
     _messages
       ..clear()
       ..addAll(snapshot.messagesByTab);
+    _dedupeEquivalentTabs();
 
     for (final tab in _tabs) {
       _messages.putIfAbsent(tab.id, () => []);
@@ -5703,8 +5885,9 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     final current = _messages[tabId];
-    final anchor =
-        (current == null || current.isEmpty) ? null : current.first.id;
+    final anchor = (current == null || current.isEmpty)
+        ? null
+        : current.first.id;
     final older = await repository.loadTabHistory(
       networkId: network.id,
       tabId: tabId,
@@ -6498,7 +6681,8 @@ class ChatSessionController extends ChangeNotifier {
 String _serverTabId(String networkId) => 'server::$networkId';
 String _noticeTabId(String networkId) => 'notice::$networkId';
 String _channelTabId(String networkId, String name) =>
-    'channel::$networkId::$name';
-String _queryTabId(String networkId, String nick) => 'query::$networkId::$nick';
+    'channel::$networkId::${name.trim().toLowerCase()}';
+String _queryTabId(String networkId, String nick) =>
+    'query::$networkId::${nick.trim().toLowerCase()}';
 String _dccTabId(String networkId, String sessionId) =>
     'dcc::$networkId::$sessionId';

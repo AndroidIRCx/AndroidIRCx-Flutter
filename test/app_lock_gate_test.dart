@@ -37,6 +37,26 @@ class _HostState extends State<_Host> {
   }
 }
 
+class _Probe extends StatefulWidget {
+  const _Probe({required this.onDisposed});
+
+  final VoidCallback onDisposed;
+
+  @override
+  State<_Probe> createState() => _ProbeState();
+}
+
+class _ProbeState extends State<_Probe> {
+  @override
+  void dispose() {
+    widget.onDisposed();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => const Text('home content');
+}
+
 void main() {
   testWidgets('enabling app lock at runtime does not immediately lock', (
     tester,
@@ -79,5 +99,36 @@ void main() {
 
     expect(find.text('AndroidIRCX is locked'), findsOneWidget);
     expect(find.text('home content'), findsNothing);
+  });
+
+  testWidgets('re-locking keeps the child session tree mounted', (
+    tester,
+  ) async {
+    var unlockCalls = 0;
+    var disposed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppLockGate(
+          enabled: true,
+          unlock: () async {
+            unlockCalls++;
+            return true;
+          },
+          child: _Probe(onDisposed: () => disposed = true),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(unlockCalls, 1);
+    expect(find.text('home content'), findsOneWidget);
+
+    final state = tester.state(find.byType(AppLockGate)) as dynamic;
+    state.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await tester.pump();
+
+    expect(find.text('AndroidIRCX is locked'), findsOneWidget);
+    expect(disposed, isFalse);
+    expect(unlockCalls, 1);
   });
 }
