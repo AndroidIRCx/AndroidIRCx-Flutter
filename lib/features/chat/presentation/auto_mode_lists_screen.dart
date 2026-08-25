@@ -75,6 +75,7 @@ class AutoModeListsScreen extends StatelessWidget {
     UserListType.autoOp => Icons.shield_moon_outlined,
     UserListType.autoHalfOp => Icons.shield_outlined,
     UserListType.autoVoice => Icons.record_voice_over_outlined,
+    _ => Icons.rule_outlined,
   };
 }
 
@@ -134,7 +135,7 @@ class _AutoModeEntryDialogState extends State<_AutoModeEntryDialog> {
             initialValue: _type,
             decoration: const InputDecoration(labelText: 'Mode'),
             items: [
-              for (final type in UserListType.values)
+              for (final type in UserListType.autoModeTypes)
                 DropdownMenuItem(value: type, child: Text(type.label)),
             ],
             onChanged: (value) => setState(() => _type = value ?? _type),

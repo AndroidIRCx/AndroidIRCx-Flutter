@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
 
@@ -119,6 +120,9 @@ class AndroidIrcxForegroundService : Service() {
 
         builder
             .setSmallIcon(R.drawable.ic_stat_androidircx)
+            .setLargeIcon(
+                BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher),
+            )
             .setContentTitle(getString(R.string.notification_connection_title))
             .setContentText(compactText)
             .setStyle(Notification.BigTextStyle().bigText(bigText))

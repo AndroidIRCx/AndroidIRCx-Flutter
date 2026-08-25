@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:androidircx/core/app/app_version.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/dcc_session.dart';
@@ -9,6 +10,7 @@ import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/dcc/services/dcc_service.dart';
+import 'package:androidircx/features/chat/application/ban_mask_service.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/message_history_formatter.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
@@ -48,11 +50,122 @@ class ComposerAutocompleteSuggestion {
   final int tokenEnd;
 }
 
-enum ChannelUserAction { whois, query, op, deop, voice, devoice, kick, ban }
+enum ChannelUserAction {
+  whois,
+  whowas,
+  query,
+  op,
+  deop,
+  voice,
+  devoice,
+  kick,
+  ban,
+  kickBan,
+  ignoreToggle,
+  ctcpPing,
+  ctcpVersion,
+  ctcpTime,
+  dccChat,
+}
+
+enum ChannelModerationAction { kick, ban, kickBan, quiet }
+
+class IrcUserInfo {
+  const IrcUserInfo({
+    required this.nick,
+    this.ident,
+    this.host,
+    this.realName,
+    this.account,
+    this.awayMessage,
+    this.server,
+    this.serverInfo,
+    this.idleSeconds,
+    this.signedOn,
+    this.channels = const <String>[],
+    this.isRegistered = false,
+    this.isOper = false,
+    this.isSecure = false,
+    this.extra = const <String>[],
+    this.fromWhowas = false,
+  });
+
+  final String nick;
+  final String? ident;
+  final String? host;
+  final String? realName;
+  final String? account;
+  final String? awayMessage;
+  final String? server;
+  final String? serverInfo;
+  final int? idleSeconds;
+  final DateTime? signedOn;
+  final List<String> channels;
+  final bool isRegistered;
+  final bool isOper;
+  final bool isSecure;
+  final List<String> extra;
+  final bool fromWhowas;
+
+  String get userhost {
+    final user = (ident ?? '').trim();
+    final hostValue = (host ?? '').trim();
+    if (user.isEmpty && hostValue.isEmpty) {
+      return '';
+    }
+    return '${user.isEmpty ? '*' : user}@${hostValue.isEmpty ? '*' : hostValue}';
+  }
+
+  String get hostmask {
+    final uh = userhost;
+    if (uh.isEmpty) {
+      return '';
+    }
+    return '$nick!$uh';
+  }
+
+  IrcUserInfo copyWith({
+    String? nick,
+    String? ident,
+    String? host,
+    String? realName,
+    String? account,
+    String? awayMessage,
+    String? server,
+    String? serverInfo,
+    int? idleSeconds,
+    DateTime? signedOn,
+    List<String>? channels,
+    bool? isRegistered,
+    bool? isOper,
+    bool? isSecure,
+    List<String>? extra,
+    bool? fromWhowas,
+    bool clearAway = false,
+  }) {
+    return IrcUserInfo(
+      nick: nick ?? this.nick,
+      ident: ident ?? this.ident,
+      host: host ?? this.host,
+      realName: realName ?? this.realName,
+      account: account ?? this.account,
+      awayMessage: clearAway ? null : (awayMessage ?? this.awayMessage),
+      server: server ?? this.server,
+      serverInfo: serverInfo ?? this.serverInfo,
+      idleSeconds: idleSeconds ?? this.idleSeconds,
+      signedOn: signedOn ?? this.signedOn,
+      channels: channels ?? this.channels,
+      isRegistered: isRegistered ?? this.isRegistered,
+      isOper: isOper ?? this.isOper,
+      isSecure: isSecure ?? this.isSecure,
+      extra: extra ?? this.extra,
+      fromWhowas: fromWhowas ?? this.fromWhowas,
+    );
+  }
+}
 
 class ChatSessionController extends ChangeNotifier {
   static const _historyPageSize = 200;
-  static const _ctcpVersionReply = 'AndroidIRCx Flutter 1.0.0';
   static const _ctcpClientInfoReply =
       'ACTION CLIENTINFO DCC FINGER PING SOURCE TIME USERINFO VERSION';
   static const _ctcpUserInfoReply = 'AndroidIRCx Flutter user';
@@ -111,8 +224,8 @@ class ChatSessionController extends ChangeNotifier {
   final SettingsRepository _settingsRepository;
   final CommandService _commandService;
   final UserListsRepository? _userListsRepository;
-  List<UserListEntry> _autoModeEntries = const <UserListEntry>[];
-  bool _autoModeEntriesLoaded = false;
+  List<UserListEntry> _userListEntries = const <UserListEntry>[];
+  bool _userListEntriesLoaded = false;
   final int _maxReconnectAttempts;
   final Duration _reconnectBaseDelay;
   final Duration _reconnectMaxDelay;
@@ -127,6 +240,7 @@ class ChatSessionController extends ChangeNotifier {
   final Map<String, String> _nickHosts = {};
   final Map<String, String> _nickIdents = {};
   final Map<String, String> _nickAwayMessages = {};
+  final Map<String, IrcUserInfo> _userInfoByNick = {};
   final Map<String, Map<String, Set<String>>> _channelUserModes = {};
   final Map<String, ({String type, int messageCount})> _activeBatches = {};
   final Set<String> _autoHistoryRequestedChannels = <String>{};
@@ -139,6 +253,8 @@ class ChatSessionController extends ChangeNotifier {
   final StreamController<ForegroundUserNotification> _notificationController =
       StreamController<ForegroundUserNotification>.broadcast(sync: true);
   Timer? _reconnectTimer;
+  final List<Timer> _timedUnbanTimers = <Timer>[];
+  final Set<String> _blacklistEnforcements = <String>{};
   Future<void>? _startInFlight;
 
   late List<ChatTab> _tabs;
@@ -162,6 +278,8 @@ class ChatSessionController extends ChangeNotifier {
 
   List<ChatTab> get tabs => List<ChatTab>.unmodifiable(_tabs);
   String get activeTabId => _activeTabId;
+  String get channelPrefixChars => _channelPrefixChars;
+  String get nickPrefixChars => _nickPrefixChars;
   ConnectionSnapshot get connection => _connection;
   AppSettings get settings => _settings;
   List<CommandHistoryEntry> get commandHistory => _commandService.history;
@@ -368,6 +486,28 @@ class ChatSessionController extends ChangeNotifier {
     return '$users users • $modes';
   }
 
+  bool get canModerateActiveChannel {
+    if (activeTab.type != ChatTabType.channel) {
+      return false;
+    }
+    final ownModes =
+        _channelUserModes[activeTab.id]?[currentNick.trim().toLowerCase()] ??
+        const <String>{};
+    return ownModes.contains('o') ||
+        ownModes.contains('a') ||
+        ownModes.contains('q');
+  }
+
+  bool get canVoiceOrKickActiveChannel {
+    if (activeTab.type != ChatTabType.channel) {
+      return false;
+    }
+    final ownModes =
+        _channelUserModes[activeTab.id]?[currentNick.trim().toLowerCase()] ??
+        const <String>{};
+    return canModerateActiveChannel || ownModes.contains('h');
+  }
+
   List<String> get activeChannelUsers {
     final users = _channelUsers[activeTab.id];
     if (users == null) {
@@ -454,28 +594,49 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   String userDetailsForNick(String nick) {
-    final key = nick.trim().toLowerCase();
-    if (key.isEmpty) {
+    final info = userInfoForNick(nick);
+    if (info.nick.trim().isEmpty) {
       return '';
     }
 
     final details = <String>[
-      if ((_nickAccounts[key] ?? '').isNotEmpty)
-        'account: ${_nickAccounts[key]}',
-      if ((_nickRealNames[key] ?? '').isNotEmpty)
-        'realname: ${_nickRealNames[key]}',
-      if ((_nickIdents[key] ?? '').isNotEmpty ||
-          (_nickHosts[key] ?? '').isNotEmpty)
-        '${(_nickIdents[key] ?? '').isEmpty ? '*' : _nickIdents[key]}@${(_nickHosts[key] ?? '').isEmpty ? '*' : _nickHosts[key]}',
-      if ((_nickAwayMessages[key] ?? '').isNotEmpty)
-        _nickAwayMessages[key] == '__away__'
-            ? 'away'
-            : 'away: ${_nickAwayMessages[key]}',
+      if ((info.account ?? '').isNotEmpty) 'account: ${info.account}',
+      if ((info.realName ?? '').isNotEmpty) 'realname: ${info.realName}',
+      if (info.userhost.isNotEmpty) info.userhost,
+      if ((info.awayMessage ?? '').isNotEmpty)
+        info.awayMessage == '__away__' ? 'away' : 'away: ${info.awayMessage}',
       if (_activeTabId.isNotEmpty)
         if ((_channelUserPrefixFor(activeTabId, nick) ?? '').isNotEmpty)
           'mode: ${_channelUserPrefixFor(activeTabId, nick)}',
     ];
     return details.join(' • ');
+  }
+
+  IrcUserInfo userInfoForNick(String nick) {
+    final trimmed = _stripModePrefix(nick).trim();
+    final key = trimmed.toLowerCase();
+    if (key.isEmpty) {
+      return const IrcUserInfo(nick: '');
+    }
+    final cached = _userInfoByNick[key] ?? IrcUserInfo(nick: trimmed);
+    return IrcUserInfo(
+      nick: cached.nick.isEmpty ? trimmed : cached.nick,
+      account: _nickAccounts[key],
+      realName: _nickRealNames[key],
+      ident: _nickIdents[key],
+      host: _nickHosts[key],
+      awayMessage: _nickAwayMessages[key],
+      server: cached.server,
+      serverInfo: cached.serverInfo,
+      idleSeconds: cached.idleSeconds,
+      signedOn: cached.signedOn,
+      channels: cached.channels,
+      isRegistered: cached.isRegistered,
+      isOper: cached.isOper,
+      isSecure: cached.isSecure,
+      extra: cached.extra,
+      fromWhowas: cached.fromWhowas,
+    );
   }
 
   void _rememberFrameSenderState(IrcMessageFrame frame) {
@@ -586,6 +747,26 @@ class ChatSessionController extends ChangeNotifier {
         _nickAwayMessages[key] = normalized;
       }
     }
+
+    final previous = _userInfoByNick[key] ?? IrcUserInfo(nick: nick.trim());
+    _userInfoByNick[key] = IrcUserInfo(
+      nick: previous.nick.isEmpty ? nick.trim() : previous.nick,
+      account: _nickAccounts[key],
+      realName: _nickRealNames[key],
+      ident: _nickIdents[key],
+      host: _nickHosts[key],
+      awayMessage: _nickAwayMessages[key],
+      server: previous.server,
+      serverInfo: previous.serverInfo,
+      idleSeconds: previous.idleSeconds,
+      signedOn: previous.signedOn,
+      channels: previous.channels,
+      isRegistered: previous.isRegistered,
+      isOper: previous.isOper,
+      isSecure: previous.isSecure,
+      extra: previous.extra,
+      fromWhowas: previous.fromWhowas,
+    );
   }
 
   ({String? ident, String? host}) _senderIdentity(IrcMessageFrame frame) {
@@ -697,50 +878,97 @@ class ChatSessionController extends ChangeNotifier {
     users.putIfAbsent(key, () => <String>{}).addAll(modes);
   }
 
+  /// All locally managed user-list rules for this session.
+  List<UserListEntry> get userListEntries =>
+      List<UserListEntry>.unmodifiable(_userListEntries);
+
   /// Automatic-mode rules (auto-op / auto-halfop / auto-voice) applied when a
   /// matching user joins a channel where we hold the needed privilege.
-  List<UserListEntry> get autoModeEntries =>
-      List<UserListEntry>.unmodifiable(_autoModeEntries);
+  List<UserListEntry> get autoModeEntries => List<UserListEntry>.unmodifiable(
+    _userListEntries.where((entry) => entry.type.isAutoMode),
+  );
+
+  List<UserListEntry> userListEntriesForType(UserListType type) =>
+      List<UserListEntry>.unmodifiable(
+        _userListEntries.where((entry) => entry.type == type),
+      );
+
+  List<UserListEntry> get blacklistEntries =>
+      userListEntriesForType(UserListType.blacklist);
 
   Future<void> _loadAutoModeEntries() async {
-    if (_autoModeEntriesLoaded) {
+    if (_userListEntriesLoaded) {
       return;
     }
     final repository = _userListsRepository;
     if (repository != null) {
       try {
-        _autoModeEntries = await repository.loadAll();
+        _userListEntries = await repository.loadAll();
       } catch (_) {
-        _autoModeEntries = const <UserListEntry>[];
+        _userListEntries = const <UserListEntry>[];
       }
     }
-    _autoModeEntriesLoaded = true;
+    _userListEntriesLoaded = true;
   }
 
-  Future<void> addAutoModeEntry(UserListEntry entry) async {
+  Future<void> addUserListEntry(UserListEntry entry) async {
     final repository = _userListsRepository;
     if (repository != null) {
-      _autoModeEntries = await repository.add(entry);
+      _userListEntries = await repository.add(entry);
     } else {
-      _autoModeEntries = <UserListEntry>[
-        ..._autoModeEntries.where((e) => e.key != entry.key),
+      _userListEntries = <UserListEntry>[
+        ..._userListEntries.where((e) => e.key != entry.key),
         entry,
       ];
     }
-    _autoModeEntriesLoaded = true;
+    _userListEntriesLoaded = true;
+    await _applyUserListSideEffect(entry, add: true);
     notifyListeners();
   }
 
-  Future<void> removeAutoModeEntry(UserListEntry entry) async {
+  Future<void> removeUserListEntry(UserListEntry entry) async {
     final repository = _userListsRepository;
     if (repository != null) {
-      _autoModeEntries = await repository.remove(entry);
+      _userListEntries = await repository.remove(entry);
     } else {
-      _autoModeEntries = _autoModeEntries
+      _userListEntries = _userListEntries
           .where((e) => e.key != entry.key)
           .toList();
     }
+    await _applyUserListSideEffect(entry, add: false);
     notifyListeners();
+  }
+
+  Future<void> addAutoModeEntry(UserListEntry entry) {
+    assert(entry.type.isAutoMode);
+    return addUserListEntry(entry);
+  }
+
+  Future<void> removeAutoModeEntry(UserListEntry entry) {
+    return removeUserListEntry(entry);
+  }
+
+  Future<void> _applyUserListSideEffect(
+    UserListEntry entry, {
+    required bool add,
+  }) async {
+    if (entry.type != UserListType.notify) {
+      return;
+    }
+    final nick = _bareNickForMonitor(entry.mask);
+    if (nick == null) {
+      return;
+    }
+    await _ircService.sendRaw('MONITOR ${add ? '+' : '-'} $nick');
+  }
+
+  String? _bareNickForMonitor(String mask) {
+    final trimmed = mask.trim();
+    if (trimmed.isEmpty || trimmed.contains('*') || trimmed.contains('?')) {
+      return null;
+    }
+    final nick = trimmed.split('!').first.split('@').first.trim();
+    return nick.isEmpty ? null : nick;
   }
 
   /// When [nick] joins [channel], grants the highest auto-mode we are entitled
@@ -753,7 +981,7 @@ class ChatSessionController extends ChangeNotifier {
     String? ident,
     String? host,
   }) {
-    if (_autoModeEntries.isEmpty || _isSelfNick(nick)) {
+    if (autoModeEntries.isEmpty || _isSelfNick(nick)) {
       return;
     }
     final ownModes =
@@ -764,12 +992,8 @@ class ChatSessionController extends ChangeNotifier {
         ownModes.contains('q') ||
         ownModes.contains('a');
     final hasHalfOp = ownModes.contains('h');
-    for (final type in const [
-      UserListType.autoOp,
-      UserListType.autoHalfOp,
-      UserListType.autoVoice,
-    ]) {
-      final matched = _autoModeEntries.any(
+    for (final type in UserListType.autoModeTypes) {
+      final matched = autoModeEntries.any(
         (entry) =>
             entry.type == type &&
             entry.matches(
@@ -786,9 +1010,12 @@ class ChatSessionController extends ChangeNotifier {
       final canApply = switch (type) {
         UserListType.autoOp || UserListType.autoHalfOp => hasOp,
         UserListType.autoVoice => hasOp || hasHalfOp,
+        _ => false,
       };
       if (canApply) {
-        unawaited(_ircService.sendRaw('MODE $channel +${type.modeChar} $nick'));
+        unawaited(
+          _ircService.sendRaw('MODE $channel +${type.modeChar!} $nick'),
+        );
         return;
       }
     }
@@ -1536,6 +1763,8 @@ class ChatSessionController extends ChangeNotifier {
     switch (action) {
       case ChannelUserAction.whois:
         await handleComposerSubmit('/whois $bare');
+      case ChannelUserAction.whowas:
+        await handleComposerSubmit('/whowas $bare');
       case ChannelUserAction.query:
         await handleComposerSubmit('/query $bare');
       case ChannelUserAction.op:
@@ -1550,6 +1779,108 @@ class ChatSessionController extends ChangeNotifier {
         await handleComposerSubmit('/kick $bare');
       case ChannelUserAction.ban:
         await handleComposerSubmit('/ban $bare');
+      case ChannelUserAction.kickBan:
+        await handleComposerSubmit('/kickban $bare');
+      case ChannelUserAction.ignoreToggle:
+        if (_ignoreMasks.contains(bare.toLowerCase())) {
+          await handleComposerSubmit('/unignore $bare');
+        } else {
+          await handleComposerSubmit('/ignore $bare');
+        }
+      case ChannelUserAction.ctcpPing:
+        await handleComposerSubmit(
+          '/ctcp $bare ping ${DateTime.now().millisecondsSinceEpoch}',
+        );
+      case ChannelUserAction.ctcpVersion:
+        await handleComposerSubmit('/ctcp $bare version');
+      case ChannelUserAction.ctcpTime:
+        await handleComposerSubmit('/ctcp $bare time');
+      case ChannelUserAction.dccChat:
+        await handleComposerSubmit('/dccchat $bare');
+    }
+  }
+
+  String banMaskPreviewForNick(String nick, int banMaskType) {
+    final identity = _banIdentityForNickOrMask(nick, banMaskType);
+    return identity.mask;
+  }
+
+  Future<void> performChannelModerationAction({
+    required String nick,
+    required ChannelModerationAction action,
+    String? reason,
+    int banMaskType = 10,
+    Duration? timedRemoval,
+  }) async {
+    if (activeTab.type != ChatTabType.channel) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'Moderation actions require an active channel tab.',
+        kind: IrcMessageKind.error,
+      );
+      notifyListeners();
+      return;
+    }
+
+    final channel = activeTab.name;
+    final bare = _stripModePrefix(nick).trim();
+    if (bare.isEmpty) {
+      return;
+    }
+    final cleanReason = (reason ?? '').trim();
+
+    switch (action) {
+      case ChannelModerationAction.kick:
+        await _ircService.sendKick(
+          channel: channel,
+          nick: bare,
+          reason: cleanReason.isEmpty ? null : cleanReason,
+        );
+      case ChannelModerationAction.ban:
+        final mask = _banIdentityForNickOrMask(bare, banMaskType).mask;
+        await _ircService.sendChannelMode(
+          channel: channel,
+          mode: '+b',
+          target: mask,
+        );
+        _scheduleTimedModeRemoval(
+          channel: channel,
+          mode: 'b',
+          mask: mask,
+          duration: timedRemoval,
+        );
+      case ChannelModerationAction.kickBan:
+        final mask = _banIdentityForNickOrMask(bare, banMaskType).mask;
+        await _ircService.sendChannelMode(
+          channel: channel,
+          mode: '+b',
+          target: mask,
+        );
+        await _ircService.sendKick(
+          channel: channel,
+          nick: bare,
+          reason: cleanReason.isEmpty ? null : cleanReason,
+        );
+        _scheduleTimedModeRemoval(
+          channel: channel,
+          mode: 'b',
+          mask: mask,
+          duration: timedRemoval,
+        );
+      case ChannelModerationAction.quiet:
+        final mask = _banIdentityForNickOrMask(bare, banMaskType).mask;
+        await _ircService.sendChannelMode(
+          channel: channel,
+          mode: '+q',
+          target: mask,
+        );
+        _scheduleTimedModeRemoval(
+          channel: channel,
+          mode: 'q',
+          mask: mask,
+          duration: timedRemoval,
+        );
     }
   }
 
@@ -2708,6 +3039,42 @@ class ChatSessionController extends ChangeNotifier {
       case 'autolists':
         _handleAutoListCommand();
         return;
+      case 'notify':
+        await _handleUserListCommand(UserListType.notify, rest, remove: false);
+        return;
+      case 'unnotify':
+        await _handleUserListCommand(UserListType.notify, rest, remove: true);
+        return;
+      case 'protect':
+        await _handleUserListCommand(
+          UserListType.protectedUser,
+          rest,
+          remove: false,
+        );
+        return;
+      case 'unprotect':
+        await _handleUserListCommand(
+          UserListType.protectedUser,
+          rest,
+          remove: true,
+        );
+        return;
+      case 'otherlist':
+        await _handleUserListCommand(UserListType.other, rest, remove: false);
+        return;
+      case 'unotherlist':
+        await _handleUserListCommand(UserListType.other, rest, remove: true);
+        return;
+      case 'blacklist':
+        await _handleBlacklistCommand(rest, remove: false);
+        return;
+      case 'unblacklist':
+        await _handleBlacklistCommand(rest, remove: true);
+        return;
+      case 'userlist':
+      case 'userlists':
+        _handleUserListReport(rest);
+        return;
       default:
         await _ircService.sendRaw(commandLine);
         return;
@@ -2748,7 +3115,7 @@ class ChatSessionController extends ChangeNotifier {
         type: type,
         mask: mask,
       ).normalizedMask.toLowerCase();
-      final matches = _autoModeEntries
+      final matches = autoModeEntries
           .where(
             (entry) =>
                 entry.type == type &&
@@ -2789,7 +3156,7 @@ class ChatSessionController extends ChangeNotifier {
   }
 
   void _handleAutoListCommand() {
-    if (_autoModeEntries.isEmpty) {
+    if (autoModeEntries.isEmpty) {
       _appendMessage(
         tabId: activeTab.id,
         sender: '*',
@@ -2798,7 +3165,7 @@ class ChatSessionController extends ChangeNotifier {
       );
       return;
     }
-    for (final entry in _autoModeEntries) {
+    for (final entry in autoModeEntries) {
       final scope = entry.channels.isEmpty
           ? 'all channels'
           : entry.channels.join(', ');
@@ -2809,6 +3176,152 @@ class ChatSessionController extends ChangeNotifier {
         kind: IrcMessageKind.system,
       );
     }
+  }
+
+  Future<void> _handleUserListCommand(
+    UserListType type,
+    String rest, {
+    required bool remove,
+  }) async {
+    final tokens = rest
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((token) => token.isNotEmpty)
+        .toList();
+    final mask = tokens.isEmpty ? '' : tokens.first;
+    if (mask.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: 'error',
+        content: 'Usage: /${remove ? 'un' : ''}${type.id} <nick|mask>',
+        kind: IrcMessageKind.error,
+      );
+      notifyListeners();
+      return;
+    }
+
+    if (remove) {
+      final normalized = UserListEntry(
+        type: type,
+        mask: mask,
+      ).normalizedMask.toLowerCase();
+      final matches = userListEntriesForType(type)
+          .where(
+            (entry) =>
+                entry.normalizedMask.toLowerCase() == normalized &&
+                (entry.network == null || entry.network == network.id),
+          )
+          .toList();
+      for (final entry in matches) {
+        await removeUserListEntry(entry);
+      }
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: matches.isEmpty
+            ? '$mask was not on ${type.label}.'
+            : 'Removed $mask from ${type.label}.',
+        kind: IrcMessageKind.system,
+      );
+      return;
+    }
+
+    await addUserListEntry(
+      UserListEntry(type: type, mask: mask, network: network.id),
+    );
+    _appendMessage(
+      tabId: activeTab.id,
+      sender: '*',
+      content: 'Added $mask to ${type.label}.',
+      kind: IrcMessageKind.system,
+    );
+  }
+
+  Future<void> _handleBlacklistCommand(
+    String rest, {
+    required bool remove,
+  }) async {
+    final tokens = rest
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((token) => token.isNotEmpty)
+        .toList();
+    if (tokens.isEmpty) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: remove ? 'error' : '*',
+        content: remove
+            ? 'Usage: /unblacklist <nick|mask>'
+            : _formatUserListReport(UserListType.blacklist),
+        kind: remove ? IrcMessageKind.error : IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+    final mask = tokens.first;
+    if (remove) {
+      await _handleUserListCommand(UserListType.blacklist, mask, remove: true);
+      return;
+    }
+
+    final maybeAction = tokens.length > 1
+        ? BlacklistAction.fromId(tokens[1].toLowerCase())
+        : null;
+    final reasonStart = maybeAction == null ? 1 : 2;
+    final reason = tokens.length > reasonStart
+        ? tokens.skip(reasonStart).join(' ')
+        : null;
+    await addUserListEntry(
+      UserListEntry(
+        type: UserListType.blacklist,
+        mask: mask,
+        network: network.id,
+        blacklistAction: maybeAction ?? BlacklistAction.ignore,
+        reason: reason,
+      ),
+    );
+    _appendMessage(
+      tabId: activeTab.id,
+      sender: '*',
+      content:
+          'Added $mask to Blacklist (${(maybeAction ?? BlacklistAction.ignore).label}).',
+      kind: IrcMessageKind.system,
+    );
+  }
+
+  void _handleUserListReport(String rest) {
+    final requested = rest.trim();
+    if (requested.isNotEmpty) {
+      final type = UserListType.fromId(requested);
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: type == null ? 'error' : '*',
+        content: type == null
+            ? 'Unknown user list: $requested'
+            : _formatUserListReport(type),
+        kind: type == null ? IrcMessageKind.error : IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+
+    for (final type in UserListType.managementTypes) {
+      _appendMessage(
+        tabId: activeTab.id,
+        sender: '*',
+        content: _formatUserListReport(type),
+        kind: IrcMessageKind.system,
+      );
+    }
+    notifyListeners();
+  }
+
+  String _formatUserListReport(UserListType type) {
+    final entries = userListEntriesForType(type);
+    if (entries.isEmpty) {
+      return '${type.label}: empty';
+    }
+    return '${type.label}: ${entries.map((entry) => entry.mask).join(', ')}';
   }
 
   void _handleHelpCommand(String rest) {
@@ -3089,6 +3602,173 @@ class ChatSessionController extends ChangeNotifier {
       }
     }
     return false;
+  }
+
+  bool _enforceBlacklist(IrcMessageFrame frame, String target) {
+    if (blacklistEntries.isEmpty || _isSelfEcho(frame.senderNick)) {
+      return false;
+    }
+    final parsedPrefix = _parseHostmask(frame.prefix ?? '');
+    final nick = frame.senderNick ?? parsedPrefix?.nick;
+    if (nick == null || nick.trim().isEmpty) {
+      return false;
+    }
+    final identity = _senderIdentity(frame);
+    final ident = identity.ident ?? parsedPrefix?.ident;
+    final host = identity.host ?? parsedPrefix?.host;
+    final channel = _isChannelName(target) ? target : '';
+
+    for (final entry in blacklistEntries) {
+      if (!entry.matches(
+        nick: nick,
+        ident: ident,
+        host: host,
+        channel: channel,
+        networkId: network.id,
+      )) {
+        continue;
+      }
+      _runBlacklistAction(
+        entry: entry,
+        nick: nick,
+        userhost: '${ident ?? '*'}@${host ?? '*'}',
+        hostmask: frame.prefix ?? '$nick!${ident ?? '*'}@${host ?? '*'}',
+        channel: channel,
+      );
+      return true;
+    }
+    return false;
+  }
+
+  void _runBlacklistAction({
+    required UserListEntry entry,
+    required String nick,
+    required String userhost,
+    required String hostmask,
+    required String channel,
+  }) {
+    final action = entry.effectiveBlacklistAction;
+    final key = '${entry.key}|$channel|${nick.toLowerCase()}|${action.id}';
+    final firstHit = _blacklistEnforcements.add(key);
+    if (!firstHit) {
+      return;
+    }
+
+    final targetTabId = channel.isEmpty
+        ? _serverTabId(network.id)
+        : _ensureChannelTab(channel).id;
+    final reason = (entry.reason ?? 'Blacklisted').trim();
+    final mask = entry.normalizedMask;
+
+    switch (action) {
+      case BlacklistAction.ignore:
+        break;
+      case BlacklistAction.ban:
+        if (channel.isNotEmpty) {
+          unawaited(
+            _ircService.sendChannelMode(
+              channel: channel,
+              mode: '+b',
+              target: mask,
+            ),
+          );
+          _scheduleTimedModeRemoval(
+            channel: channel,
+            mode: 'b',
+            mask: mask,
+            duration: entry.duration,
+          );
+        }
+      case BlacklistAction.kickBan:
+        if (channel.isNotEmpty) {
+          unawaited(
+            _ircService.sendChannelMode(
+              channel: channel,
+              mode: '+b',
+              target: mask,
+            ),
+          );
+          unawaited(
+            _ircService.sendKick(channel: channel, nick: nick, reason: reason),
+          );
+          _scheduleTimedModeRemoval(
+            channel: channel,
+            mode: 'b',
+            mask: mask,
+            duration: entry.duration,
+          );
+        }
+      case BlacklistAction.quiet:
+        if (channel.isNotEmpty) {
+          unawaited(
+            _ircService.sendChannelMode(
+              channel: channel,
+              mode: '+q',
+              target: mask,
+            ),
+          );
+          _scheduleTimedModeRemoval(
+            channel: channel,
+            mode: 'q',
+            mask: mask,
+            duration: entry.duration,
+          );
+        }
+      case BlacklistAction.custom:
+        final raw = _formatBlacklistRawTemplate(
+          entry.customRaw,
+          nick: nick,
+          userhost: userhost,
+          hostmask: hostmask,
+          mask: mask,
+          channel: channel,
+          reason: reason,
+          duration: entry.duration,
+        );
+        if (raw != null) {
+          unawaited(_ircService.sendRaw(raw));
+        }
+    }
+
+    _appendMessage(
+      tabId: targetTabId,
+      sender: '*',
+      content:
+          'Blacklist ${action.label.toLowerCase()} matched $nick ($mask)${reason.isEmpty ? '' : ': $reason'}',
+      kind: IrcMessageKind.system,
+    );
+  }
+
+  String? _formatBlacklistRawTemplate(
+    String? template, {
+    required String nick,
+    required String userhost,
+    required String hostmask,
+    required String mask,
+    required String channel,
+    required String reason,
+    Duration? duration,
+  }) {
+    var raw = (template ?? '').trim();
+    if (raw.isEmpty) {
+      return null;
+    }
+    final replacements = <String, String>{
+      '{nick}': nick,
+      '{user}': userhost.split('@').first,
+      '{host}': userhost.contains('@') ? userhost.split('@').last : '',
+      '{userhost}': userhost,
+      '{hostmask}': hostmask,
+      '{mask}': mask,
+      '{usermask}': mask,
+      '{channel}': channel,
+      '{reason}': reason,
+      '{duration}': duration == null ? '' : '${duration.inMinutes}m',
+    };
+    for (final entry in replacements.entries) {
+      raw = raw.replaceAll(entry.key, entry.value);
+    }
+    return raw;
   }
 
   static bool _matchesIgnoreMask(String mask, {String? prefix, String? nick}) {
@@ -3556,6 +4236,14 @@ class ChatSessionController extends ChangeNotifier {
           kind: IrcMessageKind.system,
         );
       case '311':
+        if (frame.params.length > 3) {
+          _rememberNickState(
+            frame.params[1],
+            ident: frame.params[2],
+            host: frame.params[3],
+            realName: frame.trailing,
+          );
+        }
         _appendWhoisMessage(
           frame,
           'WHOIS: ${frame.params.length > 3 ? '${frame.params[1]} is ${frame.params[2]}@${frame.params[3]}' : frame.raw}',
@@ -3575,11 +4263,23 @@ class ChatSessionController extends ChangeNotifier {
           kind: IrcMessageKind.system,
         );
       case '312':
+        if (frame.params.length > 2) {
+          _mergeUserInfo(
+            frame.params[1],
+            (info) => info.copyWith(
+              server: frame.params[2],
+              serverInfo: frame.trailing,
+            ),
+          );
+        }
         _appendWhoisMessage(
           frame,
           'WHOIS server: ${frame.params.length > 2 ? '${frame.params[1]} on ${frame.params[2]} ${frame.trailing ?? ''}'.trim() : frame.raw}',
         );
       case '301':
+        if (frame.params.length > 1) {
+          _rememberNickState(frame.params[1], awayMessage: frame.trailing);
+        }
         _appendWhoisMessage(
           frame,
           frame.trailing == null
@@ -3588,12 +4288,56 @@ class ChatSessionController extends ChangeNotifier {
                     .trim(),
         );
       case '307':
+        if (frame.params.length > 1) {
+          _mergeUserInfo(
+            frame.params[1],
+            (info) => info.copyWith(isRegistered: true),
+          );
+        }
+        _appendWhoisMessage(
+          frame,
+          frame.trailing ?? frame.params.skip(1).join(' '),
+        );
       case '313':
+        if (frame.params.length > 1) {
+          _mergeUserInfo(
+            frame.params[1],
+            (info) => info.copyWith(isOper: true),
+          );
+        }
+        _appendWhoisMessage(
+          frame,
+          frame.trailing ?? frame.params.skip(1).join(' '),
+        );
       case '330':
+        if (frame.params.length > 2) {
+          _rememberNickState(frame.params[1], account: frame.params[2]);
+          _mergeUserInfo(
+            frame.params[1],
+            (info) => info.copyWith(isRegistered: true),
+          );
+        }
+        _appendWhoisMessage(
+          frame,
+          frame.trailing ?? frame.params.skip(1).join(' '),
+        );
       case '338':
       case '378':
       case '379':
+        if (frame.params.length > 1) {
+          _appendUserInfoExtra(frame.params[1], frame.trailing);
+        }
+        _appendWhoisMessage(
+          frame,
+          frame.trailing ?? frame.params.skip(1).join(' '),
+        );
       case '671':
+        if (frame.params.length > 1) {
+          _mergeUserInfo(
+            frame.params[1],
+            (info) => info.copyWith(isSecure: true),
+          );
+        }
         _appendWhoisMessage(
           frame,
           frame.trailing ?? frame.params.skip(1).join(' '),
@@ -3608,6 +4352,24 @@ class ChatSessionController extends ChangeNotifier {
       case '769':
         _handleMetadataFrame(frame);
       case '317':
+        if (frame.params.length > 2) {
+          final idle = int.tryParse(frame.params[2]);
+          final signedOnSeconds = frame.params.length > 3
+              ? int.tryParse(frame.params[3])
+              : null;
+          _mergeUserInfo(
+            frame.params[1],
+            (info) => info.copyWith(
+              idleSeconds: idle,
+              signedOn: signedOnSeconds == null
+                  ? null
+                  : DateTime.fromMillisecondsSinceEpoch(
+                      signedOnSeconds * 1000,
+                      isUtc: true,
+                    ).toLocal(),
+            ),
+          );
+        }
         _appendWhoisMessage(
           frame,
           'WHOIS idle: ${frame.params.length > 2 ? '${frame.params[1]} idle ${frame.params[2]}s' : frame.raw}',
@@ -3621,6 +4383,14 @@ class ChatSessionController extends ChangeNotifier {
           kind: IrcMessageKind.system,
         );
       case '319':
+        if (frame.params.length > 1) {
+          _mergeUserInfo(
+            frame.params[1],
+            (info) => info.copyWith(
+              channels: _parseWhoisChannels(frame.trailing ?? ''),
+            ),
+          );
+        }
         _appendWhoisMessage(
           frame,
           'WHOIS channels: ${frame.params.length > 1 ? '${frame.params[1]} ${frame.trailing ?? ''}'.trim() : frame.raw}',
@@ -3632,6 +4402,18 @@ class ChatSessionController extends ChangeNotifier {
               .trim(),
         );
       case '314':
+        if (frame.params.length > 3) {
+          _rememberNickState(
+            frame.params[1],
+            ident: frame.params[2],
+            host: frame.params[3],
+            realName: frame.trailing,
+          );
+          _mergeUserInfo(
+            frame.params[1],
+            (info) => info.copyWith(fromWhowas: true),
+          );
+        }
         _appendWhoisMessage(
           frame,
           'WHOWAS: ${frame.params.length > 3 ? '${frame.params[1]} was ${frame.params[2]}@${frame.params[3]}' : frame.raw}',
@@ -4059,8 +4841,12 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    _rememberFrameSenderState(frame);
     final contextualTarget = _messageContextTarget(target, frame.tags);
+    if (_enforceBlacklist(frame, contextualTarget)) {
+      return;
+    }
+
+    _rememberFrameSenderState(frame);
     _rememberContextualChannelUser(contextualTarget, frame.senderNick);
 
     final ctcp = parseCtcp(content);
@@ -4098,8 +4884,12 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    _rememberFrameSenderState(frame);
     final contextualTarget = _messageContextTarget(target, frame.tags);
+    if (_enforceBlacklist(frame, contextualTarget)) {
+      return;
+    }
+
+    _rememberFrameSenderState(frame);
     _rememberContextualChannelUser(contextualTarget, frame.senderNick);
 
     final intentTag = frame.tags['draft/intent']?.toUpperCase();
@@ -5043,7 +5833,7 @@ class ChatSessionController extends ChangeNotifier {
         await _ircService.sendCtcpReply(
           target: from,
           command: 'VERSION',
-          args: _ctcpVersionReply,
+          args: ctcpVersionReply,
         );
       case 'TIME':
         await _ircService.sendCtcpReply(
@@ -5937,6 +6727,43 @@ class ChatSessionController extends ChangeNotifier {
     return values.first;
   }
 
+  void _mergeUserInfo(String nick, IrcUserInfo Function(IrcUserInfo) update) {
+    final normalized = _stripModePrefix(nick).trim();
+    final key = normalized.toLowerCase();
+    if (key.isEmpty) {
+      return;
+    }
+    _userInfoByNick[key] = update(userInfoForNick(normalized));
+  }
+
+  void _appendUserInfoExtra(String nick, String? value) {
+    final text = (value ?? '').trim();
+    if (text.isEmpty) {
+      return;
+    }
+    _mergeUserInfo(nick, (info) {
+      if (info.extra.contains(text)) {
+        return info;
+      }
+      return info.copyWith(extra: <String>[...info.extra, text]);
+    });
+  }
+
+  List<String> _parseWhoisChannels(String value) {
+    final channels = <String>[];
+    for (final raw in value.split(RegExp(r'\s+'))) {
+      var token = raw.trim();
+      while (token.isNotEmpty && !_isChannelName(token)) {
+        token = token.substring(1);
+      }
+      if (token.isNotEmpty && _isChannelName(token)) {
+        channels.add(token);
+      }
+    }
+    channels.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return channels;
+  }
+
   void _appendWhoisMessage(IrcMessageFrame frame, String content) {
     final nick = frame.params.length > 1 ? frame.params[1] : null;
     final targetTabId = nick == null
@@ -6270,6 +7097,83 @@ class ChatSessionController extends ChangeNotifier {
 
   String _banMaskForNickOrMask(String value) {
     return value.contains('!') || value.contains('@') ? value : '$value!*@*';
+  }
+
+  ({String nick, String mask}) _banIdentityForNickOrMask(
+    String value,
+    int banMaskType,
+  ) {
+    final trimmed = _stripModePrefix(value).trim();
+    final parsed = _parseHostmask(trimmed);
+    if (parsed != null) {
+      return (
+        nick: parsed.nick,
+        mask: const BanMaskService().generateBanMask(
+          nick: parsed.nick,
+          ident: parsed.ident,
+          host: parsed.host,
+          type: banMaskType,
+        ),
+      );
+    }
+
+    final info = userInfoForNick(trimmed);
+    final ident = (info.ident ?? '').trim();
+    final host = (info.host ?? '').trim();
+    final effectiveType = ident.isEmpty || host.isEmpty ? 10 : banMaskType;
+    return (
+      nick: trimmed,
+      mask: const BanMaskService().generateBanMask(
+        nick: trimmed,
+        ident: ident.isEmpty ? '*' : ident,
+        host: host.isEmpty ? '*' : host,
+        type: effectiveType,
+      ),
+    );
+  }
+
+  ({String nick, String ident, String host})? _parseHostmask(String value) {
+    final bang = value.indexOf('!');
+    final at = value.indexOf('@');
+    if (bang <= 0 || at <= bang + 1 || at >= value.length - 1) {
+      return null;
+    }
+    return (
+      nick: value.substring(0, bang),
+      ident: value.substring(bang + 1, at),
+      host: value.substring(at + 1),
+    );
+  }
+
+  void _scheduleTimedModeRemoval({
+    required String channel,
+    required String mode,
+    required String mask,
+    Duration? duration,
+  }) {
+    if (duration == null || duration <= Duration.zero) {
+      return;
+    }
+    late final Timer timer;
+    timer = Timer(duration, () {
+      _timedUnbanTimers.remove(timer);
+      unawaited(
+        _ircService.sendChannelMode(
+          channel: channel,
+          mode: '-$mode',
+          target: mask,
+        ),
+      );
+      _appendMessage(
+        tabId: _ensureChannelTab(channel).id,
+        sender: '*',
+        content: 'Timed ${mode == 'q' ? 'quiet' : 'ban'} removed: $mask',
+        kind: IrcMessageKind.system,
+      );
+      unawaited(_persistState());
+      notifyListeners();
+    });
+    _timedUnbanTimers.add(timer);
   }
 
   bool _isChannelName(String value) {
@@ -6666,6 +7570,10 @@ class ChatSessionController extends ChangeNotifier {
       timer.cancel();
     }
     _commandTimers.clear();
+    for (final timer in _timedUnbanTimers) {
+      timer.cancel();
+    }
+    _timedUnbanTimers.clear();
     _autoAwayTimer?.cancel();
     _lagTimer?.cancel();
     for (final subscription in _subscriptions) {

@@ -19,10 +19,14 @@ void main() {
     });
 
     test('wildcard host mask', () {
-      expect(maskMatches('*!*@*.example.net', 'bob!id@host.example.net'),
-          isTrue);
-      expect(maskMatches('*!*@*.example.net', 'bob!id@host.other.org'),
-          isFalse);
+      expect(
+        maskMatches('*!*@*.example.net', 'bob!id@host.example.net'),
+        isTrue,
+      );
+      expect(
+        maskMatches('*!*@*.example.net', 'bob!id@host.other.org'),
+        isFalse,
+      );
     });
 
     test('is case-insensitive', () {
@@ -94,12 +98,8 @@ void main() {
 
     test('remove by identity', () async {
       final r = repo();
-      await r.add(
-        const UserListEntry(type: UserListType.autoOp, mask: 'a'),
-      );
-      await r.add(
-        const UserListEntry(type: UserListType.autoVoice, mask: 'b'),
-      );
+      await r.add(const UserListEntry(type: UserListType.autoOp, mask: 'a'));
+      await r.add(const UserListEntry(type: UserListType.autoVoice, mask: 'b'));
       await r.remove(const UserListEntry(type: UserListType.autoOp, mask: 'a'));
       final loaded = await r.loadAll();
       expect(loaded, hasLength(1));
@@ -118,6 +118,25 @@ void main() {
       expect(decoded!.type, UserListType.autoHalfOp);
       expect(decoded.channels, ['#a', '#b']);
       expect(decoded.network, 'dbase');
+    });
+
+    test('json round-trip preserves blacklist action metadata', () {
+      const e = UserListEntry(
+        type: UserListType.blacklist,
+        mask: 'bad!*@evil',
+        network: 'dbase',
+        blacklistAction: BlacklistAction.custom,
+        reason: 'spam',
+        duration: Duration(minutes: 30),
+        customRaw: 'GLINE {hostmask} {duration} :{reason}',
+      );
+      final decoded = UserListEntry.fromJson(e.toJson());
+      expect(decoded, isNotNull);
+      expect(decoded!.type, UserListType.blacklist);
+      expect(decoded.effectiveBlacklistAction, BlacklistAction.custom);
+      expect(decoded.reason, 'spam');
+      expect(decoded.duration, const Duration(minutes: 30));
+      expect(decoded.customRaw, 'GLINE {hostmask} {duration} :{reason}');
     });
   });
 }

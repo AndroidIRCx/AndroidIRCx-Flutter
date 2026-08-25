@@ -1,27 +1,74 @@
 import 'dart:convert';
 
-/// The kinds of automatic-mode user lists. Each grants a channel mode to a
-/// matching user when they join a channel where we hold the needed privilege.
+/// The kinds of user lists supported by the IRC client.
+///
+/// Auto-mode entries grant channel modes on join. Notify/protected/other are
+/// local watch lists. Blacklist entries may also carry an enforcement action.
 enum UserListType {
   autoOp('autoop', 'o', 'Auto-op'),
   autoHalfOp('autohalfop', 'h', 'Auto-halfop'),
-  autoVoice('autovoice', 'v', 'Auto-voice');
+  autoVoice('autovoice', 'v', 'Auto-voice'),
+  notify('notify', null, 'Notify'),
+  protectedUser('protected', null, 'Protected'),
+  other('other', null, 'Other'),
+  blacklist('blacklist', null, 'Blacklist');
 
   const UserListType(this.id, this.modeChar, this.label);
 
   /// Stable storage id.
   final String id;
 
-  /// The channel mode letter this list grants (`o`, `h`, `v`).
-  final String modeChar;
+  /// The channel mode letter this list grants (`o`, `h`, `v`) for auto-mode
+  /// entries. Null for local/watch-list-only entries.
+  final String? modeChar;
 
   /// Human-readable label.
   final String label;
+
+  bool get isAutoMode => modeChar != null;
+
+  static const List<UserListType> autoModeTypes = <UserListType>[
+    autoOp,
+    autoHalfOp,
+    autoVoice,
+  ];
+
+  static const List<UserListType> managementTypes = <UserListType>[
+    autoOp,
+    autoHalfOp,
+    autoVoice,
+    notify,
+    protectedUser,
+    other,
+    blacklist,
+  ];
 
   static UserListType? fromId(String id) {
     for (final type in UserListType.values) {
       if (type.id == id) {
         return type;
+      }
+    }
+    return null;
+  }
+}
+
+enum BlacklistAction {
+  ignore('ignore', 'Ignore'),
+  ban('ban', 'Ban'),
+  kickBan('kick_ban', 'Kick + ban'),
+  quiet('quiet', 'Quiet'),
+  custom('custom', 'Custom raw');
+
+  const BlacklistAction(this.id, this.label);
+
+  final String id;
+  final String label;
+
+  static BlacklistAction? fromId(String id) {
+    for (final action in BlacklistAction.values) {
+      if (action.id == id) {
+        return action;
       }
     }
     return null;
@@ -37,6 +84,10 @@ class UserListEntry {
     required this.mask,
     this.channels = const <String>[],
     this.network,
+    this.blacklistAction,
+    this.reason,
+    this.duration,
+    this.customRaw,
   });
 
   final UserListType type;
@@ -50,6 +101,25 @@ class UserListEntry {
 
   /// Network id this rule applies to; null means all networks.
   final String? network;
+
+  /// Enforcement action for [UserListType.blacklist]. Defaults to ignore when
+  /// absent.
+  final BlacklistAction? blacklistAction;
+
+  /// Optional reason used for blacklist and kick/ban flows.
+  final String? reason;
+
+  /// Optional action duration. For moderation actions this is used as timed
+  /// unban/unquiet duration; for custom raw it feeds the `{duration}` token.
+  final Duration? duration;
+
+  /// Custom raw IRC template for [BlacklistAction.custom].
+  final String? customRaw;
+
+  BlacklistAction get effectiveBlacklistAction =>
+      blacklistAction ?? BlacklistAction.ignore;
+
+  bool get isBlacklist => type == UserListType.blacklist;
 
   /// Normalizes [mask] to full `nick!user@host` form for matching.
   String get normalizedMask {
@@ -95,13 +165,27 @@ class UserListEntry {
     String? mask,
     List<String>? channels,
     String? network,
+    BlacklistAction? blacklistAction,
+    String? reason,
+    Duration? duration,
+    String? customRaw,
     bool clearNetwork = false,
+    bool clearBlacklistAction = false,
+    bool clearReason = false,
+    bool clearDuration = false,
+    bool clearCustomRaw = false,
   }) {
     return UserListEntry(
       type: type ?? this.type,
       mask: mask ?? this.mask,
       channels: channels ?? this.channels,
       network: clearNetwork ? null : (network ?? this.network),
+      blacklistAction: clearBlacklistAction
+          ? null
+          : (blacklistAction ?? this.blacklistAction),
+      reason: clearReason ? null : (reason ?? this.reason),
+      duration: clearDuration ? null : (duration ?? this.duration),
+      customRaw: clearCustomRaw ? null : (customRaw ?? this.customRaw),
     );
   }
 
@@ -110,6 +194,11 @@ class UserListEntry {
     'mask': mask,
     if (channels.isNotEmpty) 'channels': channels,
     if (network != null) 'network': network,
+    if (blacklistAction != null) 'blacklistAction': blacklistAction!.id,
+    if ((reason ?? '').trim().isNotEmpty) 'reason': reason!.trim(),
+    if (duration != null && duration!.inMinutes > 0)
+      'durationMinutes': duration!.inMinutes,
+    if ((customRaw ?? '').trim().isNotEmpty) 'customRaw': customRaw!.trim(),
   };
 
   static UserListEntry? fromJson(Map<String, dynamic> json) {
@@ -122,6 +211,7 @@ class UserListEntry {
     final channels = rawChannels is List
         ? rawChannels.map((e) => '$e').where((e) => e.isNotEmpty).toList()
         : const <String>[];
+    final durationMinutes = (json['durationMinutes'] as num?)?.toInt();
     return UserListEntry(
       type: type,
       mask: mask,
@@ -129,6 +219,14 @@ class UserListEntry {
       network: (json['network'] as String?)?.trim().isEmpty ?? true
           ? null
           : (json['network'] as String).trim(),
+      blacklistAction: BlacklistAction.fromId(
+        '${json['blacklistAction'] ?? json['action'] ?? ''}',
+      ),
+      reason: (json['reason'] as String?)?.trim(),
+      duration: durationMinutes == null || durationMinutes <= 0
+          ? null
+          : Duration(minutes: durationMinutes),
+      customRaw: (json['customRaw'] as String?)?.trim(),
     );
   }
 

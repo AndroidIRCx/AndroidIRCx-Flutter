@@ -7,6 +7,7 @@ import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/dcc/services/dcc_file_picker.dart';
+import 'package:androidircx/features/chat/application/ban_mask_service.dart';
 import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
@@ -14,13 +15,14 @@ import 'package:androidircx/features/chat/data/channel_notes_repository.dart';
 import 'package:androidircx/features/chat/data/user_list_entry.dart';
 import 'package:androidircx/features/chat/data/user_notes_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
-import 'package:androidircx/features/chat/presentation/auto_mode_lists_screen.dart';
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
 import 'package:androidircx/features/chat/presentation/media_player_screen.dart';
 import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
+import 'package:androidircx/features/chat/presentation/user_lists_screen.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
+import 'package:androidircx/irc/parser/interactive_message_parser.dart';
 import 'package:androidircx/irc/parser/message_content_parser.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:androidircx/media/services/link_preview_service.dart';
@@ -122,395 +124,436 @@ class _ChatScreenState extends State<ChatScreen> {
             _controller.selectPreviousTab,
       },
       child: AnimatedBuilder(
-      animation: Listenable.merge([
-        _controller,
-        if (widget.sessionRegistry != null) widget.sessionRegistry!,
-        if (widget.networkController != null) widget.networkController!,
-      ]),
-      builder: (context, _) {
-        final baseMessages = _messageSearchVisible
-            ? _controller.messagesForTab(
-                _controller.activeTabId,
-                query: _messageSearchController.text,
-                kinds: _messageSearchFilter.kinds,
-              )
-            : _controller.activeMessages;
-        final visibleMessages = _controller.settings.hideJoinPartQuit
-            ? baseMessages
-                .where((message) => message.kind != IrcMessageKind.event)
-                .toList(growable: false)
-            : baseMessages;
-        return Scaffold(
-          appBar: AppBar(
-            title: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(_controller.activeTab.name),
-                Text(
-                  _controller.activeTab.type == ChatTabType.channel &&
-                          _controller.activeChannelSummary.isNotEmpty
-                      ? _controller.activeChannelSummary
-                      : _controller.activeTab.type == ChatTabType.dcc &&
-                            _controller.activeDccSession != null
-                      ? _dccSummary(_controller.activeDccSession!)
-                      : _statusText(_controller.connection),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-            actions: [
-              if (_controller.activeTab.type == ChatTabType.channel)
-                Builder(
-                  builder: (context) {
-                    return IconButton(
-                      onPressed: () => Scaffold.of(context).openEndDrawer(),
-                      icon: const Icon(Icons.people_outline),
-                      tooltip: 'Nick list',
-                    );
-                  },
-                ),
-              if (_controller.settings.showHeaderSearchButton)
-                IconButton(
-                  onPressed: _toggleMessageSearch,
-                  icon: Icon(
-                    _messageSearchVisible ? Icons.search_off : Icons.search,
-                  ),
-                  tooltip: _messageSearchVisible
-                      ? 'Close search'
-                      : 'Search messages',
-                ),
-              IconButton(
-                onPressed: _openHistoryTools,
-                icon: const Icon(Icons.history),
-                tooltip: 'History tools',
-              ),
-              IconButton(
-                onPressed: _showJoinDialog,
-                icon: const Icon(Icons.tag),
-                tooltip: 'Join channel',
-              ),
-              IconButton(
-                onPressed: _openChannelList,
-                icon: const Icon(Icons.format_list_bulleted),
-                tooltip: 'Channel list',
-              ),
-              IconButton(
-                onPressed: _openSettings,
-                icon: const Icon(Icons.tune),
-                tooltip: 'Settings',
-              ),
-              IconButton(
-                onPressed:
-                    _controller.connection.phase == ConnectionPhase.connected
-                    ? _controller.disconnect
-                    : _controller.start,
-                icon: Icon(
-                  _controller.connection.phase == ConnectionPhase.connected
-                      ? Icons.link_off
-                      : Icons.wifi_tethering,
-                ),
-                tooltip:
-                    _controller.connection.phase == ConnectionPhase.connected
-                    ? 'Disconnect'
-                    : 'Connect',
-              ),
-            ],
-          ),
-          drawer: Drawer(
-            child: SafeArea(
-              child: ListView(
-                padding: EdgeInsets.zero,
+        animation: Listenable.merge([
+          _controller,
+          if (widget.sessionRegistry != null) widget.sessionRegistry!,
+          if (widget.networkController != null) widget.networkController!,
+        ]),
+        builder: (context, _) {
+          final baseMessages = _messageSearchVisible
+              ? _controller.messagesForTab(
+                  _controller.activeTabId,
+                  query: _messageSearchController.text,
+                  kinds: _messageSearchFilter.kinds,
+                )
+              : _controller.activeMessages;
+          final visibleMessages = _controller.settings.hideJoinPartQuit
+              ? baseMessages
+                    .where((message) => message.kind != IrcMessageKind.event)
+                    .toList(growable: false)
+              : baseMessages;
+          return Scaffold(
+            appBar: AppBar(
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (widget.onSwitchNetwork != null &&
-                      widget.networkController != null) ...[
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-                      child: Text(
-                        'NETWORKS',
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
-                    ),
-                    for (final network in widget.networkController!.networks)
-                      _buildNetworkSwitchTile(network),
-                    ListTile(
-                      leading: const Icon(Icons.dns_outlined),
-                      title: const Text('Manage networks'),
-                      subtitle: const Text('Add, edit, or browse servers'),
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        widget.onManageNetworks?.call();
-                      },
-                    ),
-                    const Divider(height: 1),
-                  ],
-                  ListTile(
-                    title: Text(_controller.network.name),
-                    subtitle: Text(
-                      '${_controller.network.host}:${_controller.network.port}',
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  for (final tab in _controller.tabs)
-                    _buildTabTile(context, tab),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.block),
-                    title: const Text('Ignore list'),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              IgnoreListScreen(controller: _controller),
-                        ),
-                      );
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.rule_outlined),
-                    title: const Text('Auto-mode lists'),
-                    subtitle: const Text('Auto-op, auto-halfop, auto-voice'),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              AutoModeListsScreen(controller: _controller),
-                        ),
-                      );
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.info_outline),
-                    title: const Text('Connection details'),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              ConnectionDetailsScreen(controller: _controller),
-                        ),
-                      );
-                    },
+                  Text(_controller.activeTab.name),
+                  Text(
+                    _controller.activeTab.type == ChatTabType.channel &&
+                            _controller.activeChannelSummary.isNotEmpty
+                        ? _controller.activeChannelSummary
+                        : _controller.activeTab.type == ChatTabType.dcc &&
+                              _controller.activeDccSession != null
+                        ? _dccSummary(_controller.activeDccSession!)
+                        : _statusText(_controller.connection),
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ),
+              actions: [
+                if (_controller.activeTab.type == ChatTabType.channel)
+                  Builder(
+                    builder: (context) {
+                      return IconButton(
+                        onPressed: () => Scaffold.of(context).openEndDrawer(),
+                        icon: const Icon(Icons.people_outline),
+                        tooltip: 'Nick list',
+                      );
+                    },
+                  ),
+                if (_controller.settings.showHeaderSearchButton)
+                  IconButton(
+                    onPressed: _toggleMessageSearch,
+                    icon: Icon(
+                      _messageSearchVisible ? Icons.search_off : Icons.search,
+                    ),
+                    tooltip: _messageSearchVisible
+                        ? 'Close search'
+                        : 'Search messages',
+                  ),
+                IconButton(
+                  onPressed: _openHistoryTools,
+                  icon: const Icon(Icons.history),
+                  tooltip: 'History tools',
+                ),
+                IconButton(
+                  onPressed: _showJoinDialog,
+                  icon: const Icon(Icons.tag),
+                  tooltip: 'Join channel',
+                ),
+                IconButton(
+                  onPressed: _openChannelList,
+                  icon: const Icon(Icons.format_list_bulleted),
+                  tooltip: 'Channel list',
+                ),
+                IconButton(
+                  onPressed: _openSettings,
+                  icon: const Icon(Icons.tune),
+                  tooltip: 'Settings',
+                ),
+                IconButton(
+                  onPressed:
+                      _controller.connection.phase == ConnectionPhase.connected
+                      ? _controller.disconnect
+                      : _controller.start,
+                  icon: Icon(
+                    _controller.connection.phase == ConnectionPhase.connected
+                        ? Icons.link_off
+                        : Icons.wifi_tethering,
+                  ),
+                  tooltip:
+                      _controller.connection.phase == ConnectionPhase.connected
+                      ? 'Disconnect'
+                      : 'Connect',
+                ),
+              ],
             ),
-          ),
-          endDrawer: _controller.activeTab.type == ChatTabType.channel
-              ? Drawer(
-                  child: SafeArea(
-                    child: Column(
-                      children: [
-                        ListTile(
-                          title: Text(_controller.activeTab.name),
-                          subtitle: Text(
-                            '${_controller.activeChannelUsers.length} users',
-                          ),
+            drawer: Drawer(
+              child: SafeArea(
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    if (widget.onSwitchNetwork != null &&
+                        widget.networkController != null) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                        child: Text(
+                          'NETWORKS',
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.8,
+                              ),
                         ),
-                        const Divider(height: 1),
-                        Expanded(
-                          child: _controller.activeChannelUsers.isEmpty
-                              ? const Center(child: Text('No nick list yet.'))
-                              : ListView.builder(
-                                  itemCount: _controller
-                                      .activeChannelUserDetails
-                                      .length,
-                                  itemBuilder: (context, index) {
-                                    final entry = _controller
-                                        .activeChannelUserDetails[index];
-                                    final nick = entry.nick;
-                                    return ListTile(
-                                      leading: const Icon(Icons.person_outline),
-                                      title: Text(nick),
-                                      subtitle: entry.details.isEmpty
-                                          ? null
-                                          : Text(entry.details),
-                                      onTap: () {
-                                        Navigator.of(context).pop();
-                                        unawaited(_showChannelUserActions(nick));
-                                      },
+                      ),
+                      for (final network in widget.networkController!.networks)
+                        _buildNetworkSwitchTile(network),
+                      ListTile(
+                        leading: const Icon(Icons.dns_outlined),
+                        title: const Text('Manage networks'),
+                        subtitle: const Text('Add, edit, or browse servers'),
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          widget.onManageNetworks?.call();
+                        },
+                      ),
+                      const Divider(height: 1),
+                    ],
+                    ListTile(
+                      title: Text(_controller.network.name),
+                      subtitle: Text(
+                        '${_controller.network.host}:${_controller.network.port}',
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    for (final tab in _controller.tabs)
+                      _buildTabTile(context, tab),
+                    const Divider(height: 1),
+                    ListTile(
+                      leading: const Icon(Icons.block),
+                      title: const Text('Ignore list'),
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                IgnoreListScreen(controller: _controller),
+                          ),
+                        );
+                      },
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.rule_outlined),
+                      title: const Text('User lists'),
+                      subtitle: const Text(
+                        'Notify, protected, blacklist, auto-mode',
+                      ),
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                UserListsScreen(controller: _controller),
+                          ),
+                        );
+                      },
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.info_outline),
+                      title: const Text('Connection details'),
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => ConnectionDetailsScreen(
+                              controller: _controller,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            endDrawer: _controller.activeTab.type == ChatTabType.channel
+                ? Drawer(
+                    child: SafeArea(
+                      child: Column(
+                        children: [
+                          ListTile(
+                            title: Text(_controller.activeTab.name),
+                            subtitle: Text(
+                              '${_controller.activeChannelUsers.length} users',
+                            ),
+                          ),
+                          const Divider(height: 1),
+                          Expanded(
+                            child: _controller.activeChannelUsers.isEmpty
+                                ? const Center(child: Text('No nick list yet.'))
+                                : ListView.builder(
+                                    itemCount: _controller
+                                        .activeChannelUserDetails
+                                        .length,
+                                    itemBuilder: (context, index) {
+                                      final entry = _controller
+                                          .activeChannelUserDetails[index];
+                                      final nick = entry.nick;
+                                      return ListTile(
+                                        leading: const Icon(
+                                          Icons.person_outline,
+                                        ),
+                                        title: Text(nick),
+                                        subtitle: entry.details.isEmpty
+                                            ? null
+                                            : Text(entry.details),
+                                        onTap: () {
+                                          Navigator.of(context).pop();
+                                          unawaited(
+                                            _showChannelUserActions(nick),
+                                          );
+                                        },
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : null,
+            body: SafeArea(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // In short viewports (landscape, or portrait with the keyboard
+                  // open) the chrome around the message list (status/topic
+                  // banners on top, composer + its bars on the bottom) can be
+                  // taller than the available height and would crush the list to
+                  // zero. When space is tight, cap the top/bottom chrome and let
+                  // each scroll internally so the message list always keeps room
+                  // and nothing overflows. In normal viewports the caps are the
+                  // full height (a no-op), so interactive banners such as the DCC
+                  // accept/decline actions stay at their natural, hittable size.
+                  final tight = constraints.maxHeight < 380;
+                  final topChromeMaxHeight = tight
+                      ? constraints.maxHeight * 0.35
+                      : constraints.maxHeight;
+                  final bottomClusterMaxHeight = tight
+                      ? constraints.maxHeight * 0.5
+                      : constraints.maxHeight;
+                  return Column(
+                    children: [
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxHeight: topChromeMaxHeight,
+                        ),
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _ConnectionBanner(
+                                controller: _controller,
+                                network: _controller.network,
+                              ),
+                              if (_messageSearchVisible)
+                                _InlineMessageSearchBar(
+                                  controller: _messageSearchController,
+                                  filter: _messageSearchFilter,
+                                  resultCount: visibleMessages.length,
+                                  onFilterChanged: (filter) => setState(
+                                    () => _messageSearchFilter = filter,
+                                  ),
+                                  onChanged: (_) => setState(() {}),
+                                  onClose: _toggleMessageSearch,
+                                ),
+                              if ((_controller.activeChannelTopic ?? '')
+                                  .trim()
+                                  .isNotEmpty)
+                                _ChannelTopicBar(
+                                  topic: _controller.activeChannelTopic!.trim(),
+                                ),
+                              if (_controller.activeTab.type ==
+                                      ChatTabType.dcc &&
+                                  _controller.activeDccSession != null)
+                                _DccSessionBanner(
+                                  session: _controller.activeDccSession!,
+                                  onAccept: _controller.acceptActiveDccSession,
+                                  onDecline:
+                                      _controller.declineActiveDccSession,
+                                  onClose: _controller.closeActiveDccSession,
+                                ),
+                              if (_controller.activeTab.type ==
+                                  ChatTabType.server)
+                                _ServiceQuickActions(
+                                  onRun: (service, command) async {
+                                    await _controller.sendServiceShortcut(
+                                      service,
+                                      command,
                                     );
                                   },
                                 ),
+                            ],
+                          ),
                         ),
-                      ],
-                    ),
-                  ),
-                )
-              : null,
-          body: SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // In short viewports (landscape, or portrait with the keyboard
-                // open) the chrome around the message list (status/topic
-                // banners on top, composer + its bars on the bottom) can be
-                // taller than the available height and would crush the list to
-                // zero. When space is tight, cap the top/bottom chrome and let
-                // each scroll internally so the message list always keeps room
-                // and nothing overflows. In normal viewports the caps are the
-                // full height (a no-op), so interactive banners such as the DCC
-                // accept/decline actions stay at their natural, hittable size.
-                final tight = constraints.maxHeight < 380;
-                final topChromeMaxHeight =
-                    tight ? constraints.maxHeight * 0.35 : constraints.maxHeight;
-                final bottomClusterMaxHeight =
-                    tight ? constraints.maxHeight * 0.5 : constraints.maxHeight;
-                return Column(
-              children: [
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: topChromeMaxHeight),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _ConnectionBanner(
-                          controller: _controller,
-                          network: _controller.network,
-                        ),
-                        if (_messageSearchVisible)
-                          _InlineMessageSearchBar(
-                            controller: _messageSearchController,
-                            filter: _messageSearchFilter,
-                            resultCount: visibleMessages.length,
-                            onFilterChanged: (filter) => setState(
-                              () => _messageSearchFilter = filter,
-                            ),
-                            onChanged: (_) => setState(() {}),
-                            onClose: _toggleMessageSearch,
+                      ),
+                      Expanded(
+                        child: _MessageList(
+                          messages: visibleMessages,
+                          knownNicks: <String>{
+                            ..._controller.activeChannelUsers,
+                            _controller.currentNick,
+                          },
+                          channelPrefixes: _controller.channelPrefixChars,
+                          nickPrefixes: _controller.nickPrefixChars,
+                          showAttachmentPreviews:
+                              _controller.settings.showAttachmentPreviews,
+                          resolveReplyTarget: (replyId) => _controller
+                              .messageByMsgId(_controller.activeTabId, replyId),
+                          resolveReactions: _controller.reactionsForMessage,
+                          onRedactMessage: _controller.redactMessage,
+                          onQuoteMessage: (message) => _insertIntoComposer(
+                            '> ${stripIrcFormatting(message.content)}',
                           ),
-                        if ((_controller.activeChannelTopic ?? '')
-                            .trim()
-                            .isNotEmpty)
-                          _ChannelTopicBar(
-                            topic: _controller.activeChannelTopic!.trim(),
-                          ),
-                        if (_controller.activeTab.type == ChatTabType.dcc &&
-                            _controller.activeDccSession != null)
-                          _DccSessionBanner(
-                            session: _controller.activeDccSession!,
-                            onAccept: _controller.acceptActiveDccSession,
-                            onDecline: _controller.declineActiveDccSession,
-                            onClose: _controller.closeActiveDccSession,
-                          ),
-                        if (_controller.activeTab.type == ChatTabType.server)
-                          _ServiceQuickActions(
-                            onRun: (service, command) async {
-                              await _controller.sendServiceShortcut(
-                                service,
-                                command,
-                              );
-                            },
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: _MessageList(
-                    messages: visibleMessages,
-                    showAttachmentPreviews:
-                        _controller.settings.showAttachmentPreviews,
-                    resolveReplyTarget: (replyId) => _controller.messageByMsgId(
-                      _controller.activeTabId,
-                      replyId,
-                    ),
-                    resolveReactions: _controller.reactionsForMessage,
-                    onRedactMessage: _controller.redactMessage,
-                    onQuoteMessage: (message) => _insertIntoComposer(
-                      '> ${stripIrcFormatting(message.content)}',
-                    ),
-                    onReplyWithNick: (message) {
-                      final prefix = message.sender == _controller.currentNick
-                          ? ''
-                          : '${message.sender}: ';
-                      _insertIntoComposer(prefix);
-                    },
-                    onReplyToMessage: _setPendingReply,
-                    onDownloadAttachment: _downloadAttachment,
-                    showTimestamps: _controller.settings.showTimestamps,
-                    onLoadOlder:
-                        _controller.hasPersistentHistory && !_messageSearchVisible
-                        ? () async {
-                            await _controller.loadOlderHistory(
-                              _controller.activeTabId,
-                            );
-                          }
-                        : null,
-                  ),
-                ),
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: bottomClusterMaxHeight,
-                  ),
-                  child: SingleChildScrollView(
-                    reverse: true,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_controller.commandHistory.isNotEmpty)
-                          _CommandHistoryBar(
-                            entries: _controller.commandHistory,
-                            onSelect: (value) => setState(
-                              () => _composerController.text = value,
+                          onReplyWithNick: (message) {
+                            final prefix =
+                                message.sender == _controller.currentNick
+                                ? ''
+                                : '${message.sender}: ';
+                            _insertIntoComposer(prefix);
+                          },
+                          onReplyToMessage: _setPendingReply,
+                          onDownloadAttachment: _downloadAttachment,
+                          onNickTap: (nick) => unawaited(
+                            _controller.performChannelUserAction(
+                              nick,
+                              ChannelUserAction.query,
                             ),
                           ),
-                        if (_controller.activeTypingUsers.isNotEmpty)
-                          _TypingIndicator(
-                            users: _controller.activeTypingUsers,
-                          ),
-                        if (_pendingReplyMessage != null)
-                          _PendingReplyBar(
-                            message: _pendingReplyMessage!,
-                            onCancel: () => setState(
-                              () => _pendingReplyMessage = null,
+                          onNickLongPress: (nick) =>
+                              unawaited(_showChannelUserActions(nick)),
+                          onChannelTap: (channel) => unawaited(
+                            _controller.joinChannel(
+                              JoinChannelRequest(channel: channel),
                             ),
                           ),
-                        const Divider(height: 1),
-                        _ComposerArea(
-                  suggestions: _composerSuggestions,
-                  autocompleteSuggestions: _autocompleteSuggestions,
-                  controller: _composerController,
-                  hintText: _controller.activeTab.type == ChatTabType.server
-                      ? 'Type raw IRC or /join #channel'
-                      : _controller.activeTab.type == ChatTabType.dcc
-                      ? (_controller.activeDccSession?.type ==
-                                DccSessionType.chat
-                            ? 'Type DCC chat message'
-                            : 'DCC SEND tabs do not accept messages')
-                      : 'Message ${_controller.activeTab.name}',
-                  onChanged: _handleComposerChanged,
-                  onSubmitted: _submit,
-                  canSendDccFile:
-                      _controller.activeTab.type == ChatTabType.query,
-                  onPickDccFile: _pickAndSendDccFile,
-                  onSuggestionSelected: _applyComposerSuggestion,
-                  onAutocompleteSelected: _applyAutocompleteSuggestion,
-                  enterToSend: _controller.settings.enterToSend,
-                  showSendButton: _controller.settings.showSendButton,
-                  onCameraPhoto: () =>
-                      _captureAndSendMedia(ImageSource.camera),
-                  onGalleryImage: () =>
-                      _captureAndSendMedia(ImageSource.gallery),
-                  onCameraVideo: () => _captureAndSendMedia(
-                    ImageSource.camera,
-                    video: true,
-                  ),
+                          showTimestamps: _controller.settings.showTimestamps,
+                          onLoadOlder:
+                              _controller.hasPersistentHistory &&
+                                  !_messageSearchVisible
+                              ? () async {
+                                  await _controller.loadOlderHistory(
+                                    _controller.activeTabId,
+                                  );
+                                }
+                              : null,
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-                );
-              },
+                      ),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxHeight: bottomClusterMaxHeight,
+                        ),
+                        child: SingleChildScrollView(
+                          reverse: true,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_controller.commandHistory.isNotEmpty)
+                                _CommandHistoryBar(
+                                  entries: _controller.commandHistory,
+                                  onSelect: (value) => setState(
+                                    () => _composerController.text = value,
+                                  ),
+                                ),
+                              if (_controller.activeTypingUsers.isNotEmpty)
+                                _TypingIndicator(
+                                  users: _controller.activeTypingUsers,
+                                ),
+                              if (_pendingReplyMessage != null)
+                                _PendingReplyBar(
+                                  message: _pendingReplyMessage!,
+                                  onCancel: () => setState(
+                                    () => _pendingReplyMessage = null,
+                                  ),
+                                ),
+                              const Divider(height: 1),
+                              _ComposerArea(
+                                suggestions: _composerSuggestions,
+                                autocompleteSuggestions:
+                                    _autocompleteSuggestions,
+                                controller: _composerController,
+                                hintText:
+                                    _controller.activeTab.type ==
+                                        ChatTabType.server
+                                    ? 'Type raw IRC or /join #channel'
+                                    : _controller.activeTab.type ==
+                                          ChatTabType.dcc
+                                    ? (_controller.activeDccSession?.type ==
+                                              DccSessionType.chat
+                                          ? 'Type DCC chat message'
+                                          : 'DCC SEND tabs do not accept messages')
+                                    : 'Message ${_controller.activeTab.name}',
+                                onChanged: _handleComposerChanged,
+                                onSubmitted: _submit,
+                                canSendDccFile:
+                                    _controller.activeTab.type ==
+                                    ChatTabType.query,
+                                onPickDccFile: _pickAndSendDccFile,
+                                onSuggestionSelected: _applyComposerSuggestion,
+                                onAutocompleteSelected:
+                                    _applyAutocompleteSuggestion,
+                                enterToSend: _controller.settings.enterToSend,
+                                showSendButton:
+                                    _controller.settings.showSendButton,
+                                onCameraPhoto: () =>
+                                    _captureAndSendMedia(ImageSource.camera),
+                                onGalleryImage: () =>
+                                    _captureAndSendMedia(ImageSource.gallery),
+                                onCameraVideo: () => _captureAndSendMedia(
+                                  ImageSource.camera,
+                                  video: true,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
       ),
     );
   }
@@ -560,6 +603,23 @@ class _ChatScreenState extends State<ChatScreen> {
         nick: targetTab.name,
         filePath: filePath,
       );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to send DCC file: $error')),
+      );
+    }
+  }
+
+  Future<void> _pickAndSendDccFileToNick(String nick) async {
+    try {
+      final filePath = await _filePicker.pickFile();
+      if (!mounted || filePath == null) {
+        return;
+      }
+      await _controller.sendDccFileToNick(nick: nick, filePath: filePath);
     } catch (error) {
       if (!mounted) {
         return;
@@ -677,9 +737,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       await _controller.sendDccFileToNick(nick: nick, filePath: file.path);
     } catch (error) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Capture failed: $error')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('Capture failed: $error')));
     }
   }
 
@@ -701,12 +759,16 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _showChannelUserActions(String nick) async {
     final network = _controller.network.id;
     final note = await _userNotesRepository.getNote(network, nick);
+    final info = _controller.userInfoForNick(nick);
     if (!mounted) {
       return;
     }
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
+        final isIgnored = _controller.ignoreMasks.contains(
+          nick.trim().toLowerCase(),
+        );
         Widget action(String label, IconData icon, ChannelUserAction act) {
           return ListTile(
             leading: Icon(icon),
@@ -718,53 +780,151 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         }
 
+        Widget directAction(
+          String label,
+          IconData icon,
+          VoidCallback onSelected,
+        ) {
+          return ListTile(
+            leading: Icon(icon),
+            title: Text(label),
+            onTap: () {
+              Navigator.of(sheetContext).pop();
+              onSelected();
+            },
+          );
+        }
+
         return SafeArea(
           child: SingleChildScrollView(
             child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                title: Text(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  title: Text(
+                    nick,
+                    style: Theme.of(sheetContext).textTheme.titleMedium,
+                  ),
+                  subtitle: Text(
+                    note.isEmpty ? 'Channel user actions' : 'Note: $note',
+                  ),
+                ),
+                const Divider(height: 1),
+                directAction('Copy nick', Icons.copy, () {
+                  unawaited(Clipboard.setData(ClipboardData(text: nick)));
+                }),
+                ListTile(
+                  leading: const Icon(Icons.sticky_note_2_outlined),
+                  title: Text(note.isEmpty ? 'Add note' : 'Edit note'),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    unawaited(_showUserNoteDialog(nick, note));
+                  },
+                ),
+                for (final type in UserListType.autoModeTypes)
+                  _autoModeToggleTile(sheetContext, nick, type),
+                if (info.userhost.isNotEmpty)
+                  directAction('Copy userhost', Icons.alternate_email, () {
+                    unawaited(
+                      Clipboard.setData(ClipboardData(text: info.userhost)),
+                    );
+                  }),
+                if (info.hostmask.isNotEmpty)
+                  directAction('Copy hostmask', Icons.dns_outlined, () {
+                    unawaited(
+                      Clipboard.setData(ClipboardData(text: info.hostmask)),
+                    );
+                  }),
+                directAction('User info', Icons.badge_outlined, () {
+                  unawaited(_showUserInfoPanel(nick));
+                }),
+                _userListToggleTile(sheetContext, nick, UserListType.notify),
+                _userListToggleTile(
+                  sheetContext,
                   nick,
-                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                  UserListType.protectedUser,
                 ),
-                subtitle: Text(
-                  note.isEmpty ? 'Channel user actions' : 'Note: $note',
+                _userListToggleTile(sheetContext, nick, UserListType.other),
+                const Divider(height: 1),
+                action('WHOIS', Icons.badge_outlined, ChannelUserAction.whois),
+                action('WHOWAS', Icons.history, ChannelUserAction.whowas),
+                action(
+                  'Open query',
+                  Icons.chat_bubble_outline,
+                  ChannelUserAction.query,
                 ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.sticky_note_2_outlined),
-                title: Text(note.isEmpty ? 'Add note' : 'Edit note'),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  unawaited(_showUserNoteDialog(nick, note));
-                },
-              ),
-              for (final type in UserListType.values)
-                _autoModeToggleTile(sheetContext, nick, type),
-              const Divider(height: 1),
-              action('WHOIS', Icons.badge_outlined, ChannelUserAction.whois),
-              action(
-                'Open query',
-                Icons.chat_bubble_outline,
-                ChannelUserAction.query,
-              ),
-              action('Op', Icons.shield_outlined, ChannelUserAction.op),
-              action(
-                'Deop',
-                Icons.remove_moderator_outlined,
-                ChannelUserAction.deop,
-              ),
-              action('Voice', Icons.volume_up_outlined, ChannelUserAction.voice),
-              action(
-                'Devoice',
-                Icons.volume_off_outlined,
-                ChannelUserAction.devoice,
-              ),
-              action('Kick', Icons.logout, ChannelUserAction.kick),
-              action('Ban', Icons.block, ChannelUserAction.ban),
-            ],
+                action(
+                  isIgnored ? 'Unignore' : 'Ignore',
+                  isIgnored ? Icons.visibility : Icons.block,
+                  ChannelUserAction.ignoreToggle,
+                ),
+                const Divider(height: 1),
+                action(
+                  'CTCP PING',
+                  Icons.settings_ethernet,
+                  ChannelUserAction.ctcpPing,
+                ),
+                action(
+                  'CTCP VERSION',
+                  Icons.info_outline,
+                  ChannelUserAction.ctcpVersion,
+                ),
+                action('CTCP TIME', Icons.schedule, ChannelUserAction.ctcpTime),
+                action(
+                  'DCC Chat',
+                  Icons.forum_outlined,
+                  ChannelUserAction.dccChat,
+                ),
+                directAction('DCC Send file', Icons.file_upload_outlined, () {
+                  unawaited(_pickAndSendDccFileToNick(nick));
+                }),
+                directAction('Add blacklist rule', Icons.gpp_bad_outlined, () {
+                  unawaited(_showBlacklistEntryDialog(nick));
+                }),
+                const Divider(height: 1),
+                if (_controller.canModerateActiveChannel) ...[
+                  action('Op', Icons.shield_outlined, ChannelUserAction.op),
+                  action(
+                    'Deop',
+                    Icons.remove_moderator_outlined,
+                    ChannelUserAction.deop,
+                  ),
+                ],
+                if (_controller.canVoiceOrKickActiveChannel) ...[
+                  action(
+                    'Voice',
+                    Icons.volume_up_outlined,
+                    ChannelUserAction.voice,
+                  ),
+                  action(
+                    'Devoice',
+                    Icons.volume_off_outlined,
+                    ChannelUserAction.devoice,
+                  ),
+                  directAction('Kick', Icons.logout, () {
+                    unawaited(
+                      _showKickBanDialog(nick, ChannelModerationAction.kick),
+                    );
+                  }),
+                ],
+                if (_controller.canModerateActiveChannel) ...[
+                  directAction('Ban', Icons.block, () {
+                    unawaited(
+                      _showKickBanDialog(nick, ChannelModerationAction.ban),
+                    );
+                  }),
+                  directAction('Kick + Ban', Icons.gpp_bad_outlined, () {
+                    unawaited(
+                      _showKickBanDialog(nick, ChannelModerationAction.kickBan),
+                    );
+                  }),
+                  directAction('Quiet', Icons.volume_off_outlined, () {
+                    unawaited(
+                      _showKickBanDialog(nick, ChannelModerationAction.quiet),
+                    );
+                  }),
+                ],
+              ],
             ),
           ),
         );
@@ -876,11 +1036,34 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       title: Text(tab.name),
       trailing: tab.type == ChatTabType.server
-          ? null
-          : IconButton(
-              onPressed: () => _controller.closeTab(tab.id),
-              icon: const Icon(Icons.close, size: 18),
-              tooltip: 'Close tab',
+          ? IconButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                unawaited(_showTabOptions(tab));
+              },
+              icon: const Icon(Icons.more_vert, size: 18),
+              tooltip: 'Tab options',
+            )
+          : SizedBox(
+              width: 96,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  IconButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      unawaited(_showTabOptions(tab));
+                    },
+                    icon: const Icon(Icons.more_vert, size: 18),
+                    tooltip: 'Tab options',
+                  ),
+                  IconButton(
+                    onPressed: () => _controller.closeTab(tab.id),
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Close tab',
+                  ),
+                ],
+              ),
             ),
       onTap: () {
         _controller.selectTab(tab.id);
@@ -892,6 +1075,78 @@ class _ChatScreenState extends State<ChatScreen> {
               unawaited(_showChannelNoteDialog(tab));
             }
           : null,
+    );
+  }
+
+  Future<void> _showTabOptions(ChatTab tab) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        Widget action(String label, IconData icon, VoidCallback onTap) {
+          return ListTile(
+            leading: Icon(icon),
+            title: Text(label),
+            onTap: () {
+              Navigator.of(sheetContext).pop();
+              onTap();
+            },
+          );
+        }
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(title: Text(tab.name), subtitle: Text(tab.type.name)),
+                const Divider(height: 1),
+                action('Open', Icons.open_in_new, () {
+                  _controller.selectTab(tab.id);
+                }),
+                action('Copy name', Icons.copy, () {
+                  unawaited(Clipboard.setData(ClipboardData(text: tab.name)));
+                }),
+                action('Recent log', Icons.article_outlined, () {
+                  unawaited(_showTabLog(tab));
+                }),
+                if (tab.type == ChatTabType.channel) ...[
+                  action('Channel note', Icons.sticky_note_2_outlined, () {
+                    unawaited(_showChannelNoteDialog(tab));
+                  }),
+                  action('Refresh topic', Icons.topic_outlined, () {
+                    _controller.selectTab(tab.id);
+                    unawaited(_controller.handleComposerSubmit('/topic'));
+                  }),
+                  action('Refresh modes', Icons.tune, () {
+                    _controller.selectTab(tab.id);
+                    unawaited(_controller.handleComposerSubmit('/mode'));
+                  }),
+                  action('Ban list', Icons.block, () {
+                    _controller.selectTab(tab.id);
+                    unawaited(_controller.handleComposerSubmit('/banlist'));
+                  }),
+                  action('Quiet list', Icons.volume_off_outlined, () {
+                    _controller.selectTab(tab.id);
+                    unawaited(_controller.handleComposerSubmit('/quietlist'));
+                  }),
+                ],
+                if (tab.type != ChatTabType.server)
+                  action('Close', Icons.close, () {
+                    _controller.closeTab(tab.id);
+                  }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showTabLog(ChatTab tab) async {
+    final messages = _controller.messagesForTab(tab.id);
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _TabLogDialog(tab: tab, messages: messages),
     );
   }
 
@@ -919,7 +1174,9 @@ class _ChatScreenState extends State<ChatScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          result.trim().isEmpty ? 'Channel note cleared.' : 'Channel note saved.',
+          result.trim().isEmpty
+              ? 'Channel note cleared.'
+              : 'Channel note saved.',
         ),
       ),
     );
@@ -971,13 +1228,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final existing = _existingAutoModeEntry(nick, type);
     final active = existing != null;
     return ListTile(
-      leading: Icon(
-        switch (type) {
-          UserListType.autoOp => Icons.shield_moon_outlined,
-          UserListType.autoHalfOp => Icons.shield_outlined,
-          UserListType.autoVoice => Icons.record_voice_over_outlined,
-        },
-      ),
+      leading: Icon(switch (type) {
+        UserListType.autoOp => Icons.shield_moon_outlined,
+        UserListType.autoHalfOp => Icons.shield_outlined,
+        UserListType.autoVoice => Icons.record_voice_over_outlined,
+        _ => Icons.rule_outlined,
+      }),
       title: Text(type.label),
       trailing: active
           ? const Icon(Icons.check, size: 18)
@@ -985,6 +1241,43 @@ class _ChatScreenState extends State<ChatScreen> {
       onTap: () {
         Navigator.of(sheetContext).pop();
         unawaited(_toggleAutoMode(nick, type, existing));
+      },
+    );
+  }
+
+  UserListEntry? _existingUserListEntry(String nick, UserListType type) {
+    final normalized = '${nick.trim().toLowerCase()}!*@*';
+    for (final entry in _controller.userListEntriesForType(type)) {
+      if (entry.normalizedMask.toLowerCase() == normalized &&
+          (entry.network == null || entry.network == _controller.network.id)) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  Widget _userListToggleTile(
+    BuildContext sheetContext,
+    String nick,
+    UserListType type,
+  ) {
+    final existing = _existingUserListEntry(nick, type);
+    final active = existing != null;
+    return ListTile(
+      leading: Icon(switch (type) {
+        UserListType.notify => Icons.notifications_active_outlined,
+        UserListType.protectedUser => Icons.verified_user_outlined,
+        UserListType.other => Icons.label_outline,
+        UserListType.blacklist => Icons.gpp_bad_outlined,
+        _ => Icons.rule_outlined,
+      }),
+      title: Text(type.label),
+      trailing: active
+          ? const Icon(Icons.check, size: 18)
+          : const Icon(Icons.add, size: 18),
+      onTap: () {
+        Navigator.of(sheetContext).pop();
+        unawaited(_toggleUserList(nick, type, existing));
       },
     );
   }
@@ -998,11 +1291,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await _controller.removeAutoModeEntry(existing);
     } else {
       await _controller.addAutoModeEntry(
-        UserListEntry(
-          type: type,
-          mask: nick,
-          network: _controller.network.id,
-        ),
+        UserListEntry(type: type, mask: nick, network: _controller.network.id),
       );
     }
     if (!mounted) {
@@ -1015,6 +1304,105 @@ class _ChatScreenState extends State<ChatScreen> {
               ? 'Removed $nick from ${type.label}.'
               : 'Added $nick to ${type.label}.',
         ),
+      ),
+    );
+  }
+
+  Future<void> _toggleUserList(
+    String nick,
+    UserListType type,
+    UserListEntry? existing,
+  ) async {
+    if (existing != null) {
+      await _controller.removeUserListEntry(existing);
+    } else {
+      await _controller.addUserListEntry(
+        UserListEntry(type: type, mask: nick, network: _controller.network.id),
+      );
+    }
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          existing != null
+              ? 'Removed $nick from ${type.label}.'
+              : 'Added $nick to ${type.label}.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showBlacklistEntryDialog(String nick) async {
+    final entry = await showDialog<UserListEntry>(
+      context: context,
+      builder: (context) =>
+          _BlacklistEntryDialog(nick: nick, network: _controller.network.id),
+    );
+    if (entry == null) {
+      return;
+    }
+    await _controller.addUserListEntry(entry);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Added $nick to blacklist.')));
+  }
+
+  Future<void> _showKickBanDialog(
+    String nick,
+    ChannelModerationAction action,
+  ) async {
+    final request = await showDialog<_KickBanRequest>(
+      context: context,
+      builder: (context) => _KickBanDialog(
+        nick: nick,
+        action: action,
+        maskPreview: (type) => _controller.banMaskPreviewForNick(nick, type),
+      ),
+    );
+    if (request == null) {
+      return;
+    }
+    await _controller.performChannelModerationAction(
+      nick: nick,
+      action: action,
+      reason: request.reason,
+      banMaskType: request.banMaskType,
+      timedRemoval: request.timedRemoval,
+    );
+  }
+
+  Future<void> _showUserInfoPanel(String nick) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _UserInfoSheet(
+        info: _controller.userInfoForNick(nick),
+        onWhois: () {
+          Navigator.of(context).pop();
+          unawaited(
+            _controller.performChannelUserAction(nick, ChannelUserAction.whois),
+          );
+        },
+        onWhowas: () {
+          Navigator.of(context).pop();
+          unawaited(
+            _controller.performChannelUserAction(
+              nick,
+              ChannelUserAction.whowas,
+            ),
+          );
+        },
+        onChannelTap: (channel) {
+          Navigator.of(context).pop();
+          unawaited(
+            _controller.joinChannel(JoinChannelRequest(channel: channel)),
+          );
+        },
       ),
     );
   }
@@ -1190,8 +1578,9 @@ class _ComposerArea extends StatelessWidget {
                   controller: controller,
                   minLines: 1,
                   maxLines: 4,
-                  keyboardType:
-                      enterToSend ? TextInputType.text : TextInputType.multiline,
+                  keyboardType: enterToSend
+                      ? TextInputType.text
+                      : TextInputType.multiline,
                   textInputAction: enterToSend
                       ? TextInputAction.send
                       : TextInputAction.newline,
@@ -1239,10 +1628,7 @@ class _ComposerArea extends StatelessWidget {
                 const SizedBox(width: 8),
               ],
               if (showSendButton || !enterToSend)
-                FilledButton(
-                  onPressed: onSubmitted,
-                  child: const Text('Send'),
-                ),
+                FilledButton(onPressed: onSubmitted, child: const Text('Send')),
             ],
           ),
         ),
@@ -1907,6 +2293,437 @@ class _HistoryToolsSheetState extends State<_HistoryToolsSheet> {
   }
 }
 
+class _KickBanRequest {
+  const _KickBanRequest({
+    required this.banMaskType,
+    this.reason,
+    this.timedRemoval,
+  });
+
+  final int banMaskType;
+  final String? reason;
+  final Duration? timedRemoval;
+}
+
+class _KickBanDialog extends StatefulWidget {
+  const _KickBanDialog({
+    required this.nick,
+    required this.action,
+    required this.maskPreview,
+  });
+
+  final String nick;
+  final ChannelModerationAction action;
+  final String Function(int type) maskPreview;
+
+  @override
+  State<_KickBanDialog> createState() => _KickBanDialogState();
+}
+
+class _KickBanDialogState extends State<_KickBanDialog> {
+  static const List<String> _presetReasons = <String>[
+    '',
+    'Spam',
+    'Flooding',
+    'Abuse',
+    'Off-topic',
+    'Policy violation',
+  ];
+
+  final TextEditingController _reason = TextEditingController();
+  final TextEditingController _duration = TextEditingController();
+  String _presetReason = '';
+  int _banType = 10;
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    _duration.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final minutes = int.tryParse(_duration.text.trim());
+    Navigator.of(context).pop(
+      _KickBanRequest(
+        banMaskType: _banType,
+        reason: _reason.text.trim().isEmpty ? null : _reason.text.trim(),
+        timedRemoval: minutes == null || minutes <= 0
+            ? null
+            : Duration(minutes: minutes),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final title = switch (widget.action) {
+      ChannelModerationAction.kick => 'Kick ${widget.nick}',
+      ChannelModerationAction.ban => 'Ban ${widget.nick}',
+      ChannelModerationAction.kickBan => 'Kick + ban ${widget.nick}',
+      ChannelModerationAction.quiet => 'Quiet ${widget.nick}',
+    };
+    final needsMask = widget.action != ChannelModerationAction.kick;
+    return AlertDialog(
+      title: Text(title),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (needsMask) ...[
+              DropdownButtonFormField<int>(
+                initialValue: _banType,
+                decoration: const InputDecoration(labelText: 'Ban mask'),
+                items: [
+                  for (final type in banMaskTypes)
+                    DropdownMenuItem(
+                      value: type.id,
+                      child: Text('${type.id}: ${type.pattern}'),
+                    ),
+                ],
+                onChanged: (value) => setState(() => _banType = value ?? 10),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    widget.maskPreview(_banType),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ),
+            ],
+            DropdownButtonFormField<String>(
+              initialValue: _presetReason,
+              decoration: const InputDecoration(labelText: 'Preset reason'),
+              items: [
+                for (final reason in _presetReasons)
+                  DropdownMenuItem(
+                    value: reason,
+                    child: Text(reason.isEmpty ? 'Custom' : reason),
+                  ),
+              ],
+              onChanged: (value) {
+                final next = value ?? '';
+                setState(() => _presetReason = next);
+                if (next.isNotEmpty) {
+                  _reason.text = next;
+                }
+              },
+            ),
+            TextField(
+              controller: _reason,
+              decoration: const InputDecoration(
+                labelText: 'Reason',
+                hintText: 'optional',
+              ),
+            ),
+            if (needsMask)
+              TextField(
+                controller: _duration,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Timed removal minutes',
+                  hintText: 'blank = permanent',
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Send')),
+      ],
+    );
+  }
+}
+
+class _BlacklistEntryDialog extends StatefulWidget {
+  const _BlacklistEntryDialog({required this.nick, required this.network});
+
+  final String nick;
+  final String network;
+
+  @override
+  State<_BlacklistEntryDialog> createState() => _BlacklistEntryDialogState();
+}
+
+class _BlacklistEntryDialogState extends State<_BlacklistEntryDialog> {
+  final TextEditingController _reason = TextEditingController();
+  final TextEditingController _duration = TextEditingController();
+  final TextEditingController _customRaw = TextEditingController();
+  BlacklistAction _action = BlacklistAction.ignore;
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    _duration.dispose();
+    _customRaw.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final minutes = int.tryParse(_duration.text.trim());
+    Navigator.of(context).pop(
+      UserListEntry(
+        type: UserListType.blacklist,
+        mask: widget.nick,
+        network: widget.network,
+        blacklistAction: _action,
+        reason: _reason.text.trim().isEmpty ? null : _reason.text.trim(),
+        duration: minutes == null || minutes <= 0
+            ? null
+            : Duration(minutes: minutes),
+        customRaw: _customRaw.text.trim().isEmpty
+            ? null
+            : _customRaw.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Blacklist ${widget.nick}'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButtonFormField<BlacklistAction>(
+              initialValue: _action,
+              decoration: const InputDecoration(labelText: 'Action'),
+              items: [
+                for (final action in BlacklistAction.values)
+                  DropdownMenuItem(value: action, child: Text(action.label)),
+              ],
+              onChanged: (value) => setState(() => _action = value ?? _action),
+            ),
+            TextField(
+              controller: _reason,
+              decoration: const InputDecoration(
+                labelText: 'Reason',
+                hintText: 'optional',
+              ),
+            ),
+            TextField(
+              controller: _duration,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Duration minutes',
+                hintText: 'blank = permanent',
+              ),
+            ),
+            if (_action == BlacklistAction.custom)
+              TextField(
+                controller: _customRaw,
+                decoration: const InputDecoration(
+                  labelText: 'Custom raw template',
+                  hintText: 'GLINE {hostmask} {duration} :{reason}',
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save')),
+      ],
+    );
+  }
+}
+
+class _UserInfoSheet extends StatelessWidget {
+  const _UserInfoSheet({
+    required this.info,
+    required this.onWhois,
+    required this.onWhowas,
+    required this.onChannelTap,
+  });
+
+  final IrcUserInfo info;
+  final VoidCallback onWhois;
+  final VoidCallback onWhowas;
+  final ValueChanged<String> onChannelTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = <({IconData icon, String label, String value})>[
+      if (info.hostmask.isNotEmpty)
+        (icon: Icons.dns_outlined, label: 'Hostmask', value: info.hostmask),
+      if ((info.account ?? '').isNotEmpty)
+        (icon: Icons.verified_outlined, label: 'Account', value: info.account!),
+      if ((info.realName ?? '').isNotEmpty)
+        (icon: Icons.person_outline, label: 'Real name', value: info.realName!),
+      if ((info.awayMessage ?? '').isNotEmpty)
+        (
+          icon: Icons.hourglass_empty,
+          label: 'Away',
+          value: info.awayMessage == '__away__' ? 'away' : info.awayMessage!,
+        ),
+      if ((info.server ?? '').isNotEmpty)
+        (
+          icon: Icons.storage_outlined,
+          label: 'Server',
+          value: [info.server, info.serverInfo].whereType<String>().join(' '),
+        ),
+      if (info.idleSeconds != null)
+        (
+          icon: Icons.timer_outlined,
+          label: 'Idle',
+          value: '${info.idleSeconds}s',
+        ),
+      if (info.signedOn != null)
+        (
+          icon: Icons.login,
+          label: 'Signed on',
+          value: info.signedOn.toString(),
+        ),
+      if (info.isRegistered)
+        (icon: Icons.how_to_reg, label: 'Registered', value: 'yes'),
+      if (info.isOper)
+        (icon: Icons.security, label: 'IRC operator', value: 'yes'),
+      if (info.isSecure)
+        (icon: Icons.lock_outline, label: 'Secure connection', value: 'yes'),
+      for (final extra in info.extra)
+        (icon: Icons.info_outline, label: 'Info', value: extra),
+    ];
+
+    return SafeArea(
+      child: DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.7,
+        minChildSize: 0.35,
+        maxChildSize: 0.95,
+        builder: (context, controller) {
+          return ListView(
+            controller: controller,
+            children: [
+              ListTile(
+                title: Text(
+                  info.nick,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                subtitle: Text(info.fromWhowas ? 'WHOWAS cache' : 'User info'),
+              ),
+              OverflowBar(
+                alignment: MainAxisAlignment.start,
+                children: [
+                  TextButton.icon(
+                    onPressed: onWhois,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('WHOIS'),
+                  ),
+                  TextButton.icon(
+                    onPressed: onWhowas,
+                    icon: const Icon(Icons.history),
+                    label: const Text('WHOWAS'),
+                  ),
+                ],
+              ),
+              const Divider(height: 1),
+              for (final row in rows)
+                ListTile(
+                  leading: Icon(row.icon),
+                  title: Text(row.label),
+                  subtitle: Text(row.value),
+                  onLongPress: () =>
+                      Clipboard.setData(ClipboardData(text: row.value)),
+                ),
+              if (info.channels.isNotEmpty) ...[
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                  child: Text(
+                    'Channels',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final channel in info.channels)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: ActionChip(
+                          label: Text(channel),
+                          onPressed: () => onChannelTap(channel),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _TabLogDialog extends StatelessWidget {
+  const _TabLogDialog({required this.tab, required this.messages});
+
+  final ChatTab tab;
+  final List<IrcMessage> messages;
+
+  @override
+  Widget build(BuildContext context) {
+    final export = messages
+        .map(
+          (message) =>
+              '[${message.timestamp.toIso8601String()}] <${message.sender}> ${stripIrcFormatting(message.content)}',
+        )
+        .join('\n');
+    return AlertDialog(
+      title: Text('Recent log: ${tab.name}'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: messages.isEmpty
+            ? const Text('No messages in this tab.')
+            : ListView.separated(
+                shrinkWrap: true,
+                itemCount: messages.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final message = messages[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(
+                      stripIrcFormatting(message.content),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text('${message.sender} · ${message.kind.name}'),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton.icon(
+          onPressed: export.isEmpty
+              ? null
+              : () => Clipboard.setData(ClipboardData(text: export)),
+          icon: const Icon(Icons.copy_all),
+          label: const Text('Copy'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
 enum _HistoryKindFilter {
   all('All', <IrcMessageKind>{}),
   chat('Chat', <IrcMessageKind>{
@@ -2104,6 +2921,9 @@ class _NoteDialogState extends State<_NoteDialog> {
 class _MessageList extends StatelessWidget {
   const _MessageList({
     required this.messages,
+    required this.knownNicks,
+    required this.channelPrefixes,
+    required this.nickPrefixes,
     required this.showAttachmentPreviews,
     required this.resolveReplyTarget,
     required this.resolveReactions,
@@ -2112,11 +2932,17 @@ class _MessageList extends StatelessWidget {
     required this.onReplyWithNick,
     required this.onReplyToMessage,
     required this.onDownloadAttachment,
+    required this.onNickTap,
+    required this.onNickLongPress,
+    required this.onChannelTap,
     this.onLoadOlder,
     this.showTimestamps = true,
   });
 
   final List<IrcMessage> messages;
+  final Set<String> knownNicks;
+  final String channelPrefixes;
+  final String nickPrefixes;
   final bool showAttachmentPreviews;
   final bool showTimestamps;
   final Future<void> Function()? onLoadOlder;
@@ -2128,6 +2954,9 @@ class _MessageList extends StatelessWidget {
   final ValueChanged<IrcMessage> onReplyToMessage;
   final Future<void> Function(IrcMessageAttachment attachment)
   onDownloadAttachment;
+  final ValueChanged<String> onNickTap;
+  final ValueChanged<String> onNickLongPress;
+  final ValueChanged<String> onChannelTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2139,19 +2968,19 @@ class _MessageList extends StatelessWidget {
         child: FittedBox(
           fit: BoxFit.scaleDown,
           child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.forum_outlined,
-              size: 40,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'No messages yet.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ],
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.forum_outlined,
+                size: 40,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'No messages yet.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
           ),
         ),
       );
@@ -2202,15 +3031,28 @@ class _MessageList extends StatelessWidget {
           fontSize: (ircTheme.messageFontSize - 2).clamp(9, 100).toDouble(),
           color: Theme.of(context).colorScheme.onSurfaceVariant,
         );
+        final senderStyle = messageStyle?.copyWith(
+          fontWeight: FontWeight.w600,
+          color:
+              ircTheme.nickColorFor(message.sender) ??
+              Theme.of(context).colorScheme.onSurface,
+        );
         final leadingSpans = <InlineSpan>[
-          TextSpan(
-            text: message.sender,
-            style: messageStyle?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: ircTheme.nickColorFor(message.sender) ??
-                  Theme.of(context).colorScheme.onSurface,
-            ),
-          ),
+          if (_isInteractiveSender(message))
+            WidgetSpan(
+              alignment: PlaceholderAlignment.baseline,
+              baseline: TextBaseline.alphabetic,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => onNickTap(message.sender),
+                onLongPress: () => onNickLongPress(message.sender),
+                child: RichText(
+                  text: TextSpan(text: message.sender, style: senderStyle),
+                ),
+              ),
+            )
+          else
+            TextSpan(text: message.sender, style: senderStyle),
           if (showTimestamps)
             TextSpan(
               text: '  ${_formatClock(message.timestamp)}',
@@ -2223,62 +3065,68 @@ class _MessageList extends StatelessWidget {
         return Padding(
           padding: EdgeInsets.only(bottom: ircTheme.messageSpacing),
           child: Align(
-            alignment:
-                message.isOwn ? Alignment.centerRight : Alignment.centerLeft,
+            alignment: message.isOwn
+                ? Alignment.centerRight
+                : Alignment.centerLeft,
             child: GestureDetector(
-                onLongPress: () => _showMessageActions(context, message),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: message.isPlayback
-                        ? bubbleColor.withValues(alpha: 0.88)
-                        : bubbleColor,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: ircTheme.messageBorder),
-                  ),
-                  child: Padding(
-                    padding: ircTheme.messagePadding,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if ((message.tags['draft/reply'] ?? '')
-                            .trim()
-                            .isNotEmpty)
-                          _ReplyPreview(
-                            referenced: resolveReplyTarget(
-                              message.tags['draft/reply']!.trim(),
-                            ),
-                            replyId: message.tags['draft/reply']!.trim(),
+              onLongPress: () => _showMessageActions(context, message),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: message.isPlayback
+                      ? bubbleColor.withValues(alpha: 0.88)
+                      : bubbleColor,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: ircTheme.messageBorder),
+                ),
+                child: Padding(
+                  padding: ircTheme.messagePadding,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if ((message.tags['draft/reply'] ?? '').trim().isNotEmpty)
+                        _ReplyPreview(
+                          referenced: resolveReplyTarget(
+                            message.tags['draft/reply']!.trim(),
                           ),
-                        _IrcFormattedText(
-                          message.content,
-                          baseStyle: messageStyle,
-                          leading: leadingSpans,
+                          replyId: message.tags['draft/reply']!.trim(),
                         ),
-                        if (showAttachmentPreviews && !isRedacted)
-                          _MessageAttachments(
-                            message: message,
-                            onDownloadAttachment: onDownloadAttachment,
-                          ),
-                        if (reactions.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            children: reactions.entries
-                                .map(
-                                  (entry) => Chip(
-                                    label: Text('${entry.key} ${entry.value}'),
-                                    visualDensity: VisualDensity.compact,
-                                  ),
-                                )
-                                .toList(growable: false),
-                          ),
-                        ],
+                      _IrcFormattedText(
+                        message.content,
+                        baseStyle: messageStyle,
+                        leading: leadingSpans,
+                        knownNicks: <String>{...knownNicks, message.sender},
+                        channelPrefixes: channelPrefixes,
+                        nickPrefixes: nickPrefixes,
+                        contextNick: message.sender,
+                        onNickTap: onNickTap,
+                        onNickLongPress: onNickLongPress,
+                        onChannelTap: onChannelTap,
+                      ),
+                      if (showAttachmentPreviews && !isRedacted)
+                        _MessageAttachments(
+                          message: message,
+                          onDownloadAttachment: onDownloadAttachment,
+                        ),
+                      if (reactions.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: reactions.entries
+                              .map(
+                                (entry) => Chip(
+                                  label: Text('${entry.key} ${entry.value}'),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              )
+                              .toList(growable: false),
+                        ),
                       ],
-                    ),
+                    ],
                   ),
                 ),
               ),
+            ),
           ),
         );
       },
@@ -2417,6 +3265,26 @@ class _MessageList extends StatelessWidget {
       },
     );
   }
+
+  bool _isInteractiveSender(IrcMessage message) {
+    final sender = message.sender.trim();
+    if (sender.isEmpty || sender == '*') {
+      return false;
+    }
+    switch (message.kind) {
+      case IrcMessageKind.chat:
+      case IrcMessageKind.action:
+      case IrcMessageKind.notice:
+        return true;
+      case IrcMessageKind.system:
+      case IrcMessageKind.raw:
+      case IrcMessageKind.error:
+      case IrcMessageKind.event:
+      case IrcMessageKind.dcc:
+      case IrcMessageKind.media:
+        return false;
+    }
+  }
 }
 
 class _IrcFormattedText extends StatelessWidget {
@@ -2426,6 +3294,13 @@ class _IrcFormattedText extends StatelessWidget {
     this.maxLines,
     this.overflow,
     this.leading,
+    this.knownNicks = const <String>{},
+    this.channelPrefixes = '#&',
+    this.nickPrefixes = '~&@%+',
+    this.contextNick,
+    this.onNickTap,
+    this.onNickLongPress,
+    this.onChannelTap,
   });
 
   final String text;
@@ -2436,24 +3311,28 @@ class _IrcFormattedText extends StatelessWidget {
   /// Inline spans (e.g. sender + timestamp) rendered before the content so the
   /// message flows on one line and only wraps when it is long.
   final List<InlineSpan>? leading;
+  final Set<String> knownNicks;
+  final String channelPrefixes;
+  final String nickPrefixes;
+  final String? contextNick;
+  final ValueChanged<String>? onNickTap;
+  final ValueChanged<String>? onNickLongPress;
+  final ValueChanged<String>? onChannelTap;
 
   @override
   Widget build(BuildContext context) {
-    final segments = parseIrcTextWithLinks(text);
+    final segments = parseInteractiveMessageTokens(
+      text,
+      knownNicks: knownNicks,
+      channelPrefixes: channelPrefixes,
+      nickPrefixes: nickPrefixes,
+      contextNick: contextNick,
+    );
     final contentSpans = segments.isEmpty
         ? <InlineSpan>[TextSpan(text: text, style: baseStyle)]
         : segments
-            .map<InlineSpan>(
-              (segment) => TextSpan(
-                text: segment.text,
-                style: _resolveTextStyle(baseStyle, segment),
-                recognizer: segment.isLink
-                    ? (TapGestureRecognizer()
-                        ..onTap = () => _openExternalUrl(segment.url!))
-                    : null,
-              ),
-            )
-            .toList(growable: false);
+              .map<InlineSpan>((segment) => _spanForToken(context, segment))
+              .toList(growable: false);
 
     return Text.rich(
       TextSpan(children: [...?leading, ...contentSpans]),
@@ -2463,8 +3342,72 @@ class _IrcFormattedText extends StatelessWidget {
     );
   }
 
-  TextStyle _resolveTextStyle(TextStyle? base, IrcLinkSegment segment) {
+  InlineSpan _spanForToken(
+    BuildContext context,
+    InteractiveMessageToken token,
+  ) {
+    final style = _resolveTextStyle(baseStyle, token);
+    switch (token.type) {
+      case InteractiveMessageTokenType.url:
+        return TextSpan(
+          text: token.text,
+          style: style,
+          recognizer: TapGestureRecognizer()
+            ..onTap = () => _openExternalUrl(token.url!),
+        );
+      case InteractiveMessageTokenType.channel:
+        final target = token.value;
+        if (target == null || onChannelTap == null) {
+          return TextSpan(text: token.text, style: style);
+        }
+        return WidgetSpan(
+          alignment: PlaceholderAlignment.baseline,
+          baseline: TextBaseline.alphabetic,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: () => onChannelTap!(target),
+            child: RichText(
+              text: TextSpan(text: token.text, style: style),
+            ),
+          ),
+        );
+      case InteractiveMessageTokenType.nick:
+      case InteractiveMessageTokenType.hostmask:
+      case InteractiveMessageTokenType.userHost:
+        final target = token.value;
+        if (target == null || (onNickTap == null && onNickLongPress == null)) {
+          return TextSpan(text: token.text, style: style);
+        }
+        return WidgetSpan(
+          alignment: PlaceholderAlignment.baseline,
+          baseline: TextBaseline.alphabetic,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: onNickTap == null ? null : () => onNickTap!(target),
+            onLongPress: onNickLongPress == null
+                ? null
+                : () => onNickLongPress!(target),
+            child: RichText(
+              text: TextSpan(text: token.text, style: style),
+            ),
+          ),
+        );
+      case InteractiveMessageTokenType.text:
+        return TextSpan(text: token.text, style: style);
+    }
+  }
+
+  TextStyle _resolveTextStyle(
+    TextStyle? base,
+    InteractiveMessageToken segment,
+  ) {
     final style = segment.style;
+    final isLink =
+        segment.type == InteractiveMessageTokenType.url ||
+        segment.type == InteractiveMessageTokenType.channel ||
+        segment.type == InteractiveMessageTokenType.nick ||
+        segment.type == InteractiveMessageTokenType.hostmask ||
+        segment.type == InteractiveMessageTokenType.userHost;
     var foregroundHex =
         style.colorHex ??
         (style.color == null ? null : getIrcColorHex(style.color!));
@@ -2504,7 +3447,7 @@ class _IrcFormattedText extends StatelessWidget {
     }
 
     final decorations = <TextDecoration>{};
-    if (style.underline || segment.isLink) {
+    if (style.underline || isLink) {
       decorations.add(TextDecoration.underline);
     }
     if (style.strikethrough) {
@@ -2516,7 +3459,7 @@ class _IrcFormattedText extends StatelessWidget {
       );
     }
 
-    if (segment.isLink && foregroundHex == null) {
+    if (isLink && foregroundHex == null) {
       textStyle = textStyle.copyWith(color: const Color(0xFF1565C0));
     }
 
@@ -2592,7 +3535,9 @@ class _LinkPreviewCard extends StatefulWidget {
 }
 
 class _LinkPreviewCardState extends State<_LinkPreviewCard> {
-  late final Future<LinkPreview?> _future = linkPreviewService.fetch(widget.url);
+  late final Future<LinkPreview?> _future = linkPreviewService.fetch(
+    widget.url,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -2620,6 +3565,45 @@ class _LinkPreviewCardState extends State<_LinkPreviewCard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if ((preview.imageUrl ?? '').isNotEmpty) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        preview.imageUrl!,
+                        height: 150,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (_siteLabel(preview).isNotEmpty) ...[
+                    Row(
+                      children: [
+                        if ((preview.faviconUrl ?? '').isNotEmpty) ...[
+                          Image.network(
+                            preview.faviconUrl!,
+                            height: 16,
+                            width: 16,
+                            errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        Expanded(
+                          child: Text(
+                            _siteLabel(preview),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                  ],
                   if ((preview.title ?? '').isNotEmpty)
                     Text(
                       preview.title!,
@@ -2643,6 +3627,15 @@ class _LinkPreviewCardState extends State<_LinkPreviewCard> {
         );
       },
     );
+  }
+
+  String _siteLabel(LinkPreview preview) {
+    final site = preview.siteName?.trim();
+    if (site != null && site.isNotEmpty) {
+      return site;
+    }
+    final host = Uri.tryParse(preview.url)?.host;
+    return host ?? '';
   }
 }
 
