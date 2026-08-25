@@ -4762,6 +4762,13 @@ void main() {
         controller.activeChannelUsers,
         containsAll(<String>['alice', 'bob']),
       );
+      final details = controller.activeChannelUserDetails;
+      final alice = details.firstWhere((entry) => entry.nick == 'alice');
+      final bob = details.firstWhere((entry) => entry.nick == 'bob');
+      expect(alice.prefix, '@');
+      expect(alice.statusRank, channelUserStatusRank('@'));
+      expect(bob.prefix, '+');
+      expect(bob.statusRank, channelUserStatusRank('+'));
 
       controller.dispose();
     },

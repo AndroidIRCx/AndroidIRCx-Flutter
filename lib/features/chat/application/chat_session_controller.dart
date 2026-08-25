@@ -70,6 +70,23 @@ enum ChannelUserAction {
 
 enum ChannelModerationAction { kick, ban, kickBan, quiet }
 
+typedef ChannelUserDetails = ({
+  String nick,
+  String details,
+  String? prefix,
+  int statusRank,
+});
+
+const channelUserStatusPrefixes = <String>['~', '&', '@', '%', '+'];
+
+int channelUserStatusRank(String? prefix) {
+  if (prefix == null || prefix.isEmpty) {
+    return channelUserStatusPrefixes.length;
+  }
+  final rank = channelUserStatusPrefixes.indexOf(prefix);
+  return rank == -1 ? channelUserStatusPrefixes.length : rank;
+}
+
 class IrcUserInfo {
   const IrcUserInfo({
     required this.nick,
@@ -519,11 +536,17 @@ class ChatSessionController extends ChangeNotifier {
     return List<String>.unmodifiable(sorted);
   }
 
-  List<({String nick, String details})> get activeChannelUserDetails {
-    return List<({String nick, String details})>.unmodifiable(
-      activeChannelUsers.map(
-        (nick) => (nick: nick, details: userDetailsForNick(nick)),
-      ),
+  List<ChannelUserDetails> get activeChannelUserDetails {
+    return List<ChannelUserDetails>.unmodifiable(
+      activeChannelUsers.map((nick) {
+        final prefix = _channelUserPrefixFor(activeTabId, nick);
+        return (
+          nick: nick,
+          details: userDetailsForNick(nick),
+          prefix: prefix,
+          statusRank: channelUserStatusRank(prefix),
+        );
+      }),
     );
   }
 

@@ -10,10 +10,14 @@ import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/connections/presentation/profiles_screen.dart';
 import 'package:androidircx/features/connections/presentation/server_directory_picker.dart';
+import 'package:androidircx/features/monetization/presentation/purchase_screen.dart';
 import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
 import 'package:androidircx/features/settings/presentation/backup_screen.dart';
 import 'package:androidircx/features/settings/presentation/crash_reports_screen.dart';
 import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
+import 'package:androidircx/monetization/monetization_config.dart';
+import 'package:androidircx/monetization/monetization_controller.dart';
+import 'package:androidircx/monetization/monetization_scope.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
@@ -102,6 +106,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final monetizationScope = MonetizationScope.maybeOf(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: SafeArea(
@@ -438,6 +443,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
+                  if (monetizationScope != null) ...[
+                    _SettingsSection(
+                      title: 'Premium & ads',
+                      children: [
+                        _MonetizationStatusTile(
+                          controller: monetizationScope.controller,
+                        ),
+                        const Divider(height: 1),
+                        AnimatedBuilder(
+                          animation: Listenable.merge([
+                            monetizationScope.controller,
+                            monetizationScope.rewardedAdService,
+                          ]),
+                          builder: (context, _) {
+                            final rewarded =
+                                monetizationScope.rewardedAdService;
+                            final canRequestAd =
+                                MonetizationConfig.mobileAdsRuntimeSupported &&
+                                !rewarded.isLoading &&
+                                !rewarded.isShowing &&
+                                !rewarded.isInCooldown;
+                            return ListTile(
+                              leading: const Icon(Icons.play_circle_outline),
+                              title: Text(_watchAdTitle(monetizationScope)),
+                              subtitle: Text(
+                                _watchAdSubtitle(monetizationScope),
+                              ),
+                              trailing: FilledButton(
+                                onPressed: canRequestAd
+                                    ? () => _handleWatchAd(monetizationScope)
+                                    : null,
+                                child: Text(
+                                  rewarded.isReady ? 'Watch' : 'Load',
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(Icons.workspace_premium_outlined),
+                          title: const Text('Remove ads permanently'),
+                          subtitle: const Text(
+                            'Create matching Play products, then sell '
+                            'one-time no-ads upgrades here.',
+                          ),
+                          onTap: () => _openPurchaseScreen(monetizationScope),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   _SettingsSection(
                     title: 'Security',
                     children: [
@@ -454,7 +511,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const Divider(height: 1),
                       SwitchListTile(
                         key: const Key('settings-screenshot-protection'),
-                        secondary: const Icon(Icons.screenshot_monitor_outlined),
+                        secondary: const Icon(
+                          Icons.screenshot_monitor_outlined,
+                        ),
                         title: const Text('Block screenshots'),
                         subtitle: const Text(
                           'Prevent screenshots and screen recording (Android).',
@@ -502,7 +561,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         value: _settings.notifyPrivateMessages,
                         onChanged: _settings.notificationsEnabled
                             ? (value) => _saveSettings(
-                                _settings.copyWith(notifyPrivateMessages: value),
+                                _settings.copyWith(
+                                  notifyPrivateMessages: value,
+                                ),
                               )
                             : null,
                       ),
@@ -1048,6 +1109,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ).showSnackBar(const SnackBar(content: Text('Theme JSON copied.')));
   }
 
+  Future<void> _handleWatchAd(MonetizationScope scope) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final service = scope.rewardedAdService;
+    if (service.isReady) {
+      final result = await service.showRewardedAd();
+      if (!mounted) {
+        return;
+      }
+      messenger.showSnackBar(SnackBar(content: Text(result.message)));
+      return;
+    }
+
+    final result = await service.manualLoadAd();
+    if (!mounted) {
+      return;
+    }
+    messenger.showSnackBar(SnackBar(content: Text(result.message)));
+  }
+
+  Future<void> _openPurchaseScreen(MonetizationScope scope) {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => PurchaseScreen(
+          monetizationController: scope.controller,
+          purchaseService: scope.purchaseService,
+        ),
+      ),
+    );
+  }
+
+  String _watchAdTitle(MonetizationScope scope) {
+    final service = scope.rewardedAdService;
+    if (!MonetizationConfig.mobileAdsRuntimeSupported) {
+      return 'Rewarded ads unavailable here';
+    }
+    if (service.isShowing) {
+      return 'Showing rewarded ad';
+    }
+    if (service.isReady) {
+      return 'Watch ad to hide banner';
+    }
+    if (service.isInCooldown) {
+      return 'Ad cooldown (${service.cooldownSeconds}s)';
+    }
+    if (service.isLoading) {
+      return 'Loading rewarded ad';
+    }
+    return 'Request rewarded ad';
+  }
+
+  String _watchAdSubtitle(MonetizationScope scope) {
+    final controller = scope.controller;
+    final service = scope.rewardedAdService;
+    if (!MonetizationConfig.mobileAdsRuntimeSupported) {
+      return 'Use an Android or iOS build to request AdMob rewarded ads.';
+    }
+    if (controller.hasNoAds) {
+      return 'You already have permanent no-ads. Watching ads is optional support.';
+    }
+    if (controller.hasTemporaryAdFreeTime) {
+      return 'Banner hidden for ${controller.adFreeTimeFormatted}.';
+    }
+    if ((service.lastError ?? '').isNotEmpty && !service.isLoading) {
+      return service.lastError!;
+    }
+    return 'Completing an ad grants '
+        '${MonetizationConfig.rewardAdFreeMinutes} minutes without banners.';
+  }
+
   Future<void> _showInfoDialog({required String title, required String body}) {
     return showDialog<void>(
       context: context,
@@ -1104,8 +1234,47 @@ Network passwords, SASL passwords, proxy passwords, and auto-join channel keys a
 
 IRC messages are sent to the networks you connect to. DCC transfers connect directly to the peer or through reverse/passive negotiation when available.
 
-No ads at the moment :). Anonymous usage analytics and crash reports (Firebase Analytics/Crashlytics) are off by default and only collected if you opt in under Permissions; you can turn them off any time.
+AndroidIRCX uses Google AdMob for top banner ads and opt-in rewarded ads. Tap "Watch ad" to earn temporary banner-free time. Anonymous usage analytics and crash reports (Firebase Analytics/Crashlytics) are off by default and only collected if you opt in under Permissions; you can turn them off any time.
 ''';
+
+class _MonetizationStatusTile extends StatelessWidget {
+  const _MonetizationStatusTile({required this.controller});
+
+  final MonetizationController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        return ListTile(
+          leading: const Icon(Icons.ads_click_outlined),
+          title: Text(_titleFor(controller.highestTier)),
+          subtitle: Text(_subtitleFor(controller)),
+        );
+      },
+    );
+  }
+
+  String _titleFor(PremiumTier tier) {
+    return switch (tier) {
+      PremiumTier.free => 'Free plan',
+      PremiumTier.removeAds => 'Remove Ads active',
+      PremiumTier.proUnlimited => 'Pro Unlimited active',
+      PremiumTier.supporterPro => 'Supporter Pro active',
+    };
+  }
+
+  String _subtitleFor(MonetizationController controller) {
+    if (controller.hasNoAds) {
+      return 'Banner ads are permanently disabled.';
+    }
+    if (controller.hasTemporaryAdFreeTime) {
+      return 'Banner hidden for ${controller.adFreeTimeFormatted}.';
+    }
+    return 'Top banner ads are shown. Rewarded ads can hide them temporarily.';
+  }
+}
 
 class _SettingsSection extends StatelessWidget {
   const _SettingsSection({required this.title, required this.children});

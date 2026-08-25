@@ -17,43 +17,50 @@ class DataPrivacyScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            Text('Your data stays on your device',
-                style: theme.textTheme.titleLarge),
+            Text(
+              'Your data stays on your device',
+              style: theme.textTheme.titleLarge,
+            ),
             const SizedBox(height: 12),
             const _PrivacyPoint(
               icon: Icons.phone_android,
               title: 'Local-first',
-              body: 'Networks, settings, and chat history are stored on this '
+              body:
+                  'Networks, settings, and chat history are stored on this '
                   'device. AndroidIRCX has no account and no cloud sync.',
             ),
             const _PrivacyPoint(
               icon: Icons.lock_outline,
               title: 'Encrypted history',
-              body: 'Message history is encrypted with a key protected by your '
+              body:
+                  'Message history is encrypted with a key protected by your '
                   'fingerprint/PIN, so a stolen database file cannot be read.',
             ),
             const _PrivacyPoint(
               icon: Icons.vpn_key_outlined,
               title: 'Secrets in secure storage',
-              body: 'Server, SASL, and channel passwords and client '
+              body:
+                  'Server, SASL, and channel passwords and client '
                   'certificates are kept in the platform secure storage '
                   '(Android Keystore), never in plain files or exports.',
             ),
             const _PrivacyPoint(
               icon: Icons.dns_outlined,
               title: 'Direct IRC connections',
-              body: 'The app connects straight to the IRC servers you choose. '
+              body:
+                  'The app connects straight to the IRC servers you choose. '
                   'Message content is sent to those servers per the IRC '
                   'protocol; use TLS and SASL for privacy in transit.',
             ),
             const _PrivacyPoint(
               icon: Icons.insights_outlined,
-              title: 'Optional analytics & crash reports',
+              title: 'Ads, analytics & crash reports',
               body:
-                  'No ads at the moment 🙂. Anonymous usage analytics and crash '
-                  'reports (Firebase Analytics/Crashlytics) are OFF by default '
-                  'and only collected if you opt in; you can change this any '
-                  'time in Settings.',
+                  'AndroidIRCX uses Google AdMob banner ads and opt-in '
+                  'rewarded ads that can temporarily hide banners. Anonymous '
+                  'usage analytics and crash reports (Firebase Analytics/'
+                  'Crashlytics) are OFF by default and only collected if you '
+                  'opt in; you can change this any time in Settings.',
             ),
             const SizedBox(height: 16),
             FilledButton.icon(

@@ -1,6 +1,8 @@
 import 'package:androidircx/core/models/channel_list_entry.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
+import 'package:androidircx/features/chat/presentation/irc_formatted_text.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
+import 'package:androidircx/irc/parser/irc_formatter.dart';
 import 'package:flutter/material.dart';
 
 /// Browses the server channel list (LIST) with search and one-tap join.
@@ -38,12 +40,16 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     final visible = query.isEmpty
         ? entries
         : entries
-            .where((entry) =>
-                entry.name.toLowerCase().contains(query) ||
-                entry.topic.toLowerCase().contains(query))
-            .toList(growable: false);
-    return [...visible]
-      ..sort((a, b) => b.userCount.compareTo(a.userCount));
+              .where(
+                (entry) =>
+                    entry.name.toLowerCase().contains(query) ||
+                    formatIrcPlainText(
+                      entry.topic,
+                      collapseWhitespace: true,
+                    ).toLowerCase().contains(query),
+              )
+              .toList(growable: false);
+    return [...visible]..sort((a, b) => b.userCount.compareTo(a.userCount));
   }
 
   Future<void> _join(ChannelListEntry entry) async {
@@ -103,13 +109,22 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                           separatorBuilder: (_, _) => const Divider(height: 1),
                           itemBuilder: (context, index) {
                             final entry = entries[index];
+                            final topicStyle = Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                );
                             return ListTile(
                               leading: const Icon(Icons.tag),
                               title: Text(entry.name),
                               subtitle: entry.topic.isEmpty
                                   ? null
-                                  : Text(
+                                  : IrcFormattedText(
                                       entry.topic,
+                                      baseStyle: topicStyle,
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
                                     ),
