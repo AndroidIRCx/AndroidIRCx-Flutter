@@ -41,7 +41,7 @@ class SettingsScreen extends StatefulWidget {
   /// for tests; defaults to a biometric/PIN prompt.
   final Future<bool> Function()? appLockAuthenticator;
 
-  /// Runtime OS permissions (notifications, camera). Overridable for tests;
+  /// Runtime OS permissions. Overridable for tests;
   /// defaults to the `permission_handler` backed implementation.
   final AppPermissions? permissions;
 
@@ -60,7 +60,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   AppSettings _settings = const AppSettings();
   bool _isLoading = true;
   bool _didResolveController = false;
-  bool _cameraGranted = false;
 
   AppPermissions get _permissions =>
       widget.permissions ?? const PermissionHandlerAppPermissions();
@@ -546,21 +545,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _SettingsSection(
                     title: 'Permissions',
                     children: [
-                      ListTile(
-                        key: const Key('settings-permission-camera'),
-                        leading: const Icon(Icons.photo_camera_outlined),
-                        title: const Text('Camera access'),
-                        subtitle: Text(
-                          _cameraGranted
-                              ? 'Granted — you can capture photos and video.'
-                              : 'Needed to capture photos/video for media and DCC.',
-                        ),
-                        trailing: _cameraGranted
-                            ? const Icon(Icons.check_circle_outline)
-                            : const Text('Grant'),
-                        onTap: _cameraGranted ? null : _requestCameraPermission,
-                      ),
-                      const Divider(height: 1),
                       SwitchListTile(
                         key: const Key('settings-analytics-consent'),
                         secondary: const Icon(Icons.insights_outlined),
@@ -949,18 +933,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   /// Reconciles permission-gated settings on entry: notifications can only be
-  /// on while the OS permission is granted, and refreshes the camera status.
+  /// on while the OS permission is granted.
   Future<void> _refreshPermissionStatuses() async {
     final hasNotifications = await _permissions.hasNotifications();
-    final hasCamera = await _permissions.hasCamera();
     if (!mounted) {
       return;
     }
     if (_settings.notificationsEnabled && !hasNotifications) {
       await _saveSettings(_settings.copyWith(notificationsEnabled: false));
-    }
-    if (mounted && hasCamera != _cameraGranted) {
-      setState(() => _cameraGranted = hasCamera);
     }
   }
 
@@ -990,33 +970,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           permanentlyDenied
               ? 'Notifications are blocked. Enable them in system settings.'
               : 'Notification permission denied — notifications stay off.',
-        ),
-        action: permanentlyDenied
-            ? SnackBarAction(
-                label: 'Settings',
-                onPressed: () => unawaited(_permissions.openSettingsPage()),
-              )
-            : null,
-      ),
-    );
-  }
-
-  Future<void> _requestCameraPermission() async {
-    final result = await _permissions.requestCamera();
-    if (!mounted) {
-      return;
-    }
-    if (result == AppPermissionResult.granted) {
-      setState(() => _cameraGranted = true);
-      return;
-    }
-    final permanentlyDenied = result == AppPermissionResult.permanentlyDenied;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          permanentlyDenied
-              ? 'Camera is blocked. Enable it in system settings.'
-              : 'Camera permission denied.',
         ),
         action: permanentlyDenied
             ? SnackBarAction(

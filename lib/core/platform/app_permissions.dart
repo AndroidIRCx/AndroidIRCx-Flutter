@@ -7,8 +7,6 @@ enum AppPermissionResult { granted, denied, permanentlyDenied, restricted }
 abstract class AppPermissions {
   Future<AppPermissionResult> requestNotifications();
   Future<bool> hasNotifications();
-  Future<AppPermissionResult> requestCamera();
-  Future<bool> hasCamera();
 
   /// Opens the OS app-settings page (used after a permanent denial).
   Future<void> openSettingsPage();
@@ -37,14 +35,6 @@ class PermissionHandlerAppPermissions implements AppPermissions {
   @override
   Future<bool> hasNotifications() async =>
       (await Permission.notification.status).isGranted;
-
-  @override
-  Future<AppPermissionResult> requestCamera() async =>
-      _map(await Permission.camera.request());
-
-  @override
-  Future<bool> hasCamera() async =>
-      (await Permission.camera.status).isGranted;
 
   @override
   Future<void> openSettingsPage() async {

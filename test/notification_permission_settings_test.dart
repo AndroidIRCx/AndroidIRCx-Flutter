@@ -9,35 +9,21 @@ import 'package:shared_preferences/shared_preferences.dart';
 class _FakePermissions implements AppPermissions {
   _FakePermissions({
     this.notifResult = AppPermissionResult.granted,
-    this.camResult = AppPermissionResult.granted,
     this.hasNotif = false,
   });
 
   AppPermissionResult notifResult;
-  AppPermissionResult camResult;
   bool hasNotif;
-  bool hasCam = false;
   int notifRequests = 0;
-  int camRequests = 0;
 
   @override
   Future<bool> hasNotifications() async => hasNotif;
-
-  @override
-  Future<bool> hasCamera() async => hasCam;
 
   @override
   Future<AppPermissionResult> requestNotifications() async {
     notifRequests++;
     if (notifResult == AppPermissionResult.granted) hasNotif = true;
     return notifResult;
-  }
-
-  @override
-  Future<AppPermissionResult> requestCamera() async {
-    camRequests++;
-    if (camResult == AppPermissionResult.granted) hasCam = true;
-    return camResult;
   }
 
   @override
@@ -138,28 +124,4 @@ void main() {
     expect(saved.analyticsConsent, isTrue);
   });
 
-  testWidgets('granting camera permission shows granted state', (tester) async {
-    final perms = _FakePermissions(camResult: AppPermissionResult.granted);
-    await tester.pumpWidget(
-      MaterialApp(home: SettingsScreen(permissions: perms)),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('settings-permission-camera')),
-      250,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.ensureVisible(
-      find.byKey(const Key('settings-permission-camera')),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const Key('settings-permission-camera')));
-    await tester.pumpAndSettle();
-
-    expect(perms.camRequests, 1);
-    expect(find.text('Granted — you can capture photos and video.'),
-        findsOneWidget);
-  });
 }

@@ -19,11 +19,7 @@ class _FakePermissions implements AppPermissions {
 
   @override
   Future<bool> hasNotifications() async => false;
-  @override
-  Future<AppPermissionResult> requestCamera() async =>
-      AppPermissionResult.granted;
-  @override
-  Future<bool> hasCamera() async => false;
+
   @override
   Future<void> openSettingsPage() async {}
 }
