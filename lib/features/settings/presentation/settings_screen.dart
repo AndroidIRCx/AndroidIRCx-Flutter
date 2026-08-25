@@ -62,6 +62,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final SettingsRepository _repository;
   AppSettingsController? _settingsController;
   AppSettings _settings = const AppSettings();
+  MonetizationController? _monetizationController;
+  bool? _lastHasNoAds;
   bool _isLoading = true;
   bool _didResolveController = false;
 
@@ -77,6 +79,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _syncMonetizationController();
     if (_didResolveController) {
       return;
     }
@@ -96,6 +99,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _settingsController?.removeListener(_syncFromController);
+    _monetizationController?.removeListener(_handleMonetizationChanged);
     _dccDownloadDirectoryController.dispose();
     _mediaDownloadDirectoryController.dispose();
     _customThemeController.dispose();
@@ -146,6 +150,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
+                  if (monetizationScope != null &&
+                      !monetizationScope.controller.hasNoAds)
+                    ..._premiumAdsSettingsSection(monetizationScope),
                   _SettingsSection(
                     title: 'Appearance',
                     children: [
@@ -443,58 +450,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  if (monetizationScope != null) ...[
-                    _SettingsSection(
-                      title: 'Premium & ads',
-                      children: [
-                        _MonetizationStatusTile(
-                          controller: monetizationScope.controller,
-                        ),
-                        const Divider(height: 1),
-                        AnimatedBuilder(
-                          animation: Listenable.merge([
-                            monetizationScope.controller,
-                            monetizationScope.rewardedAdService,
-                          ]),
-                          builder: (context, _) {
-                            final rewarded =
-                                monetizationScope.rewardedAdService;
-                            final canRequestAd =
-                                MonetizationConfig.mobileAdsRuntimeSupported &&
-                                !rewarded.isLoading &&
-                                !rewarded.isShowing &&
-                                !rewarded.isInCooldown;
-                            return ListTile(
-                              leading: const Icon(Icons.play_circle_outline),
-                              title: Text(_watchAdTitle(monetizationScope)),
-                              subtitle: Text(
-                                _watchAdSubtitle(monetizationScope),
-                              ),
-                              trailing: FilledButton(
-                                onPressed: canRequestAd
-                                    ? () => _handleWatchAd(monetizationScope)
-                                    : null,
-                                child: Text(
-                                  rewarded.isReady ? 'Watch' : 'Load',
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                        const Divider(height: 1),
-                        ListTile(
-                          leading: const Icon(Icons.workspace_premium_outlined),
-                          title: const Text('Remove ads permanently'),
-                          subtitle: const Text(
-                            'Create matching Play products, then sell '
-                            'one-time no-ads upgrades here.',
-                          ),
-                          onTap: () => _openPurchaseScreen(monetizationScope),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                  ],
                   _SettingsSection(
                     title: 'Security',
                     children: [
@@ -817,6 +772,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
+                  if (monetizationScope != null &&
+                      monetizationScope.controller.hasNoAds)
+                    ..._premiumAdsSettingsSection(monetizationScope),
                   _SettingsSection(
                     title: 'Help',
                     children: [
@@ -903,6 +861,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _isLoading = controller.isLoading;
       _syncTextControllers(controller.settings);
     });
+  }
+
+  void _syncMonetizationController() {
+    final controller = MonetizationScope.maybeOf(context)?.controller;
+    if (identical(_monetizationController, controller)) {
+      return;
+    }
+    _monetizationController?.removeListener(_handleMonetizationChanged);
+    _monetizationController = controller;
+    _lastHasNoAds = controller?.hasNoAds;
+    controller?.addListener(_handleMonetizationChanged);
+  }
+
+  void _handleMonetizationChanged() {
+    final hasNoAds = _monetizationController?.hasNoAds;
+    if (hasNoAds == _lastHasNoAds) {
+      return;
+    }
+    _lastHasNoAds = hasNoAds;
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _syncTextControllers(AppSettings settings) {
@@ -1128,8 +1108,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     messenger.showSnackBar(SnackBar(content: Text(result.message)));
   }
 
-  Future<void> _openPurchaseScreen(MonetizationScope scope) {
-    return Navigator.of(context).push<void>(
+  Future<void> _openPurchaseScreen(MonetizationScope scope) async {
+    await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => PurchaseScreen(
           monetizationController: scope.controller,
@@ -1137,6 +1117,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  List<Widget> _premiumAdsSettingsSection(MonetizationScope monetizationScope) {
+    return [
+      _SettingsSection(
+        title: 'Premium & ads',
+        children: [
+          _MonetizationStatusTile(controller: monetizationScope.controller),
+          const Divider(height: 1),
+          AnimatedBuilder(
+            animation: Listenable.merge([
+              monetizationScope.controller,
+              monetizationScope.rewardedAdService,
+            ]),
+            builder: (context, _) {
+              final rewarded = monetizationScope.rewardedAdService;
+              final canRequestAd =
+                  MonetizationConfig.mobileAdsRuntimeSupported &&
+                  !rewarded.isLoading &&
+                  !rewarded.isShowing &&
+                  !rewarded.isInCooldown;
+              return ListTile(
+                leading: const Icon(Icons.play_circle_outline),
+                title: Text(_watchAdTitle(monetizationScope)),
+                subtitle: Text(_watchAdSubtitle(monetizationScope)),
+                trailing: FilledButton(
+                  onPressed: canRequestAd
+                      ? () => _handleWatchAd(monetizationScope)
+                      : null,
+                  child: Text(rewarded.isReady ? 'Watch' : 'Load'),
+                ),
+              );
+            },
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.workspace_premium_outlined),
+            title: const Text('Remove ads permanently'),
+            subtitle: const Text(
+              'Create matching Play products, then sell '
+              'one-time no-ads upgrades here.',
+            ),
+            onTap: () => _openPurchaseScreen(monetizationScope),
+          ),
+        ],
+      ),
+      const SizedBox(height: 12),
+    ];
   }
 
   String _watchAdTitle(MonetizationScope scope) {

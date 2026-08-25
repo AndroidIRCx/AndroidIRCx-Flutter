@@ -810,6 +810,42 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('dismisses connected status banner in chat screen', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+    transport.emit(':server 001 AndroidIRCX :Welcome to DBase');
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('connection-banner-dismiss')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('connection-banner-dismiss')));
+    await tester.pump();
+
+    expect(find.byKey(const Key('connection-banner-dismiss')), findsNothing);
+
+    controller.dispose();
+  });
+
   testWidgets('lists other networks and switches from the chat drawer', (
     tester,
   ) async {

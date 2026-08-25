@@ -87,6 +87,7 @@ class _ChatScreenState extends State<ChatScreen> {
   _HistoryKindFilter _messageSearchFilter = _HistoryKindFilter.all;
   String _nickSearchQuery = '';
   IrcMessage? _pendingReplyMessage;
+  bool _connectedBannerDismissed = false;
 
   ChatSessionController get _controller => widget.controller;
   DccFilePicker get _filePicker =>
@@ -105,15 +106,39 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _controller.addListener(_syncConnectionBannerDismissal);
     _controller.start();
   }
 
   @override
+  void didUpdateWidget(covariant ChatScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller.removeListener(_syncConnectionBannerDismissal);
+      _connectedBannerDismissed = false;
+      _controller.addListener(_syncConnectionBannerDismissal);
+      _controller.start();
+    }
+  }
+
+  @override
   void dispose() {
+    _controller.removeListener(_syncConnectionBannerDismissal);
     _composerController.dispose();
     _messageSearchController.dispose();
     _nickSearchController.dispose();
     super.dispose();
+  }
+
+  void _syncConnectionBannerDismissal() {
+    final snapshot = _controller.connection;
+    final stableConnected =
+        snapshot.phase == ConnectionPhase.connected &&
+        _controller.pendingReconnectDelay == null;
+    if (stableConnected || !_connectedBannerDismissed) {
+      return;
+    }
+    setState(() => _connectedBannerDismissed = false);
   }
 
   @override
@@ -343,6 +368,11 @@ class _ChatScreenState extends State<ChatScreen> {
                               _ConnectionBanner(
                                 controller: _controller,
                                 network: _controller.network,
+                                connectedBannerDismissed:
+                                    _connectedBannerDismissed,
+                                onDismissConnectedBanner: () => setState(
+                                  () => _connectedBannerDismissed = true,
+                                ),
                               ),
                               if (_messageSearchVisible)
                                 _InlineMessageSearchBar(
@@ -3848,10 +3878,17 @@ bool _canDownloadAttachment(IrcMessageAttachment attachment) {
 }
 
 class _ConnectionBanner extends StatelessWidget {
-  const _ConnectionBanner({required this.controller, required this.network});
+  const _ConnectionBanner({
+    required this.controller,
+    required this.network,
+    required this.connectedBannerDismissed,
+    required this.onDismissConnectedBanner,
+  });
 
   final ChatSessionController controller;
   final NetworkConfig network;
+  final bool connectedBannerDismissed;
+  final VoidCallback onDismissConnectedBanner;
 
   @override
   Widget build(BuildContext context) {
@@ -3859,12 +3896,15 @@ class _ConnectionBanner extends StatelessWidget {
     final reconnectDelay = controller.pendingReconnectDelay;
     final theme = Theme.of(context);
     final statusColor = _colorForPhase(context, snapshot.phase);
+    final stableConnected =
+        snapshot.phase == ConnectionPhase.connected && reconnectDelay == null;
 
-    if (snapshot.phase == ConnectionPhase.connected &&
-        reconnectDelay == null &&
-        snapshot.message == null) {
+    if (stableConnected &&
+        (snapshot.message == null || connectedBannerDismissed)) {
       return const SizedBox.shrink();
     }
+
+    final canDismiss = stableConnected && (snapshot.message ?? '').isNotEmpty;
 
     return Container(
       width: double.infinity,
@@ -3888,6 +3928,14 @@ class _ConnectionBanner extends StatelessWidget {
                   style: theme.textTheme.titleSmall,
                 ),
               ),
+              if (canDismiss)
+                IconButton(
+                  key: const Key('connection-banner-dismiss'),
+                  onPressed: onDismissConnectedBanner,
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Dismiss connection message',
+                  visualDensity: VisualDensity.compact,
+                ),
             ],
           ),
           const SizedBox(height: 6),
