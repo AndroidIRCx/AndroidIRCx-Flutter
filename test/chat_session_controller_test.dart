@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:androidircx/core/app/app_version.dart';
 import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
@@ -3441,7 +3442,7 @@ void main() {
 
     expect(
       transport.sentLines,
-      contains('NOTICE alice :\u0001VERSION AndroidIRCx Flutter 1.0.0\u0001'),
+      contains('NOTICE alice :\u0001VERSION $ctcpVersionReply\u0001'),
     );
     controller.selectTab(
       controller.tabs

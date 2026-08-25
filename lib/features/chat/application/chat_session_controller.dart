@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:androidircx/core/app/app_version.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/dcc_session.dart';
@@ -165,7 +166,6 @@ class IrcUserInfo {
 
 class ChatSessionController extends ChangeNotifier {
   static const _historyPageSize = 200;
-  static const _ctcpVersionReply = 'AndroidIRCx Flutter 1.0.0';
   static const _ctcpClientInfoReply =
       'ACTION CLIENTINFO DCC FINGER PING SOURCE TIME USERINFO VERSION';
   static const _ctcpUserInfoReply = 'AndroidIRCx Flutter user';
@@ -5833,7 +5833,7 @@ class ChatSessionController extends ChangeNotifier {
         await _ircService.sendCtcpReply(
           target: from,
           command: 'VERSION',
-          args: _ctcpVersionReply,
+          args: ctcpVersionReply,
         );
       case 'TIME':
         await _ircService.sendCtcpReply(
