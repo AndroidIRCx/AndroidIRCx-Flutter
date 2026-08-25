@@ -17,8 +17,8 @@ Thanks for your interest in contributing to AndroidIRCX.
 
 ## Code Style
 
-- Use TypeScript for new code.
-- Prefer small, focused services and components.
+- Use Dart and Flutter for new code.
+- Prefer small, focused services, controllers, repositories, and widgets.
 - Keep changes scoped and avoid unrelated refactors.
 
 ## Reporting Bugs

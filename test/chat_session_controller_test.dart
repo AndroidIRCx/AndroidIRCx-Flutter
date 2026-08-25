@@ -382,6 +382,36 @@ void main() {
     });
   });
 
+  test('joining the same channel with different case reuses one tab', () async {
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.example.test',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+    );
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(),
+    );
+
+    await controller.joinChannel(
+      const JoinChannelRequest(channel: '#AndroidIRCX'),
+    );
+    await controller.joinChannel(
+      const JoinChannelRequest(channel: '#androidircx'),
+    );
+
+    final channelTabs = controller.tabs
+        .where((tab) => tab.type == ChatTabType.channel)
+        .toList(growable: false);
+    expect(channelTabs, hasLength(1));
+    expect(channelTabs.single.name, '#AndroidIRCX');
+    expect(controller.activeTabId, channelTabs.single.id);
+
+    controller.dispose();
+  });
+
   test(
     'app lifecycle pause flushes message history without reconnecting',
     () async {
@@ -2747,8 +2777,9 @@ void main() {
     transport.emit(':b!u@h PRIVMSG #two :hi');
     await Future<void>.delayed(Duration.zero);
 
-    final serverTab =
-        controller.tabs.firstWhere((tab) => tab.type == ChatTabType.server);
+    final serverTab = controller.tabs.firstWhere(
+      (tab) => tab.type == ChatTabType.server,
+    );
     controller.selectTab(serverTab.id);
     final startId = controller.activeTabId;
 
@@ -2779,8 +2810,9 @@ void main() {
     transport.emit(':server 001 AndroidIRCX :Welcome');
     await Future<void>.delayed(Duration.zero);
     await controller.measureLag();
-    final pingLine =
-        transport.sentLines.lastWhere((line) => line.startsWith('PING :LAG'));
+    final pingLine = transport.sentLines.lastWhere(
+      (line) => line.startsWith('PING :LAG'),
+    );
     final token = pingLine.substring('PING :'.length);
     transport.emit(':server PONG server :$token');
     await Future<void>.delayed(Duration.zero);
@@ -2844,10 +2876,13 @@ void main() {
     transport.emit(':server 323 AndroidIRCX :End of /LIST');
     await Future<void>.delayed(Duration.zero);
 
-    expect(controller.channelListing.map((entry) => entry.name),
-        containsAll(<String>['#dbase', '#flutter']));
-    final dbase =
-        controller.channelListing.firstWhere((entry) => entry.name == '#dbase');
+    expect(
+      controller.channelListing.map((entry) => entry.name),
+      containsAll(<String>['#dbase', '#flutter']),
+    );
+    final dbase = controller.channelListing.firstWhere(
+      (entry) => entry.name == '#dbase',
+    );
     expect(dbase.userCount, 42);
     expect(dbase.topic, 'Main channel');
     expect(controller.channelListInProgress, isFalse);
@@ -2929,10 +2964,7 @@ void main() {
       isEmpty,
     );
     // The message is still delivered to the query tab, just not notified.
-    expect(
-      controller.tabs.any((tab) => tab.name == 'alice'),
-      isTrue,
-    );
+    expect(controller.tabs.any((tab) => tab.name == 'alice'), isTrue);
 
     await sub.cancel();
     controller.dispose();
@@ -3444,9 +3476,7 @@ void main() {
     await controller.start();
 
     Future<void> emitCtcp(String body) async {
-      transport.emit(
-        ':alice!user@example PRIVMSG AndroidIRCX :$body',
-      );
+      transport.emit(':alice!user@example PRIVMSG AndroidIRCX :$body');
       await Future<void>.delayed(Duration.zero);
       await Future<void>.delayed(Duration.zero);
     }
@@ -3460,10 +3490,7 @@ void main() {
 
     // Every CTCP reply must go out as a NOTICE (never PRIVMSG) so it cannot
     // trigger a reply loop, and PING must echo the requester's token back.
-    expect(
-      transport.sentLines,
-      contains('NOTICE alice :PING 999'),
-    );
+    expect(transport.sentLines, contains('NOTICE alice :PING 999'));
     expect(
       transport.sentLines,
       contains(
@@ -3488,8 +3515,7 @@ void main() {
     );
     expect(
       transport.sentLines.any(
-        (line) => line.startsWith('NOTICE alice :TIME ') &&
-            line.endsWith(''),
+        (line) => line.startsWith('NOTICE alice :TIME ') && line.endsWith(''),
       ),
       isTrue,
     );
@@ -3521,7 +3547,9 @@ void main() {
     await controller.handleComposerSubmit('/echo hello world');
 
     expect(
-      controller.activeMessages.any((message) => message.content == 'hello world'),
+      controller.activeMessages.any(
+        (message) => message.content == 'hello world',
+      ),
       isTrue,
     );
     // /echo must never hit the wire.
@@ -3589,14 +3617,8 @@ void main() {
 
     expect(transport.sentLines, contains('PRIVMSG #room :hello all'));
     expect(transport.sentLines, contains('PRIVMSG #other :hello all'));
-    expect(
-      transport.sentLines,
-      contains('PRIVMSG #room :ACTION waves'),
-    );
-    expect(
-      transport.sentLines,
-      contains('PRIVMSG #other :ACTION waves'),
-    );
+    expect(transport.sentLines, contains('PRIVMSG #room :ACTION waves'));
+    expect(transport.sentLines, contains('PRIVMSG #other :ACTION waves'));
 
     controller.dispose();
   });
@@ -3628,8 +3650,9 @@ void main() {
 
     final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
     controller.selectTab(roomTab.id);
-    final contents =
-        controller.activeMessages.map((message) => message.content).toList();
+    final contents = controller.activeMessages
+        .map((message) => message.content)
+        .toList();
     expect(contents, contains('before'));
     expect(contents, isNot(contains('after')));
     expect(contents, contains('hi'));
@@ -3671,8 +3694,9 @@ void main() {
 
     final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
     controller.selectTab(roomTab.id);
-    final contents =
-        controller.activeMessages.map((message) => message.content).toList();
+    final contents = controller.activeMessages
+        .map((message) => message.content)
+        .toList();
     expect(contents, isNot(contains('spam')));
     expect(contents, contains('welcome'));
 
@@ -3731,8 +3755,9 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     await controller.handleComposerSubmit('/clones #room');
 
-    final contents =
-        controller.activeMessages.map((message) => message.content).join('\n');
+    final contents = controller.activeMessages
+        .map((message) => message.content)
+        .join('\n');
     expect(contents, contains('Clones detected in #room'));
     expect(contents, contains('shared.example'));
     expect(contents.contains('bob') && contents.contains('carol'), isTrue);
@@ -3768,54 +3793,69 @@ void main() {
     controller.dispose();
   });
 
-  test('performs channel user actions through existing command paths', () async {
-    final transport = _FakeTransport();
-    final service = IrcService(transportConnector: (_) async => transport);
-    final controller = ChatSessionController(
-      network: const NetworkConfig(
-        id: 'dbase',
-        name: 'DBase',
-        host: 'irc.example.test',
-        port: 6697,
-        nickname: 'AndroidIRCX',
-        altNickname: 'AndroidIRCX_',
-      ),
-      ircService: service,
-    );
+  test(
+    'performs channel user actions through existing command paths',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
 
-    await controller.start();
-    transport.emit(':alice!user@example PRIVMSG #room :hi');
-    await Future<void>.delayed(Duration.zero);
-    final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
-    controller.selectTab(roomTab.id);
+      await controller.start();
+      transport.emit(':alice!user@example PRIVMSG #room :hi');
+      await Future<void>.delayed(Duration.zero);
+      final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
+      controller.selectTab(roomTab.id);
 
-    await controller.performChannelUserAction('alice', ChannelUserAction.op);
-    await controller.performChannelUserAction('alice', ChannelUserAction.voice);
-    await controller.performChannelUserAction('@alice', ChannelUserAction.kick);
-    await controller.performChannelUserAction('alice', ChannelUserAction.ban);
-    await controller.performChannelUserAction('alice', ChannelUserAction.whois);
-    await controller.performChannelUserAction('alice', ChannelUserAction.query);
+      await controller.performChannelUserAction('alice', ChannelUserAction.op);
+      await controller.performChannelUserAction(
+        'alice',
+        ChannelUserAction.voice,
+      );
+      await controller.performChannelUserAction(
+        '@alice',
+        ChannelUserAction.kick,
+      );
+      await controller.performChannelUserAction('alice', ChannelUserAction.ban);
+      await controller.performChannelUserAction(
+        'alice',
+        ChannelUserAction.whois,
+      );
+      await controller.performChannelUserAction(
+        'alice',
+        ChannelUserAction.query,
+      );
 
-    expect(transport.sentLines, contains('MODE #room +o alice'));
-    expect(transport.sentLines, contains('MODE #room +v alice'));
-    expect(
-      transport.sentLines.any((line) => line.startsWith('KICK #room alice')),
-      isTrue,
-    );
-    expect(transport.sentLines, contains('MODE #room +b alice'));
-    expect(
-      transport.sentLines.any((line) => line.startsWith('WHOIS alice')),
-      isTrue,
-    );
-    expect(
-      controller.tabs.any(
-        (tab) => tab.type.name == 'query' && tab.name == 'alice',
-      ),
-      isTrue,
-    );
+      expect(transport.sentLines, contains('MODE #room +o alice'));
+      expect(transport.sentLines, contains('MODE #room +v alice'));
+      expect(
+        transport.sentLines.any((line) => line.startsWith('KICK #room alice')),
+        isTrue,
+      );
+      expect(transport.sentLines, contains('MODE #room +b alice'));
+      expect(
+        transport.sentLines.any((line) => line.startsWith('WHOIS alice')),
+        isTrue,
+      );
+      expect(
+        controller.tabs.any(
+          (tab) => tab.type.name == 'query' && tab.name == 'alice',
+        ),
+        isTrue,
+      );
 
-    controller.dispose();
-  });
+      controller.dispose();
+    },
+  );
 
   test('announces bouncer compatibility on registration', () async {
     final transport = _FakeTransport();
@@ -3874,8 +3914,9 @@ void main() {
 
     final roomTab = controller.tabs.firstWhere((tab) => tab.name == '#room');
     controller.selectTab(roomTab.id);
-    final contents =
-        controller.activeMessages.map((message) => message.content).toList();
+    final contents = controller.activeMessages
+        .map((message) => message.content)
+        .toList();
     expect(contents, contains('hello spam word'));
     expect(contents, isNot(contains('another spam here')));
     expect(contents, contains('clean message'));
@@ -3977,10 +4018,7 @@ void main() {
       networkId: 'dbase',
       tabId: roomTab.id,
     );
-    expect(
-      stored.any((message) => message.content == 'hello history'),
-      isTrue,
-    );
+    expect(stored.any((message) => message.content == 'hello history'), isTrue);
 
     controller.dispose();
   });
@@ -4027,8 +4065,9 @@ void main() {
 
     final roomTab = controller2.tabs.firstWhere((tab) => tab.name == '#room');
     controller2.selectTab(roomTab.id);
-    final contents =
-        controller2.activeMessages.map((message) => message.content).toList();
+    final contents = controller2.activeMessages
+        .map((message) => message.content)
+        .toList();
     expect(contents, contains('first message'));
     expect(contents, contains('second message'));
 
