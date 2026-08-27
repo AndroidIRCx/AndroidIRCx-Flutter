@@ -52,7 +52,7 @@ dependencies:
   permission_handler: ^13.0.1
   firebase_core: ^4.13.0
   firebase_analytics: ^12.4.6
-  firebase_crashlytics: ^5.2.7
+  firebase_crashlytics: ^5.3.0
   firebase_app_check: ^0.4.6
   google_mobile_ads: ^9.1.0
   in_app_purchase: ^3.3.0
