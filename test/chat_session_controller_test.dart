@@ -2063,6 +2063,53 @@ void main() {
     controller.dispose();
   });
 
+  test('reactToMessage sends TAGMSG and records the local reaction', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    transport.emit('@msgid=react-2 :alice!user@example PRIVMSG #room :Hi');
+    await Future<void>.delayed(Duration.zero);
+
+    final message = controller
+        .messagesForTab(
+          controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+        )
+        .firstWhere((item) => item.tags['msgid'] == 'react-2');
+
+    final sent = await controller.reactToMessage(message, '👍');
+    expect(sent, isTrue);
+    expect(
+      transport.sentLines,
+      contains('@+draft/react=react-2\\:👍 TAGMSG #room'),
+    );
+    expect(controller.reactionsForMessage(message), containsPair('👍', 1));
+
+    // Messages without a msgid cannot be reacted to.
+    transport.emit(':alice!user@example PRIVMSG #room :No msgid here');
+    await Future<void>.delayed(Duration.zero);
+    final plain = controller
+        .messagesForTab(
+          controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+        )
+        .lastWhere((item) => item.content == 'No msgid here');
+    expect(await controller.reactToMessage(plain, '👍'), isFalse);
+
+    controller.dispose();
+  });
+
   test('handles account away host and setname user-state frames', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);

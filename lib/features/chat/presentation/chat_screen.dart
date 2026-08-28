@@ -442,6 +442,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           resolveReplyTarget: (replyId) => _controller
                               .messageByMsgId(_controller.activeTabId, replyId),
                           resolveReactions: _controller.reactionsForMessage,
+                          onReactToMessage: _controller.reactToMessage,
                           onRedactMessage: _controller.redactMessage,
                           onQuoteMessage: (message) => _insertIntoComposer(
                             '> ${stripIrcFormatting(message.content)}',
@@ -3169,6 +3170,7 @@ class _MessageList extends StatelessWidget {
     required this.showAttachmentPreviews,
     required this.resolveReplyTarget,
     required this.resolveReactions,
+    required this.onReactToMessage,
     required this.onRedactMessage,
     required this.onQuoteMessage,
     required this.onReplyWithNick,
@@ -3196,6 +3198,8 @@ class _MessageList extends StatelessWidget {
   final Future<void> Function()? onLoadOlder;
   final IrcMessage? Function(String replyId) resolveReplyTarget;
   final Map<String, int> Function(IrcMessage message) resolveReactions;
+  final Future<bool> Function(IrcMessage message, String emoji)
+  onReactToMessage;
   final Future<bool> Function(IrcMessage message) onRedactMessage;
   final ValueChanged<IrcMessage> onQuoteMessage;
   final ValueChanged<IrcMessage> onReplyWithNick;
@@ -3393,6 +3397,8 @@ class _MessageList extends StatelessWidget {
   ) async {
     final urls = extractUrls(stripIrcFormatting(message.content));
     final canRedact = (message.tags['msgid'] ?? '').trim().isNotEmpty;
+    final canReact =
+        (message.tags['msgid'] ?? '').trim().isNotEmpty && !message.isOwn;
     await showModalBottomSheet<void>(
       context: context,
       builder: (context) {
@@ -3404,6 +3410,52 @@ class _MessageList extends StatelessWidget {
             child: ListView(
               shrinkWrap: true,
               children: [
+                if (canReact)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Wrap(
+                      spacing: 4,
+                      children: [
+                        for (final emoji in const [
+                          '👍',
+                          '❤️',
+                          '😂',
+                          '😮',
+                          '😢',
+                          '🎉',
+                        ])
+                          IconButton(
+                            key: Key('message-react-$emoji'),
+                            onPressed: () async {
+                              final sent = await onReactToMessage(
+                                message,
+                                emoji,
+                              );
+                              if (!context.mounted) {
+                                return;
+                              }
+                              Navigator.of(context).pop();
+                              if (!sent) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'This message cannot be reacted to.',
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                            icon: Text(
+                              emoji,
+                              style: const TextStyle(fontSize: 22),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ListTile(
                   leading: const Icon(Icons.copy),
                   title: const Text('Copy clean text'),

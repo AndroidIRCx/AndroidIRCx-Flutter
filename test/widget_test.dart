@@ -1474,12 +1474,28 @@ void main() {
     await tester.pump();
     await tester.pump();
 
+    // Reacting from the actions sheet sends a TAGMSG with the combined tag.
     await tester.longPress(find.textContaining('Delete this').first);
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('message-react-👍')));
+    await tester.pumpAndSettle();
+    expect(
+      transport.sentLines,
+      contains('@+draft/react=seed-redact\\:👍 TAGMSG #room'),
+    );
+
+    await tester.longPress(find.textContaining('Delete this').first);
+    await tester.pumpAndSettle();
+
+    // The quick-reaction row sits above the actions and can push this item
+    // below the fold in the sheet's list.
+    await tester.scrollUntilVisible(
+      find.text('Delete message'),
+      120,
+      scrollable: find.byType(Scrollable).last,
+    );
     expect(find.text('Delete message'), findsOneWidget);
 
-    await tester.ensureVisible(find.text('Delete message'));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Delete message'));
     await tester.pump();
 

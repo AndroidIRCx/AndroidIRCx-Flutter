@@ -624,6 +624,32 @@ class ChatSessionController extends ChangeNotifier {
     return summary;
   }
 
+  /// Sends a reaction to [message] over TAGMSG and records it locally so the
+  /// chip shows immediately. Returns false when the message has no msgid or
+  /// its tab cannot receive reactions.
+  Future<bool> reactToMessage(IrcMessage message, String emoji) async {
+    final msgid = (message.tags['msgid'] ?? '').trim();
+    final normalizedEmoji = emoji.trim();
+    if (msgid.isEmpty || normalizedEmoji.isEmpty) {
+      return false;
+    }
+    final tab = _findTab(message.tabId);
+    if (tab == null ||
+        (tab.type != ChatTabType.channel && tab.type != ChatTabType.query)) {
+      return false;
+    }
+    await _ircService.sendReaction(
+      target: tab.name,
+      msgid: msgid,
+      emoji: normalizedEmoji,
+    );
+    // Record locally; the echoed TAGMSG re-recording the same nick+emoji is
+    // idempotent because reactions are per-emoji nick sets.
+    _recordReaction(msgid, normalizedEmoji, currentNick);
+    notifyListeners();
+    return true;
+  }
+
   String userDetailsForNick(String nick) {
     final info = userInfoForNick(nick);
     if (info.nick.trim().isEmpty) {
