@@ -7,10 +7,9 @@ class ReviewPromptService {
   ReviewPromptService({
     Future<bool> Function()? isAvailable,
     Future<void> Function()? requestReview,
-  })  : _isAvailable =
-            isAvailable ?? (() => InAppReview.instance.isAvailable()),
-        _requestReview =
-            requestReview ?? (() => InAppReview.instance.requestReview());
+  }) : _isAvailable = isAvailable ?? (() => InAppReview.instance.isAvailable()),
+       _requestReview =
+           requestReview ?? (() => InAppReview.instance.requestReview());
 
   static const String _launchKey = 'androidircx.launchCount';
   static const String _promptedKey = 'androidircx.reviewPrompted';

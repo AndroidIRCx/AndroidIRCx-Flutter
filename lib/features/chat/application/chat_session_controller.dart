@@ -487,6 +487,9 @@ class ChatSessionController extends ChangeNotifier {
   int get activityCount => _tabs.where((tab) => tab.hasActivity).length;
   bool get hasActivity => activityCount > 0;
   String? get activeChannelTopic => _channelTopics[activeTabId];
+
+  /// Topic for any tab (used by the per-channel settings screen).
+  String? topicForTab(String tabId) => _channelTopics[tabId];
   String? get activeChannelModes => _channelModes[activeTabId];
   DateTime? get activeReadMarker => _readMarkers[activeTabId];
   List<String> get activeTypingUsers => List<String>.unmodifiable(
@@ -1234,6 +1237,24 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     final normalizedReply = (replyTo ?? '').trim();
+    // Queue only when clearly offline; while connecting/registering the
+    // transport is live and sends keep their previous behavior.
+    final isOffline = switch (_connection.phase) {
+      ConnectionPhase.idle ||
+      ConnectionPhase.disconnected ||
+      ConnectionPhase.error ||
+      ConnectionPhase.reconnecting => true,
+      _ => false,
+    };
+    if (isOffline) {
+      _queueOfflineMessage(
+        tabId: activeTab.id,
+        target: activeTab.name,
+        text: text,
+        replyTo: normalizedReply.isEmpty ? null : normalizedReply,
+      );
+      return;
+    }
     await _ircService.sendPrivmsg(
       target: activeTab.name,
       text: text,
@@ -2008,6 +2029,8 @@ class ChatSessionController extends ChangeNotifier {
 
   Future<void> reloadSettings() async {
     _settings = await _settingsRepository.loadSettings();
+    // Pick up alias edits made in Settings → Command aliases.
+    await _commandService.load();
     _applySettingsToServices();
     notifyListeners();
   }
@@ -2125,6 +2148,80 @@ class ChatSessionController extends ChangeNotifier {
   Future<void> _runPostRegistrationActions() async {
     await _sendServiceAuthFallbackIfNeeded();
     await _autoJoinConfiguredChannels();
+    await _flushOfflineOutbox();
+  }
+
+  /// Messages typed while disconnected, sent in order after the next
+  /// successful registration (after auto-join, so channel sends follow the
+  /// JOIN on the wire).
+  final List<({String tabId, String target, String text, String? replyTo})>
+  _offlineOutbox = [];
+  static const int _maxOfflineOutbox = 50;
+
+  int get queuedOfflineMessages => _offlineOutbox.length;
+
+  void _queueOfflineMessage({
+    required String tabId,
+    required String target,
+    required String text,
+    String? replyTo,
+  }) {
+    if (_offlineOutbox.length >= _maxOfflineOutbox) {
+      _appendMessage(
+        tabId: tabId,
+        sender: 'error',
+        content: 'Offline queue is full; message dropped.',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+    _offlineOutbox.add((
+      tabId: tabId,
+      target: target,
+      text: text,
+      replyTo: replyTo,
+    ));
+    _appendMessage(
+      tabId: tabId,
+      sender: '*',
+      content: 'Not connected — message queued and will be sent on reconnect.',
+      kind: IrcMessageKind.system,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _flushOfflineOutbox() async {
+    if (_offlineOutbox.isEmpty) {
+      return;
+    }
+    final pending = List.of(_offlineOutbox);
+    _offlineOutbox.clear();
+    for (final item in pending) {
+      if (_connection.phase != ConnectionPhase.connected) {
+        // Connection dropped mid-flush: requeue the rest for the next cycle.
+        _offlineOutbox.add(item);
+        continue;
+      }
+      await _ircService.sendPrivmsg(
+        target: item.target,
+        text: item.text,
+        replyTo: item.replyTo,
+      );
+      if (!_ircService.enabledCapabilities.contains('echo-message')) {
+        _appendMessage(
+          tabId: item.tabId,
+          sender: _ircService.currentNick ?? network.nickname,
+          content: item.text,
+          tags: {
+            if ((item.replyTo ?? '').isNotEmpty) 'draft/reply': item.replyTo!,
+          },
+          isOwn: true,
+        );
+      }
+    }
+    unawaited(_persistState());
+    notifyListeners();
   }
 
   Future<void> _sendServiceAuthFallbackIfNeeded() async {

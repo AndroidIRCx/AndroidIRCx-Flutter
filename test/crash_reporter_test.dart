@@ -143,20 +143,24 @@ void main() {
       expect(await reporter.loadReports(), isEmpty);
     });
 
-    test('builds a mailto uri addressed to the contact with subject/body',
-        () async {
-      final reporter = build();
-      final report = await reporter.record(
-        Exception('kaboom'),
-        null,
-        source: 'test',
-      );
-      final uri = reporter.buildMailtoUri(report!);
-      expect(uri.scheme, 'mailto');
-      expect(uri.path, 'contact@androidircx.com');
-      expect(uri.query, contains('subject=AndroidIRCX%20Crash%20Report'));
-      expect(Uri.decodeComponent(uri.queryParameters['body']!),
-          contains('kaboom'));
-    });
+    test(
+      'builds a mailto uri addressed to the contact with subject/body',
+      () async {
+        final reporter = build();
+        final report = await reporter.record(
+          Exception('kaboom'),
+          null,
+          source: 'test',
+        );
+        final uri = reporter.buildMailtoUri(report!);
+        expect(uri.scheme, 'mailto');
+        expect(uri.path, 'contact@androidircx.com');
+        expect(uri.query, contains('subject=AndroidIRCX%20Crash%20Report'));
+        expect(
+          Uri.decodeComponent(uri.queryParameters['body']!),
+          contains('kaboom'),
+        );
+      },
+    );
   });
 }

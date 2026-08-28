@@ -64,9 +64,9 @@ class _CrashReportsScreenState extends State<CrashReportsScreen> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Crash reports cleared.')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Crash reports cleared.')));
   }
 
   @override

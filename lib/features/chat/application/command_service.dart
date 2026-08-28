@@ -84,6 +84,7 @@ class CommandHistoryEntry {
 
 class CommandService {
   static const _historyKey = 'androidircx.commandHistory';
+  static const _customAliasesKey = 'androidircx.commandAliases';
   static const _maxHistory = 50;
 
   static const Map<String, String> serviceAliases = {
@@ -792,23 +793,32 @@ class CommandService {
     for (final command in _defaultCommands) command.name: command,
   };
 
-  final Map<String, CommandAlias> _aliases = {
-    'j': const CommandAlias(alias: 'j', command: '/join'),
-    'p': const CommandAlias(alias: 'p', command: '/part'),
-    'q': const CommandAlias(alias: 'q', command: '/quit'),
-    'w': const CommandAlias(alias: 'w', command: '/whois'),
-    'n': const CommandAlias(alias: 'n', command: '/nick'),
-    'm': const CommandAlias(alias: 'm', command: '/msg'),
-    'a': const CommandAlias(alias: 'a', command: '/me'),
-    'k': const CommandAlias(alias: 'k', command: '/kick'),
-    'kb': const CommandAlias(alias: 'kb', command: '/kickban'),
-    'ns': const CommandAlias(alias: 'ns', command: '/nickserv'),
-    'cs': const CommandAlias(alias: 'cs', command: '/chanserv'),
-    'hs': const CommandAlias(alias: 'hs', command: '/hostserv'),
-    'os': const CommandAlias(alias: 'os', command: '/operserv'),
-    'ms': const CommandAlias(alias: 'ms', command: '/memoserv'),
-    'bs': const CommandAlias(alias: 'bs', command: '/botserv'),
+  /// Built-in shortcuts; user-defined aliases can shadow but not delete them.
+  static const Map<String, String> _defaultAliasCommands = {
+    'j': '/join',
+    'p': '/part',
+    'q': '/quit',
+    'w': '/whois',
+    'n': '/nick',
+    'm': '/msg',
+    'a': '/me',
+    'k': '/kick',
+    'kb': '/kickban',
+    'ns': '/nickserv',
+    'cs': '/chanserv',
+    'hs': '/hostserv',
+    'os': '/operserv',
+    'ms': '/memoserv',
+    'bs': '/botserv',
   };
+
+  final Map<String, CommandAlias> _aliases = {
+    for (final entry in _defaultAliasCommands.entries)
+      entry.key: CommandAlias(alias: entry.key, command: entry.value),
+  };
+
+  /// Alias names the user defined (persisted separately from the defaults).
+  final Map<String, String> _customAliases = {};
 
   List<CommandHistoryEntry> _history = const [];
 
@@ -927,6 +937,7 @@ class CommandService {
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
+    _loadCustomAliases(prefs.getString(_customAliasesKey));
     final raw = prefs.getString(_historyKey);
     if (raw == null || raw.isEmpty) {
       _history = const [];
@@ -939,6 +950,96 @@ class CommandService {
           (item) => CommandHistoryEntry.fromJson(item as Map<String, Object?>),
         )
         .toList(growable: false);
+  }
+
+  void _loadCustomAliases(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return;
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        return;
+      }
+      decoded.forEach((key, value) {
+        if (key is! String || value is! String) {
+          return;
+        }
+        final alias = key.trim().toLowerCase();
+        final command = value.trim();
+        if (alias.isEmpty || !command.startsWith('/')) {
+          return;
+        }
+        _customAliases[alias] = command;
+        _aliases[alias] = CommandAlias(alias: alias, command: command);
+      });
+    } catch (_) {
+      // Corrupt alias storage: keep the defaults.
+    }
+  }
+
+  /// All active aliases (built-in and custom), sorted by name.
+  List<CommandAlias> get aliases {
+    final list = _aliases.values.toList()
+      ..sort((a, b) => a.alias.compareTo(b.alias));
+    return List<CommandAlias>.unmodifiable(list);
+  }
+
+  /// Whether [alias] currently comes from user configuration.
+  bool isCustomAlias(String alias) =>
+      _customAliases.containsKey(alias.trim().toLowerCase());
+
+  /// Whether [alias] is one of the built-in defaults.
+  bool isBuiltInAlias(String alias) =>
+      _defaultAliasCommands.containsKey(alias.trim().toLowerCase());
+
+  /// Adds or updates a user alias. Returns an error message on invalid input,
+  /// null on success. The alias may shadow a built-in shortcut but not an
+  /// actual command name.
+  Future<String?> setAlias(String alias, String command) async {
+    final normalizedAlias = alias.trim().toLowerCase().replaceFirst('/', '');
+    var normalizedCommand = command.trim();
+    if (normalizedAlias.isEmpty ||
+        normalizedAlias.contains(RegExp(r'\s')) ||
+        normalizedAlias.contains('/')) {
+      return 'Alias must be a single word without slashes.';
+    }
+    if (isKnownCommand(normalizedAlias)) {
+      return '"/$normalizedAlias" is already a command.';
+    }
+    if (!normalizedCommand.startsWith('/')) {
+      normalizedCommand = '/$normalizedCommand';
+    }
+    if (normalizedCommand.length < 2) {
+      return 'Alias target must be a command, e.g. /join #channel.';
+    }
+    _customAliases[normalizedAlias] = normalizedCommand;
+    _aliases[normalizedAlias] = CommandAlias(
+      alias: normalizedAlias,
+      command: normalizedCommand,
+    );
+    await _persistCustomAliases();
+    return null;
+  }
+
+  /// Removes a user alias; built-in defaults reappear when unshadowed.
+  Future<void> removeAlias(String alias) async {
+    final normalized = alias.trim().toLowerCase();
+    if (_customAliases.remove(normalized) == null) {
+      return;
+    }
+    final builtIn = _defaultAliasCommands[normalized];
+    if (builtIn != null) {
+      _aliases[normalized] = CommandAlias(alias: normalized, command: builtIn);
+    } else {
+      _aliases.remove(normalized);
+    }
+    await _persistCustomAliases();
+  }
+
+  Future<void> _persistCustomAliases() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_customAliasesKey, jsonEncode(_customAliases));
   }
 
   Future<void> addToHistory(String command) async {

@@ -49,19 +49,21 @@ void main() {
       expect(base64Decode(key!).length, 32);
     });
 
-    test('returns null and provisions nothing when authentication fails',
-        () async {
-      final storage = InMemorySecretStorage();
-      final manager = HistoryEncryptionKeyManager(
-        storage: storage,
-        authenticator: _FakeAuthenticator(false),
-      );
+    test(
+      'returns null and provisions nothing when authentication fails',
+      () async {
+        final storage = InMemorySecretStorage();
+        final manager = HistoryEncryptionKeyManager(
+          storage: storage,
+          authenticator: _FakeAuthenticator(false),
+        );
 
-      final key = await manager.unlockKey();
-      expect(key, isNull);
-      expect(await manager.hasKey(), isFalse);
-      expect(await storage.getAllSecretKeys(), isEmpty);
-    });
+        final key = await manager.unlockKey();
+        expect(key, isNull);
+        expect(await manager.hasKey(), isFalse);
+        expect(await storage.getAllSecretKeys(), isEmpty);
+      },
+    );
 
     test('does not release an existing key without authentication', () async {
       final storage = InMemorySecretStorage();
@@ -80,18 +82,20 @@ void main() {
       expect(await manager.hasKey(), isTrue);
     });
 
-    test('resetKey discards the key so history can no longer be opened',
-        () async {
-      final manager = HistoryEncryptionKeyManager(
-        storage: InMemorySecretStorage(),
-        authenticator: _FakeAuthenticator(true),
-      );
-      await manager.unlockKey();
-      expect(await manager.hasKey(), isTrue);
+    test(
+      'resetKey discards the key so history can no longer be opened',
+      () async {
+        final manager = HistoryEncryptionKeyManager(
+          storage: InMemorySecretStorage(),
+          authenticator: _FakeAuthenticator(true),
+        );
+        await manager.unlockKey();
+        expect(await manager.hasKey(), isTrue);
 
-      await manager.resetKey();
-      expect(await manager.hasKey(), isFalse);
-    });
+        await manager.resetKey();
+        expect(await manager.hasKey(), isFalse);
+      },
+    );
 
     test('passes the unlock reason through to the authenticator', () async {
       final auth = _FakeAuthenticator(true);

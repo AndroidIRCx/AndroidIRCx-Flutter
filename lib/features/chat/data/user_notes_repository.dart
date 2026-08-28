@@ -24,9 +24,7 @@ class UserNotesRepository {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is Map) {
-        return decoded.map(
-          (key, value) => MapEntry('$key', '${value ?? ''}'),
-        );
+        return decoded.map((key, value) => MapEntry('$key', '${value ?? ''}'));
       }
     } catch (_) {
       // Corrupt blob: start fresh rather than throw.

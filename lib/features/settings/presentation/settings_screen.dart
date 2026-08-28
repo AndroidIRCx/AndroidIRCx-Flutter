@@ -13,6 +13,8 @@ import 'package:androidircx/features/connections/presentation/server_directory_p
 import 'package:androidircx/features/monetization/presentation/purchase_screen.dart';
 import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
 import 'package:androidircx/features/settings/presentation/backup_screen.dart';
+import 'package:androidircx/features/settings/presentation/command_aliases_screen.dart';
+import 'package:androidircx/features/settings/presentation/kick_ban_reasons_screen.dart';
 import 'package:androidircx/features/settings/presentation/crash_reports_screen.dart';
 import 'package:androidircx/features/settings/presentation/message_format_screen.dart';
 import 'package:androidircx/features/settings/presentation/sound_settings_screen.dart';
@@ -680,6 +682,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _settings.copyWith(showSendButton: value),
                         ),
                       ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-command-aliases'),
+                        leading: const Icon(Icons.bolt_outlined),
+                        title: const Text('Command aliases'),
+                        subtitle: const Text(
+                          'Shortcuts like /j for /join; add your own.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const CommandAliasesScreen(),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -821,6 +837,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         value: _settings.autoRejoinOnKick,
                         onChanged: (value) => _saveSettings(
                           _settings.copyWith(autoRejoinOnKick: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-kick-ban-reasons'),
+                        leading: const Icon(Icons.gavel_outlined),
+                        title: const Text('Kick/ban reasons'),
+                        subtitle: const Text(
+                          'Preset reasons offered by the moderation dialog.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const KickBanReasonsScreen(),
+                          ),
                         ),
                       ),
                     ],

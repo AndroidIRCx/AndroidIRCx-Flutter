@@ -35,9 +35,9 @@ class HistoryEncryptionKeyManager {
     required SecretStorage storage,
     required HistoryUnlockAuthenticator authenticator,
     List<int> Function()? keyBytesGenerator,
-  })  : _storage = storage,
-        _authenticator = authenticator,
-        _keyBytesGenerator = keyBytesGenerator ?? _defaultKeyBytes;
+  }) : _storage = storage,
+       _authenticator = authenticator,
+       _keyBytesGenerator = keyBytesGenerator ?? _defaultKeyBytes;
 
   static const String storageKey = 'androidircx.history.databaseKey';
   static const int keyLengthBytes = 32; // 256-bit

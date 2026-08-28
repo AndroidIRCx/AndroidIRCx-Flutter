@@ -114,8 +114,9 @@ void main() {
     );
     await tester.pump();
     transports.single.emit(':server 001 AndroidIRCX :Welcome');
-    transports.single
-        .emit(':server NOTICE AndroidIRCX :server message on the tab');
+    transports.single.emit(
+      ':server NOTICE AndroidIRCX :server message on the tab',
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 

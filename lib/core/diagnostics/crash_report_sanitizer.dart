@@ -35,14 +35,8 @@ class CrashReportSanitizer {
     }
     var out = input;
     out = out.replaceAll(_pemBlock, redaction);
-    out = out.replaceAllMapped(
-      _authCommand,
-      (m) => '${m.group(1)} $redaction',
-    );
-    out = out.replaceAllMapped(
-      _keyValue,
-      (m) => '${m.group(1)}=$redaction',
-    );
+    out = out.replaceAllMapped(_authCommand, (m) => '${m.group(1)} $redaction');
+    out = out.replaceAllMapped(_keyValue, (m) => '${m.group(1)}=$redaction');
     out = out.replaceAll(_longToken, redaction);
     return out;
   }

@@ -5,7 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('decodes utf8 mirc preset base64', () {
-    final decoded = decodeMircPresetBase64(base64.encode(utf8.encode('line1\nline2')));
+    final decoded = decodeMircPresetBase64(
+      base64.encode(utf8.encode('line1\nline2')),
+    );
     expect(decoded, 'line1\nline2');
   });
 

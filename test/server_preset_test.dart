@@ -29,8 +29,9 @@ void main() {
     });
 
     test('preferredServer prefers a TLS server', () {
-      final libera = parseServerPresets(_sample)
-          .firstWhere((p) => p.networkName == 'Libera');
+      final libera = parseServerPresets(
+        _sample,
+      ).firstWhere((p) => p.networkName == 'Libera');
       expect(libera.preferredServer!.hostname, 'irc.libera.chat');
       expect(libera.preferredServer!.useSsl, isTrue);
       expect(libera.preferredServer!.port, 6697);
@@ -44,8 +45,9 @@ void main() {
 
   group('networkConfigFromPreset', () {
     test('maps the preferred server into a NetworkConfig', () {
-      final libera = parseServerPresets(_sample)
-          .firstWhere((p) => p.networkName == 'Libera');
+      final libera = parseServerPresets(
+        _sample,
+      ).firstWhere((p) => p.networkName == 'Libera');
       final config = networkConfigFromPreset(libera, id: 'net-1');
       expect(config.name, 'Libera');
       expect(config.host, 'irc.libera.chat');
@@ -55,10 +57,15 @@ void main() {
     });
 
     test('maps a specific chosen server', () {
-      final libera = parseServerPresets(_sample)
-          .firstWhere((p) => p.networkName == 'Libera');
+      final libera = parseServerPresets(
+        _sample,
+      ).firstWhere((p) => p.networkName == 'Libera');
       final plain = libera.servers.firstWhere((s) => !s.useSsl);
-      final config = networkConfigFromPreset(libera, id: 'net-2', server: plain);
+      final config = networkConfigFromPreset(
+        libera,
+        id: 'net-2',
+        server: plain,
+      );
       expect(config.host, 'plain.libera.chat');
       expect(config.port, 6667);
       expect(config.useTls, isFalse);
@@ -85,9 +92,7 @@ void main() {
     });
 
     test('falls back to DBase on an empty directory', () async {
-      final service = ServerPresetService(
-        httpGet: (_) async => '{"data": []}',
-      );
+      final service = ServerPresetService(httpGet: (_) async => '{"data": []}');
       final presets = await service.fetchPresetsOrFallback();
       expect(presets.single.networkName, 'DBase');
     });

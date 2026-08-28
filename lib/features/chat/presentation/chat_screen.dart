@@ -13,10 +13,12 @@ import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/data/channel_notes_repository.dart';
+import 'package:androidircx/features/chat/data/kick_ban_reasons_repository.dart';
 import 'package:androidircx/features/chat/data/user_list_entry.dart';
 import 'package:androidircx/features/chat/data/user_notes_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
+import 'package:androidircx/features/chat/presentation/channel_settings_screen.dart';
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
 import 'package:androidircx/features/chat/presentation/media_player_screen.dart';
 import 'package:androidircx/features/chat/presentation/message_line_format.dart';
@@ -1009,7 +1011,16 @@ class _ChatScreenState extends State<ChatScreen> {
       case ConnectionPhase.authenticating:
         return snapshot.message ?? 'Authenticating';
       case ConnectionPhase.connected:
-        return 'Connected';
+        final lag = _controller.lag;
+        if (lag == null) {
+          return 'Connected';
+        }
+        final quality = lag.inMilliseconds < 150
+            ? 'good'
+            : lag.inMilliseconds < 500
+            ? 'ok'
+            : 'slow';
+        return 'Connected • ${lag.inMilliseconds} ms ($quality)';
       case ConnectionPhase.reconnecting:
         return snapshot.message ?? 'Reconnecting';
       case ConnectionPhase.disconnecting:
@@ -1232,6 +1243,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   unawaited(_showTabLog(tab));
                 }),
                 if (tab.type == ChatTabType.channel) ...[
+                  action('Channel settings', Icons.settings_outlined, () {
+                    unawaited(_openChannelSettings(tab));
+                  }),
                   action('Channel note', Icons.sticky_note_2_outlined, () {
                     unawaited(_showChannelNoteDialog(tab));
                   }),
@@ -1261,6 +1275,19 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       },
+    );
+  }
+
+  Future<void> _openChannelSettings(ChatTab tab) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChannelSettingsScreen(
+          controller: _controller,
+          tab: tab,
+          networkController: widget.networkController,
+          notesRepository: _channelNotesRepository,
+        ),
+      ),
     );
   }
 
@@ -1478,12 +1505,17 @@ class _ChatScreenState extends State<ChatScreen> {
     String nick,
     ChannelModerationAction action,
   ) async {
+    final presetReasons = await KickBanReasonsRepository().loadReasons();
+    if (!mounted) {
+      return;
+    }
     final request = await showDialog<_KickBanRequest>(
       context: context,
       builder: (context) => _KickBanDialog(
         nick: nick,
         action: action,
         maskPreview: (type) => _controller.banMaskPreviewForNick(nick, type),
+        presetReasons: presetReasons,
       ),
     );
     if (request == null) {
@@ -2553,24 +2585,22 @@ class _KickBanDialog extends StatefulWidget {
     required this.nick,
     required this.action,
     required this.maskPreview,
+    this.presetReasons = KickBanReasonsRepository.defaultReasons,
   });
 
   final String nick;
   final ChannelModerationAction action;
   final String Function(int type) maskPreview;
+  final List<String> presetReasons;
 
   @override
   State<_KickBanDialog> createState() => _KickBanDialogState();
 }
 
 class _KickBanDialogState extends State<_KickBanDialog> {
-  static const List<String> _presetReasons = <String>[
+  late final List<String> _presetReasons = <String>[
     '',
-    'Spam',
-    'Flooding',
-    'Abuse',
-    'Off-topic',
-    'Policy violation',
+    ...widget.presetReasons,
   ];
 
   final TextEditingController _reason = TextEditingController();

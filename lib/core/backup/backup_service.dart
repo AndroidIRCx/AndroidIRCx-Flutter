@@ -30,9 +30,9 @@ class BackupService {
     required NetworkRepository networkRepository,
     required SettingsRepository settingsRepository,
     required IdentityProfileRepository profileRepository,
-  })  : _networks = networkRepository,
-        _settings = settingsRepository,
-        _profiles = profileRepository;
+  }) : _networks = networkRepository,
+       _settings = settingsRepository,
+       _profiles = profileRepository;
 
   static const int backupVersion = 1;
 

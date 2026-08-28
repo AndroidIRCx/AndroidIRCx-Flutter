@@ -38,7 +38,10 @@ void main() {
 
     test('exposes the built-in default identity', () {
       expect(IdentityProfile.defaultProfile.nick, 'AndroidIRCX');
-      expect(IdentityProfile.defaultProfile.id, IdentityProfile.defaultProfileId);
+      expect(
+        IdentityProfile.defaultProfile.id,
+        IdentityProfile.defaultProfileId,
+      );
     });
   });
 
@@ -87,27 +90,31 @@ void main() {
       expect(normalized.map((p) => p.id), contains('p1'));
     });
 
-    test('in-memory repo saves, replaces, and deletes custom profiles', () async {
-      final repo = InMemoryIdentityProfileRepository();
-      const profile = IdentityProfile(id: 'p1', name: 'Work', nick: 'alice');
-      await repo.saveProfile(profile);
-      expect((await repo.loadProfiles()).any((p) => p.id == 'p1'), isTrue);
+    test(
+      'in-memory repo saves, replaces, and deletes custom profiles',
+      () async {
+        final repo = InMemoryIdentityProfileRepository();
+        const profile = IdentityProfile(id: 'p1', name: 'Work', nick: 'alice');
+        await repo.saveProfile(profile);
+        expect((await repo.loadProfiles()).any((p) => p.id == 'p1'), isTrue);
 
-      await repo.saveProfile(profile.copyWith(nick: 'alice2'));
-      final loaded = await repo.loadProfiles();
-      expect(loaded.firstWhere((p) => p.id == 'p1').nick, 'alice2');
-      expect(loaded.where((p) => p.id == 'p1'), hasLength(1));
+        await repo.saveProfile(profile.copyWith(nick: 'alice2'));
+        final loaded = await repo.loadProfiles();
+        expect(loaded.firstWhere((p) => p.id == 'p1').nick, 'alice2');
+        expect(loaded.where((p) => p.id == 'p1'), hasLength(1));
 
-      await repo.deleteProfile('p1');
-      expect((await repo.loadProfiles()).any((p) => p.id == 'p1'), isFalse);
-    });
+        await repo.deleteProfile('p1');
+        expect((await repo.loadProfiles()).any((p) => p.id == 'p1'), isFalse);
+      },
+    );
 
     test('the default profile cannot be deleted', () async {
       final repo = InMemoryIdentityProfileRepository();
       await repo.deleteProfile(IdentityProfile.defaultProfileId);
       expect(
-        (await repo.loadProfiles())
-            .any((p) => p.id == IdentityProfile.defaultProfileId),
+        (await repo.loadProfiles()).any(
+          (p) => p.id == IdentityProfile.defaultProfileId,
+        ),
         isTrue,
       );
     });

@@ -27,9 +27,6 @@ void main() {
   });
 
   test('encodes CTCP command', () {
-    expect(
-      encodeCtcp('ping', '123'),
-      '\u0001PING 123\u0001',
-    );
+    expect(encodeCtcp('ping', '123'), '\u0001PING 123\u0001');
   });
 }

@@ -2110,6 +2110,54 @@ void main() {
     controller.dispose();
   });
 
+  test(
+    'queues messages typed while disconnected and flushes on connect',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      // Open a query tab and type while still disconnected.
+      await controller.handleComposerSubmit('/query alice');
+      await controller.handleComposerSubmit('first offline');
+      await controller.handleComposerSubmit('second offline');
+      expect(controller.queuedOfflineMessages, 2);
+      expect(
+        transport.sentLines.where((line) => line.contains('offline')),
+        isEmpty,
+      );
+
+      await controller.start();
+      transport.emit(':server 001 AndroidIRCX :Welcome');
+      // Post-registration actions (including the outbox flush) run at the
+      // end of the MOTD.
+      transport.emit(':server 422 AndroidIRCX :MOTD File is missing');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.queuedOfflineMessages, 0);
+      final sent = transport.sentLines
+          .where((line) => line.startsWith('PRIVMSG alice'))
+          .toList();
+      expect(sent, [
+        'PRIVMSG alice :first offline',
+        'PRIVMSG alice :second offline',
+      ]);
+
+      controller.dispose();
+    },
+  );
+
   test('handles account away host and setname user-state frames', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);

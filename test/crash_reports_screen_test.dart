@@ -62,9 +62,7 @@ void main() {
     final r = reporter();
     await r.record(Exception('x'), null, source: 'test');
 
-    await tester.pumpWidget(
-      MaterialApp(home: CrashReportsScreen(reporter: r)),
-    );
+    await tester.pumpWidget(MaterialApp(home: CrashReportsScreen(reporter: r)));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('crash-reports-clear')));

@@ -139,6 +139,43 @@ class NetworkListController extends ChangeNotifier {
     await load();
   }
 
+  /// Adds or removes [channel] from a network's auto-join list without
+  /// touching any other config (used by the per-channel settings screen).
+  Future<void> setChannelAutoJoin({
+    required String networkId,
+    required String channel,
+    required bool autoJoin,
+  }) async {
+    final networks = await _repository.loadNetworks();
+    NetworkConfig? network;
+    for (final item in networks) {
+      if (item.id == networkId) {
+        network = item;
+        break;
+      }
+    }
+    if (network == null) {
+      return;
+    }
+    final normalized = channel.startsWith('#') ? channel : '#$channel';
+    final channels = [...network.autoJoinChannels];
+    final already = channels.any(
+      (item) => item.toLowerCase() == normalized.toLowerCase(),
+    );
+    if (autoJoin == already) {
+      return;
+    }
+    if (autoJoin) {
+      channels.add(normalized);
+    } else {
+      channels.removeWhere(
+        (item) => item.toLowerCase() == normalized.toLowerCase(),
+      );
+    }
+    await _repository.saveNetwork(network.copyWith(autoJoinChannels: channels));
+    await load();
+  }
+
   String _createId(String seed) {
     final normalized = seed.toLowerCase().replaceAll(
       RegExp(r'[^a-z0-9]+'),

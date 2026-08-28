@@ -76,20 +76,25 @@ class DriftMessageHistoryRepository implements MessageHistoryRepository {
         : message.copyWith(networkId: networkId);
     final dedupeId = _dedupeId(stored);
     if (dedupeId != null) {
-      final existing = await (_db.select(_db.messages)
-            ..where((row) =>
-                row.networkId.equals(networkId) &
-                row.tabId.equals(stored.tabId) &
-                row.msgid.equals(dedupeId))
-            ..limit(1))
-          .get();
+      final existing =
+          await (_db.select(_db.messages)
+                ..where(
+                  (row) =>
+                      row.networkId.equals(networkId) &
+                      row.tabId.equals(stored.tabId) &
+                      row.msgid.equals(dedupeId),
+                )
+                ..limit(1))
+              .get();
       if (existing.isNotEmpty) {
         return;
       }
     }
 
     final payload = await _codec.encrypt(jsonEncode(stored.toJson()));
-    await _db.into(_db.messages).insert(
+    await _db
+        .into(_db.messages)
+        .insert(
           MessagesCompanion.insert(
             networkId: networkId,
             tabId: stored.tabId,
@@ -122,10 +127,12 @@ class DriftMessageHistoryRepository implements MessageHistoryRepository {
     final anchor = (beforeMessageId ?? '').trim();
     int? beforeRowId;
     if (anchor.isNotEmpty) {
-      final rows = await (_db.select(_db.messages)
-            ..where((row) =>
-                row.networkId.equals(networkId) & row.tabId.equals(tabId)))
-          .get();
+      final rows =
+          await (_db.select(_db.messages)..where(
+                (row) =>
+                    row.networkId.equals(networkId) & row.tabId.equals(tabId),
+              ))
+              .get();
       for (final row in rows) {
         final message = await _fromRow(row);
         if (message.id == anchor || message.tags['msgid'] == anchor) {
@@ -137,8 +144,7 @@ class DriftMessageHistoryRepository implements MessageHistoryRepository {
 
     final query = _db.select(_db.messages)
       ..where((row) {
-        final base =
-            row.networkId.equals(networkId) & row.tabId.equals(tabId);
+        final base = row.networkId.equals(networkId) & row.tabId.equals(tabId);
         return beforeRowId == null
             ? base
             : base & row.rowId.isSmallerThanValue(beforeRowId);
@@ -165,8 +171,10 @@ class DriftMessageHistoryRepository implements MessageHistoryRepository {
     int limit = 100,
   }) async {
     final normalizedLimit = limit.clamp(1, 10000);
-    final normalizedQuery =
-        formatIrcPlainText(query, collapseWhitespace: true).toLowerCase();
+    final normalizedQuery = formatIrcPlainText(
+      query,
+      collapseWhitespace: true,
+    ).toLowerCase();
 
     final select = _db.select(_db.messages)
       ..where((row) {
@@ -175,16 +183,16 @@ class DriftMessageHistoryRepository implements MessageHistoryRepository {
           condition = condition & row.tabId.equals(tabId);
         }
         if (kinds.isNotEmpty) {
-          condition =
-              condition & row.kind.isIn(kinds.map((kind) => kind.name));
+          condition = condition & row.kind.isIn(kinds.map((kind) => kind.name));
         }
         if (from != null) {
-          condition = condition &
-              row.timestampMs
-                  .isBiggerOrEqualValue(from.millisecondsSinceEpoch);
+          condition =
+              condition &
+              row.timestampMs.isBiggerOrEqualValue(from.millisecondsSinceEpoch);
         }
         if (to != null) {
-          condition = condition &
+          condition =
+              condition &
               row.timestampMs.isSmallerOrEqualValue(to.millisecondsSinceEpoch);
         }
         return condition;
@@ -237,17 +245,17 @@ class DriftMessageHistoryRepository implements MessageHistoryRepository {
     DateTime? deleteBefore,
   }) async {
     if (deleteBefore != null) {
-      await (_db.delete(_db.messages)
-            ..where((row) {
-              var condition = row.networkId.equals(networkId) &
-                  row.timestampMs.isSmallerThanValue(
-                    deleteBefore.millisecondsSinceEpoch,
-                  );
-              if (tabId != null) {
-                condition = condition & row.tabId.equals(tabId);
-              }
-              return condition;
-            }))
+      await (_db.delete(_db.messages)..where((row) {
+            var condition =
+                row.networkId.equals(networkId) &
+                row.timestampMs.isSmallerThanValue(
+                  deleteBefore.millisecondsSinceEpoch,
+                );
+            if (tabId != null) {
+              condition = condition & row.tabId.equals(tabId);
+            }
+            return condition;
+          }))
           .go();
     }
 
@@ -256,29 +264,33 @@ class DriftMessageHistoryRepository implements MessageHistoryRepository {
       if (tabId != null) {
         tabIds.add(tabId);
       } else {
-        final rows = await (_db.selectOnly(_db.messages, distinct: true)
-              ..addColumns([_db.messages.tabId])
-              ..where(_db.messages.networkId.equals(networkId)))
-            .get();
+        final rows =
+            await (_db.selectOnly(_db.messages, distinct: true)
+                  ..addColumns([_db.messages.tabId])
+                  ..where(_db.messages.networkId.equals(networkId)))
+                .get();
         for (final row in rows) {
           tabIds.add(row.read(_db.messages.tabId)!);
         }
       }
 
       for (final id in tabIds) {
-        final rowIds = await (_db.select(_db.messages)
-              ..where((row) =>
-                  row.networkId.equals(networkId) & row.tabId.equals(id))
-              ..orderBy([(row) => OrderingTerm.asc(row.rowId)]))
-            .map((row) => row.rowId)
-            .get();
+        final rowIds =
+            await (_db.select(_db.messages)
+                  ..where(
+                    (row) =>
+                        row.networkId.equals(networkId) & row.tabId.equals(id),
+                  )
+                  ..orderBy([(row) => OrderingTerm.asc(row.rowId)]))
+                .map((row) => row.rowId)
+                .get();
         if (rowIds.length <= maxMessages) {
           continue;
         }
         final removable = rowIds.sublist(0, rowIds.length - maxMessages);
-        await (_db.delete(_db.messages)
-              ..where((row) => row.rowId.isIn(removable)))
-            .go();
+        await (_db.delete(
+          _db.messages,
+        )..where((row) => row.rowId.isIn(removable))).go();
       }
     }
   }
@@ -288,17 +300,17 @@ class DriftMessageHistoryRepository implements MessageHistoryRepository {
     required String networkId,
     required String tabId,
   }) async {
-    await (_db.delete(_db.messages)
-          ..where((row) =>
-              row.networkId.equals(networkId) & row.tabId.equals(tabId)))
+    await (_db.delete(_db.messages)..where(
+          (row) => row.networkId.equals(networkId) & row.tabId.equals(tabId),
+        ))
         .go();
   }
 
   @override
   Future<void> deleteNetworkHistory(String networkId) async {
-    await (_db.delete(_db.messages)
-          ..where((row) => row.networkId.equals(networkId)))
-        .go();
+    await (_db.delete(
+      _db.messages,
+    )..where((row) => row.networkId.equals(networkId))).go();
   }
 
   Future<IrcMessage> _fromRow(Message row) async {

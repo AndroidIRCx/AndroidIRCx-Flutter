@@ -12,23 +12,20 @@ typedef PresetHttpGet = Future<String> Function(Uri url);
 /// `DEFAULT_SERVER`).
 class ServerPresetService {
   ServerPresetService({PresetHttpGet? httpGet})
-      : _httpGet = httpGet ?? _defaultHttpGet;
+    : _httpGet = httpGet ?? _defaultHttpGet;
 
   final PresetHttpGet _httpGet;
 
-  static final Uri endpoint =
-      Uri.parse('https://irc.dbase.in.rs/api/irc/server-presets');
+  static final Uri endpoint = Uri.parse(
+    'https://irc.dbase.in.rs/api/irc/server-presets',
+  );
 
   /// The old app's default network, used when the directory cannot be reached.
   static const ServerPreset fallbackPreset = ServerPreset(
     networkName: 'DBase',
     averageUsers: 0,
     servers: [
-      ServerPresetServer(
-        hostname: 'irc.dbase.in.rs',
-        port: 6697,
-        useSsl: true,
-      ),
+      ServerPresetServer(hostname: 'irc.dbase.in.rs', port: 6697, useSsl: true),
     ],
   );
 

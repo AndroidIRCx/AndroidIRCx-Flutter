@@ -1,11 +1,7 @@
 import 'dart:convert';
 
 class MircPresetEntry {
-  const MircPresetEntry({
-    required this.id,
-    required this.raw,
-    this.enabled,
-  });
+  const MircPresetEntry({required this.id, required this.raw, this.enabled});
 
   final String id;
   final String raw;
@@ -83,7 +79,10 @@ List<MircPresetEntry> parseNickCompletionPresets(String raw) {
   final lines = splitPresetLines(raw);
   return List<MircPresetEntry>.generate(lines.length, (index) {
     final line = lines[index];
-    final match = RegExp(r'(\s+|\x08)(on|off)$', caseSensitive: false).firstMatch(line);
+    final match = RegExp(
+      r'(\s+|\x08)(on|off)$',
+      caseSensitive: false,
+    ).firstMatch(line);
     if (match == null) {
       return MircPresetEntry(id: 'nick-${index + 1}', raw: line);
     }

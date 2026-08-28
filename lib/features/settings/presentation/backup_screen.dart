@@ -27,7 +27,8 @@ class _BackupScreenState extends State<BackupScreen> {
   @override
   void initState() {
     super.initState();
-    _service = widget.service ??
+    _service =
+        widget.service ??
         BackupService(
           networkRepository: SharedPrefsNetworkRepository(
             secretStorage: FlutterSecureSecretStorage(),
@@ -79,9 +80,7 @@ class _BackupScreenState extends State<BackupScreen> {
         ),
       );
     } catch (error) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Import failed: $error')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('Import failed: $error')));
     } finally {
       if (mounted) {
         setState(() => _busy = false);

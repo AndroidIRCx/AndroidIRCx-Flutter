@@ -39,19 +39,22 @@ bool isIrcUrl(String url) {
 
 ParsedIrcUrl parseIrcUrl(String url) {
   ParsedIrcUrl invalid(String error) => ParsedIrcUrl(
-        protocol: 'irc',
-        server: '',
-        port: 6667,
-        ssl: false,
-        isValid: false,
-        error: error,
-      );
+    protocol: 'irc',
+    server: '',
+    port: 6667,
+    ssl: false,
+    isValid: false,
+    error: error,
+  );
 
   if (url.trim().isEmpty) {
     return invalid('URL is empty or invalid');
   }
 
-  final match = RegExp(r'^(irc|ircs):\/\/', caseSensitive: false).firstMatch(url.trim());
+  final match = RegExp(
+    r'^(irc|ircs):\/\/',
+    caseSensitive: false,
+  ).firstMatch(url.trim());
   if (match == null) {
     return invalid('Invalid IRC URL format. Expected: irc:// or ircs://');
   }

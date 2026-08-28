@@ -88,10 +88,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
   Future<void> _editColor(String key, String label) async {
     final picked = await showDialog<Color>(
       context: context,
-      builder: (_) => _ColorPickerDialog(
-        label: label,
-        initial: _colorFor(key),
-      ),
+      builder: (_) => _ColorPickerDialog(label: label, initial: _colorFor(key)),
     );
     if (picked != null) {
       setState(() => _theme[key] = _colorToHex(picked));

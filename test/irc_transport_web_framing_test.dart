@@ -7,22 +7,24 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('IRCv3 WebSocket framing', () {
-    test('decodes a single text frame without a trailing CRLF into one line',
-        () {
-      expect(WebIrcTransport.framesFromMessage('PING :abc'), ['PING :abc']);
-    });
+    test(
+      'decodes a single text frame without a trailing CRLF into one line',
+      () {
+        expect(WebIrcTransport.framesFromMessage('PING :abc'), ['PING :abc']);
+      },
+    );
 
     test('strips an optional trailing CRLF from a text frame', () {
       expect(WebIrcTransport.framesFromMessage('PING :abc\r\n'), ['PING :abc']);
     });
 
     test('decodes a binary (byte) frame as UTF-8', () {
-      final bytes =
-          Uint8List.fromList(utf8.encode(':nick!u@h PRIVMSG #c :héllo\r\n'));
-      expect(
-        WebIrcTransport.framesFromMessage(bytes),
-        [':nick!u@h PRIVMSG #c :héllo'],
+      final bytes = Uint8List.fromList(
+        utf8.encode(':nick!u@h PRIVMSG #c :héllo\r\n'),
       );
+      expect(WebIrcTransport.framesFromMessage(bytes), [
+        ':nick!u@h PRIVMSG #c :héllo',
+      ]);
     });
 
     test('splits a non-compliant frame that packs multiple CRLF lines', () {
@@ -60,23 +62,25 @@ void main() {
       await incoming.close();
     });
 
-    test('sendLine terminates each outgoing message with a single CRLF',
-        () async {
-      final incoming = StreamController<dynamic>.broadcast();
-      final sent = <String>[];
-      final transport = WebIrcTransport.forTesting(
-        incoming: incoming.stream,
-        onSend: sent.add,
-      );
+    test(
+      'sendLine terminates each outgoing message with a single CRLF',
+      () async {
+        final incoming = StreamController<dynamic>.broadcast();
+        final sent = <String>[];
+        final transport = WebIrcTransport.forTesting(
+          incoming: incoming.stream,
+          onSend: sent.add,
+        );
 
-      await transport.sendLine('NICK tester');
-      await transport.sendLine('USER a 0 * :real');
+        await transport.sendLine('NICK tester');
+        await transport.sendLine('USER a 0 * :real');
 
-      expect(sent, ['NICK tester\r\n', 'USER a 0 * :real\r\n']);
+        expect(sent, ['NICK tester\r\n', 'USER a 0 * :real\r\n']);
 
-      await transport.close();
-      await incoming.close();
-    });
+        await transport.close();
+        await incoming.close();
+      },
+    );
 
     test('closes the line stream when the socket is done', () async {
       final incoming = StreamController<dynamic>();

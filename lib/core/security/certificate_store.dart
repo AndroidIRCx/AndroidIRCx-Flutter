@@ -79,8 +79,9 @@ class CertificateStore {
     final passphrase = await _storage.getSecret(
       _key(networkId, NetworkSecretField.clientKeyPassphrase),
     );
-    final normalizedPassphrase =
-        (passphrase == null || passphrase.isEmpty) ? null : passphrase;
+    final normalizedPassphrase = (passphrase == null || passphrase.isEmpty)
+        ? null
+        : passphrase;
 
     final pkcs12 = await _storage.getSecret(
       _key(networkId, NetworkSecretField.clientPkcs12),
@@ -164,24 +165,18 @@ void validateClientCertificate(ClientCertificate certificate) {
     }
     return;
   }
-  if (!_isPemBlock(
-    certificate.certificatePem,
-    const ['CERTIFICATE'],
-  )) {
+  if (!_isPemBlock(certificate.certificatePem, const ['CERTIFICATE'])) {
     throw const CertificateFormatException(
       'Client certificate must be a PEM block '
       '(-----BEGIN CERTIFICATE----- … -----END CERTIFICATE-----).',
     );
   }
-  if (!_isPemBlock(
-    certificate.privateKeyPem,
-    const [
-      'PRIVATE KEY',
-      'RSA PRIVATE KEY',
-      'EC PRIVATE KEY',
-      'ENCRYPTED PRIVATE KEY',
-    ],
-  )) {
+  if (!_isPemBlock(certificate.privateKeyPem, const [
+    'PRIVATE KEY',
+    'RSA PRIVATE KEY',
+    'EC PRIVATE KEY',
+    'ENCRYPTED PRIVATE KEY',
+  ])) {
     throw const CertificateFormatException(
       'Client private key must be a PEM private-key block.',
     );

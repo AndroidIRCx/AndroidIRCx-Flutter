@@ -14,11 +14,8 @@ Future<IrcTransport> connectDefaultTransport(
 }
 
 class WebIrcTransport implements IrcTransport {
-  WebIrcTransport._(
-    this._incoming,
-    this._send,
-    this._onClose,
-  ) : _lineController = StreamController<String>.broadcast() {
+  WebIrcTransport._(this._incoming, this._send, this._onClose)
+    : _lineController = StreamController<String>.broadcast() {
     _messageSubscription = _incoming.listen(
       (data) {
         for (final line in framesFromMessage(data)) {
