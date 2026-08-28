@@ -1,5 +1,11 @@
 enum NoticeRoutingMode { server, active, notice, private }
 
+/// How sender nicks are decorated in the message list.
+enum NickDisplayFormat { plain, angle, colon, bracket }
+
+/// Where the timestamp sits relative to the sender nick.
+enum TimestampPosition { afterNick, beforeNick }
+
 enum AppThemePreset { light, dark, ircap, custom }
 
 enum MessageDensity { compact, comfortable, relaxed }
@@ -32,6 +38,9 @@ class AppSettings {
     this.notificationSound = true,
     this.hideJoinPartQuit = false,
     this.showTimestamps = true,
+    this.timestampFormat = 'HH:mm',
+    this.timestampPosition = TimestampPosition.afterNick,
+    this.nickDisplayFormat = NickDisplayFormat.plain,
     this.enterToSend = true,
     this.showSendButton = true,
     this.highlightWords = const <String>[],
@@ -87,6 +96,12 @@ class AppSettings {
   // Display / writing.
   final bool hideJoinPartQuit;
   final bool showTimestamps;
+
+  /// Timestamp pattern for message lines ('HH:mm', 'HH:mm:ss', 'h:mm a',
+  /// 'h:mm:ss a').
+  final String timestampFormat;
+  final TimestampPosition timestampPosition;
+  final NickDisplayFormat nickDisplayFormat;
   final bool enterToSend;
   final bool showSendButton;
 
@@ -130,6 +145,9 @@ class AppSettings {
     bool? notificationSound,
     bool? hideJoinPartQuit,
     bool? showTimestamps,
+    String? timestampFormat,
+    TimestampPosition? timestampPosition,
+    NickDisplayFormat? nickDisplayFormat,
     bool? enterToSend,
     bool? showSendButton,
     List<String>? highlightWords,
@@ -172,6 +190,9 @@ class AppSettings {
       notificationSound: notificationSound ?? this.notificationSound,
       hideJoinPartQuit: hideJoinPartQuit ?? this.hideJoinPartQuit,
       showTimestamps: showTimestamps ?? this.showTimestamps,
+      timestampFormat: timestampFormat ?? this.timestampFormat,
+      timestampPosition: timestampPosition ?? this.timestampPosition,
+      nickDisplayFormat: nickDisplayFormat ?? this.nickDisplayFormat,
       enterToSend: enterToSend ?? this.enterToSend,
       showSendButton: showSendButton ?? this.showSendButton,
       highlightWords: highlightWords ?? this.highlightWords,
@@ -211,6 +232,9 @@ class AppSettings {
       'notificationSound': notificationSound,
       'hideJoinPartQuit': hideJoinPartQuit,
       'showTimestamps': showTimestamps,
+      'timestampFormat': timestampFormat,
+      'timestampPosition': timestampPosition.name,
+      'nickDisplayFormat': nickDisplayFormat.name,
       'enterToSend': enterToSend,
       'showSendButton': showSendButton,
       'highlightWords': highlightWords,
@@ -275,6 +299,20 @@ class AppSettings {
       notificationSound: (json['notificationSound'] as bool?) ?? true,
       hideJoinPartQuit: (json['hideJoinPartQuit'] as bool?) ?? false,
       showTimestamps: (json['showTimestamps'] as bool?) ?? true,
+      timestampFormat:
+          (json['timestampFormat'] as String?)?.trim().isNotEmpty ?? false
+          ? (json['timestampFormat']! as String).trim()
+          : 'HH:mm',
+      timestampPosition: _enumByName(
+        TimestampPosition.values,
+        json['timestampPosition'],
+        TimestampPosition.afterNick,
+      ),
+      nickDisplayFormat: _enumByName(
+        NickDisplayFormat.values,
+        json['nickDisplayFormat'],
+        NickDisplayFormat.plain,
+      ),
       enterToSend: (json['enterToSend'] as bool?) ?? true,
       showSendButton: (json['showSendButton'] as bool?) ?? true,
       highlightWords: _stringList(json['highlightWords']),

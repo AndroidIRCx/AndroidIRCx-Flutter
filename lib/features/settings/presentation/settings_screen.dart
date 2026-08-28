@@ -14,6 +14,7 @@ import 'package:androidircx/features/monetization/presentation/purchase_screen.d
 import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
 import 'package:androidircx/features/settings/presentation/backup_screen.dart';
 import 'package:androidircx/features/settings/presentation/crash_reports_screen.dart';
+import 'package:androidircx/features/settings/presentation/message_format_screen.dart';
 import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
 import 'package:androidircx/monetization/monetization_config.dart';
 import 'package:androidircx/monetization/monetization_controller.dart';
@@ -328,6 +329,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               )
                               .toList(growable: false),
                         ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-message-format'),
+                        leading: const Icon(Icons.short_text),
+                        title: const Text('Message format'),
+                        subtitle: const Text(
+                          'Timestamp format/position and nick style.',
+                        ),
+                        onTap: _openMessageFormatEditor,
                       ),
                       const Divider(height: 1),
                       ListTile(
@@ -936,6 +947,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     controller.text = value;
     controller.selection = TextSelection.collapsed(offset: value.length);
+  }
+
+  Future<void> _openMessageFormatEditor() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => MessageFormatScreen(
+          initialSettings: _settings,
+          onSettingsChanged: _saveSettings,
+        ),
+      ),
+    );
   }
 
   Future<void> _openThemeEditor() async {

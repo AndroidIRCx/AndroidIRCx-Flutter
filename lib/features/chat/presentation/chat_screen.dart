@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:androidircx/app/theme/app_theme.dart';
+import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/dcc_session.dart';
@@ -18,6 +19,7 @@ import 'package:androidircx/features/connections/application/network_list_contro
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
 import 'package:androidircx/features/chat/presentation/media_player_screen.dart';
+import 'package:androidircx/features/chat/presentation/message_line_format.dart';
 import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/irc_formatted_text.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
@@ -456,6 +458,11 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                           ),
                           showTimestamps: _controller.settings.showTimestamps,
+                          timestampFormat: _controller.settings.timestampFormat,
+                          timestampPosition:
+                              _controller.settings.timestampPosition,
+                          nickDisplayFormat:
+                              _controller.settings.nickDisplayFormat,
                           onLoadOlder:
                               _controller.hasPersistentHistory &&
                                   !_messageSearchVisible
@@ -1593,13 +1600,6 @@ bool _isActiveDccTransfer(DccSession session) {
   return session.status == DccSessionStatus.offering ||
       session.status == DccSessionStatus.connecting ||
       session.status == DccSessionStatus.connected;
-}
-
-String _formatClock(DateTime timestamp) {
-  final local = timestamp.toLocal();
-  final hh = local.hour.toString().padLeft(2, '0');
-  final mm = local.minute.toString().padLeft(2, '0');
-  return '$hh:$mm';
 }
 
 class _ComposerArea extends StatelessWidget {
@@ -3019,6 +3019,9 @@ class _MessageList extends StatelessWidget {
     required this.onChannelTap,
     this.onLoadOlder,
     this.showTimestamps = true,
+    this.timestampFormat = 'HH:mm',
+    this.timestampPosition = TimestampPosition.afterNick,
+    this.nickDisplayFormat = NickDisplayFormat.plain,
   });
 
   final List<IrcMessage> messages;
@@ -3027,6 +3030,9 @@ class _MessageList extends StatelessWidget {
   final String nickPrefixes;
   final bool showAttachmentPreviews;
   final bool showTimestamps;
+  final String timestampFormat;
+  final TimestampPosition timestampPosition;
+  final NickDisplayFormat nickDisplayFormat;
   final Future<void> Function()? onLoadOlder;
   final IrcMessage? Function(String replyId) resolveReplyTarget;
   final Map<String, int> Function(IrcMessage message) resolveReactions;
@@ -3119,7 +3125,15 @@ class _MessageList extends StatelessWidget {
               ircTheme.nickColorFor(message.sender) ??
               Theme.of(context).colorScheme.onSurface,
         );
+        final nickLabel = formatNickLabel(message.sender, nickDisplayFormat);
+        final clockText = formatIrcTimestamp(
+          message.timestamp,
+          timestampFormat,
+        );
         final leadingSpans = <InlineSpan>[
+          if (showTimestamps &&
+              timestampPosition == TimestampPosition.beforeNick)
+            TextSpan(text: '$clockText  ', style: metaStyle),
           if (_isInteractiveSender(message))
             WidgetSpan(
               alignment: PlaceholderAlignment.baseline,
@@ -3129,17 +3143,15 @@ class _MessageList extends StatelessWidget {
                 onTap: () => onNickTap(message.sender),
                 onLongPress: () => onNickLongPress(message.sender),
                 child: RichText(
-                  text: TextSpan(text: message.sender, style: senderStyle),
+                  text: TextSpan(text: nickLabel, style: senderStyle),
                 ),
               ),
             )
           else
-            TextSpan(text: message.sender, style: senderStyle),
-          if (showTimestamps)
-            TextSpan(
-              text: '  ${_formatClock(message.timestamp)}',
-              style: metaStyle,
-            ),
+            TextSpan(text: nickLabel, style: senderStyle),
+          if (showTimestamps &&
+              timestampPosition == TimestampPosition.afterNick)
+            TextSpan(text: '  $clockText', style: metaStyle),
           if (message.isPlayback)
             TextSpan(text: '  · history', style: metaStyle),
           const TextSpan(text: '   '),
