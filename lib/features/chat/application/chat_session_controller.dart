@@ -15,6 +15,7 @@ import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/message_history_formatter.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
+import 'package:androidircx/features/chat/data/channel_notification_rules_repository.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
 import 'package:androidircx/features/chat/data/message_history_repository.dart';
 import 'package:androidircx/features/chat/data/user_list_entry.dart';
@@ -201,6 +202,7 @@ class ChatSessionController extends ChangeNotifier {
     CommandService? commandService,
     UserListsRepository? userListsRepository,
     SoundService? soundService,
+    ChannelNotificationRulesRepository? channelNotificationRulesRepository,
     int maxReconnectAttempts = 6,
     Duration reconnectBaseDelay = const Duration(seconds: 2),
     Duration reconnectMaxDelay = const Duration(seconds: 60),
@@ -219,6 +221,9 @@ class ChatSessionController extends ChangeNotifier {
        _commandService = commandService ?? CommandService(),
        _userListsRepository = userListsRepository,
        _soundService = soundService,
+       _channelNotificationRulesRepository =
+           channelNotificationRulesRepository ??
+           ChannelNotificationRulesRepository(),
        _maxReconnectAttempts = maxReconnectAttempts,
        _reconnectBaseDelay = reconnectBaseDelay,
        _reconnectMaxDelay = reconnectMaxDelay,
@@ -245,6 +250,10 @@ class ChatSessionController extends ChangeNotifier {
   final CommandService _commandService;
   final UserListsRepository? _userListsRepository;
   final SoundService? _soundService;
+  final ChannelNotificationRulesRepository _channelNotificationRulesRepository;
+
+  /// Per-tab notification overrides keyed by lower-case target name.
+  final Map<String, ChannelNotificationRule> _channelNotificationRules = {};
 
   /// Last connection phase a sound was played for, so repeated snapshots in
   /// the same phase (or reconnect retries) do not re-trigger sounds.
@@ -1105,6 +1114,7 @@ class ChatSessionController extends ChangeNotifier {
       await _commandService.load();
       await _loadPersistedState();
       await _loadAutoModeEntries();
+      await _loadChannelNotificationRules();
       if (_isDisposed) {
         return;
       }
@@ -6544,6 +6554,35 @@ class ChatSessionController extends ChangeNotifier {
     return appended;
   }
 
+  /// Per-tab notification override for [target] (channel or query name).
+  ChannelNotificationRule notificationRuleFor(String target) {
+    return _channelNotificationRules[target.toLowerCase()] ??
+        ChannelNotificationRule.defaults;
+  }
+
+  Future<void> setChannelNotificationRule(
+    String target,
+    ChannelNotificationRule rule,
+  ) async {
+    final key = target.toLowerCase();
+    if (rule == ChannelNotificationRule.defaults) {
+      _channelNotificationRules.remove(key);
+    } else {
+      _channelNotificationRules[key] = rule;
+    }
+    notifyListeners();
+    await _channelNotificationRulesRepository.setRule(network.id, target, rule);
+  }
+
+  Future<void> _loadChannelNotificationRules() async {
+    final rules = await _channelNotificationRulesRepository.loadRules(
+      network.id,
+    );
+    _channelNotificationRules
+      ..clear()
+      ..addAll(rules);
+  }
+
   void _emitIncomingMessageNotification(IrcMessage? message) {
     if (message == null || message.isOwn || message.isPlayback) {
       return;
@@ -6558,8 +6597,29 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    final channelKind = _notificationKindForMessage(message, tab);
+    final rule =
+        (tab.type == ChatTabType.channel || tab.type == ChatTabType.query)
+        ? notificationRuleFor(tab.name)
+        : ChannelNotificationRule.defaults;
+    if (rule == ChannelNotificationRule.mute) {
+      return;
+    }
+
+    var channelKind = _notificationKindForMessage(message, tab);
+    // "All messages" promotes regular channel chat to a highlight-channel
+    // notification; by default channels only notify on highlights/media.
+    if (channelKind == null &&
+        rule == ChannelNotificationRule.all &&
+        tab.type == ChatTabType.channel &&
+        (message.kind == IrcMessageKind.chat ||
+            message.kind == IrcMessageKind.action)) {
+      channelKind = ForegroundNotificationChannelKind.highlights;
+    }
     if (channelKind == null) {
+      return;
+    }
+    if (rule == ChannelNotificationRule.mentionsOnly &&
+        channelKind != ForegroundNotificationChannelKind.highlights) {
       return;
     }
 

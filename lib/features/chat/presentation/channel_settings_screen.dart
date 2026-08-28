@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
+import 'package:androidircx/features/chat/data/channel_notification_rules_repository.dart';
 import 'package:androidircx/features/chat/data/channel_notes_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/irc/parser/irc_formatter.dart';
@@ -130,6 +131,37 @@ class _ChannelSettingsScreenState extends State<ChannelSettingsScreen> {
                 value: _autoJoin,
                 onChanged: (value) => unawaited(_toggleAutoJoin(value)),
               ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Notifications'),
+              subtitle: const Text(
+                'Override the global notification rules for this channel.',
+              ),
+              trailing: DropdownButton<ChannelNotificationRule>(
+                key: const Key('channel-settings-notification-rule'),
+                value: widget.controller.notificationRuleFor(widget.tab.name),
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  unawaited(
+                    widget.controller.setChannelNotificationRule(
+                      widget.tab.name,
+                      value,
+                    ),
+                  );
+                  setState(() {});
+                },
+                items: ChannelNotificationRule.values
+                    .map(
+                      (rule) => DropdownMenuItem(
+                        value: rule,
+                        child: Text(channelNotificationRuleLabel(rule)),
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
+            ),
             const SizedBox(height: 8),
             Text('Channel note', style: theme.textTheme.titleSmall),
             const SizedBox(height: 4),

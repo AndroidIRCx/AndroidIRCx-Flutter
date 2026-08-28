@@ -543,6 +543,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-system-channels'),
+                        leading: const Icon(Icons.vibration),
+                        title: const Text('Vibration & LED'),
+                        subtitle: const Text(
+                          'Configured per notification channel in Android '
+                          'system settings.',
+                        ),
+                        onTap: () => unawaited(_permissions.openSettingsPage()),
+                      ),
+                      const Divider(height: 1),
                       SwitchListTile(
                         key: const Key('settings-notifications-enabled'),
                         secondary: const Icon(

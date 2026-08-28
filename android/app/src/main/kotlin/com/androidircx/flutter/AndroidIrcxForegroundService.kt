@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.os.Build
 import android.os.IBinder
 
@@ -219,12 +220,14 @@ class AndroidIrcxForegroundService : Service() {
                         context.getString(R.string.notification_channel_highlights),
                         context.getString(R.string.notification_channel_highlights_description),
                         NotificationManager.IMPORTANCE_DEFAULT,
+                        alerting = true,
                     ),
                     channel(
                         CHANNEL_QUERIES,
                         context.getString(R.string.notification_channel_queries),
                         context.getString(R.string.notification_channel_queries_description),
                         NotificationManager.IMPORTANCE_DEFAULT,
+                        alerting = true,
                     ),
                     channel(
                         CHANNEL_DCC_TRANSFERS,
@@ -243,6 +246,7 @@ class AndroidIrcxForegroundService : Service() {
                         context.getString(R.string.notification_channel_errors),
                         context.getString(R.string.notification_channel_errors_description),
                         NotificationManager.IMPORTANCE_HIGH,
+                        alerting = true,
                     ),
                 ),
             )
@@ -253,9 +257,19 @@ class AndroidIrcxForegroundService : Service() {
             name: String,
             description: String,
             importance: Int,
+            alerting: Boolean = false,
         ): NotificationChannel {
             return NotificationChannel(id, name, importance).apply {
                 this.description = description
+                if (alerting) {
+                    // Vibration + notification LED for user-facing alerts.
+                    // Users can still tune these per channel in system
+                    // settings; existing installs keep their prior channel
+                    // configuration (Android only applies this at creation).
+                    enableVibration(true)
+                    enableLights(true)
+                    lightColor = Color.GREEN
+                }
             }
         }
 
