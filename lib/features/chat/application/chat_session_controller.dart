@@ -23,6 +23,7 @@ import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart'
 import 'package:androidircx/core/models/channel_list_entry.dart';
 import 'package:androidircx/core/security/certificate_store.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
+import 'package:androidircx/core/sound/sound_service.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
 import 'package:androidircx/irc/parser/ctcp.dart';
 import 'package:androidircx/irc/parser/dcc_parser.dart';
@@ -199,6 +200,7 @@ class ChatSessionController extends ChangeNotifier {
     SettingsRepository? settingsRepository,
     CommandService? commandService,
     UserListsRepository? userListsRepository,
+    SoundService? soundService,
     int maxReconnectAttempts = 6,
     Duration reconnectBaseDelay = const Duration(seconds: 2),
     Duration reconnectMaxDelay = const Duration(seconds: 60),
@@ -216,6 +218,7 @@ class ChatSessionController extends ChangeNotifier {
            settingsRepository ?? SharedPrefsSettingsRepository(),
        _commandService = commandService ?? CommandService(),
        _userListsRepository = userListsRepository,
+       _soundService = soundService,
        _maxReconnectAttempts = maxReconnectAttempts,
        _reconnectBaseDelay = reconnectBaseDelay,
        _reconnectMaxDelay = reconnectMaxDelay,
@@ -241,6 +244,11 @@ class ChatSessionController extends ChangeNotifier {
   final SettingsRepository _settingsRepository;
   final CommandService _commandService;
   final UserListsRepository? _userListsRepository;
+  final SoundService? _soundService;
+
+  /// Last connection phase a sound was played for, so repeated snapshots in
+  /// the same phase (or reconnect retries) do not re-trigger sounds.
+  ConnectionPhase? _lastSoundedPhase;
   List<UserListEntry> _userListEntries = const <UserListEntry>[];
   bool _userListEntriesLoaded = false;
   final int _maxReconnectAttempts;
@@ -1205,6 +1213,7 @@ class ChatSessionController extends ChangeNotifier {
       text: text,
       replyTo: normalizedReply.isEmpty ? null : normalizedReply,
     );
+    _playSound(SoundEvent.send);
     if (!_ircService.enabledCapabilities.contains('echo-message')) {
       _appendMessage(
         tabId: activeTab.id,
@@ -2041,6 +2050,10 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     if (snapshot.phase == ConnectionPhase.connected) {
+      if (_lastSoundedPhase != ConnectionPhase.connected) {
+        _lastSoundedPhase = ConnectionPhase.connected;
+        _playSound(SoundEvent.login);
+      }
       _autoHistoryRequestedChannels.clear();
       _reconnectAttempt = 0;
       _pendingReconnectDelay = null;
@@ -2055,11 +2068,26 @@ class ChatSessionController extends ChangeNotifier {
 
     if (snapshot.phase == ConnectionPhase.error ||
         snapshot.phase == ConnectionPhase.disconnected) {
+      // Only beep on the drop from an established connection, not on every
+      // failed reconnect attempt.
+      if (_lastSoundedPhase == ConnectionPhase.connected) {
+        _lastSoundedPhase = snapshot.phase;
+        _playSound(SoundEvent.disconnect);
+      }
       _autoHistoryRequestedChannels.clear();
       _autoJoinAttempted = false;
       _serviceAuthFallbackAttempted = false;
       _scheduleReconnect();
     }
+  }
+
+  /// Fire-and-forget event sound; failures never affect message handling.
+  void _playSound(SoundEvent event) {
+    final service = _soundService;
+    if (service == null) {
+      return;
+    }
+    unawaited(service.playEvent(event));
   }
 
   Future<void> _runPostRegistrationActions() async {
@@ -4674,6 +4702,7 @@ class ChatSessionController extends ChangeNotifier {
           if (nick == (_ircService.currentNick ?? network.nickname)) {
             _activeTabId = tab.id;
           } else {
+            _playSound(SoundEvent.join);
             _maybeApplyAutoModes(
               channel,
               nick,
@@ -4720,6 +4749,9 @@ class ChatSessionController extends ChangeNotifier {
                 '$kickedNick was kicked from $channel by ${frame.senderNick ?? '*'}${frame.trailing == null ? '' : ' (${frame.trailing})'}',
             kind: IrcMessageKind.system,
           );
+          if (_isSelfNick(kickedNick)) {
+            _playSound(SoundEvent.kick);
+          }
           if (_isSelfNick(kickedNick) &&
               _settings.autoRejoinOnKick &&
               _connection.phase == ConnectionPhase.connected) {
@@ -5744,6 +5776,7 @@ class ChatSessionController extends ChangeNotifier {
       kind: IrcMessageKind.system,
     );
     _markActivityIfInactive(tabId);
+    _playSound(SoundEvent.ctcp);
     unawaited(_respondToCtcpRequest(senderNick, command, ctcp.args));
   }
 
@@ -6401,6 +6434,14 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
+    // Sounds are independent of the notification permission gating below.
+    _playSound(switch (channelKind) {
+      ForegroundNotificationChannelKind.highlights => SoundEvent.mention,
+      ForegroundNotificationChannelKind.dccTransfers => SoundEvent.ring,
+      _ when tab.type == ChatTabType.notice => SoundEvent.notice,
+      _ => SoundEvent.privateMessage,
+    });
+
     _emitNotification(
       channelKind: channelKind,
       tabId: message.tabId,
@@ -6420,6 +6461,7 @@ class ChatSessionController extends ChangeNotifier {
     if (normalizedBody.isEmpty) {
       return;
     }
+    _playSound(SoundEvent.fail);
     _emitNotification(
       channelKind: ForegroundNotificationChannelKind.errors,
       tabId: tabId,

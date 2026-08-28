@@ -15,6 +15,7 @@ import 'package:androidircx/features/onboarding/presentation/data_privacy_screen
 import 'package:androidircx/features/settings/presentation/backup_screen.dart';
 import 'package:androidircx/features/settings/presentation/crash_reports_screen.dart';
 import 'package:androidircx/features/settings/presentation/message_format_screen.dart';
+import 'package:androidircx/features/settings/presentation/sound_settings_screen.dart';
 import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
 import 'package:androidircx/monetization/monetization_config.dart';
 import 'package:androidircx/monetization/monetization_controller.dart';
@@ -523,6 +524,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _SettingsSection(
                     title: 'Notifications',
                     children: [
+                      ListTile(
+                        key: const Key('settings-sound-settings'),
+                        leading: const Icon(Icons.music_note_outlined),
+                        title: const Text('Sounds'),
+                        subtitle: const Text(
+                          'Per-event sounds, volume, and preview.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const SoundSettingsScreen(),
+                          ),
+                        ),
+                      ),
+                      const Divider(height: 1),
                       SwitchListTile(
                         key: const Key('settings-notifications-enabled'),
                         secondary: const Icon(
