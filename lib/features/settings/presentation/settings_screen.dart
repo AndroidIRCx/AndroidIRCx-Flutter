@@ -22,6 +22,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
+/// Message font choices. Values are Android built-in family names ('system'
+/// maps to the platform default); no font assets are bundled.
+const _messageFontOptions = <({String family, String label})>[
+  (family: 'system', label: 'System default'),
+  (family: 'sans-serif', label: 'Sans-serif'),
+  (family: 'sans-serif-light', label: 'Sans-serif Light'),
+  (family: 'sans-serif-medium', label: 'Sans-serif Medium'),
+  (family: 'sans-serif-condensed', label: 'Sans-serif Condensed'),
+  (family: 'serif', label: 'Serif'),
+  (family: 'monospace', label: 'Monospace'),
+];
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
@@ -288,18 +300,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       const Divider(height: 1),
-                      SwitchListTile(
-                        key: const Key('settings-monospace-messages'),
-                        title: const Text('Monospace messages'),
+                      ListTile(
+                        title: const Text('Message font'),
                         subtitle: const Text(
-                          'Render IRC message bodies in a fixed-width font.',
+                          'Typeface used for IRC message bodies.',
                         ),
-                        value: _settings.monospaceMessages,
-                        onChanged: (value) async {
-                          await _saveSettings(
-                            _settings.copyWith(monospaceMessages: value),
-                          );
-                        },
+                        trailing: DropdownButton<String>(
+                          key: const Key('settings-message-font-family'),
+                          value: _effectiveMessageFontFamily,
+                          onChanged: (value) async {
+                            if (value == null) {
+                              return;
+                            }
+                            await _saveSettings(
+                              _settings.copyWith(
+                                messageFontFamily: value,
+                                monospaceMessages: value == 'monospace',
+                              ),
+                            );
+                          },
+                          items: _messageFontOptions
+                              .map(
+                                (option) => DropdownMenuItem(
+                                  value: option.family,
+                                  child: Text(option.label),
+                                ),
+                              )
+                              .toList(growable: false),
+                        ),
                       ),
                       const Divider(height: 1),
                       ListTile(
@@ -1240,6 +1268,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       MessageDensity.comfortable => 'Comfortable',
       MessageDensity.relaxed => 'Relaxed',
     };
+  }
+
+  /// Current font-family dropdown value, folding the legacy monospace toggle
+  /// into 'monospace' so old settings show the right selection.
+  String get _effectiveMessageFontFamily {
+    final family = _settings.messageFontFamily;
+    if (family == 'system' && _settings.monospaceMessages) {
+      return 'monospace';
+    }
+    return _messageFontOptions.any((option) => option.family == family)
+        ? family
+        : 'system';
   }
 
   String _labelForNickColorMode(NickColorMode mode) {

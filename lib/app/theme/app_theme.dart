@@ -163,7 +163,10 @@ class IrcUiTheme extends ThemeExtension<IrcUiTheme> {
       topic: palette.topic,
       messageBorder: palette.outline,
       messageFontSize: 14 * settings.messageFontScale,
-      messageFontFamily: settings.monospaceMessages ? 'monospace' : null,
+      messageFontFamily: switch (settings.messageFontFamily) {
+        'system' => settings.monospaceMessages ? 'monospace' : null,
+        final family => family,
+      },
       messagePadding: density.padding,
       messageSpacing: density.spacing,
       nickColorMode: settings.nickColorMode,

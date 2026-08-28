@@ -19,6 +19,7 @@ class AppSettings {
     this.messageFontScale = 1.0,
     this.messageDensity = MessageDensity.comfortable,
     this.monospaceMessages = false,
+    this.messageFontFamily = 'system',
     this.nickColorMode = NickColorMode.soft,
     this.onboardingCompleted = false,
     this.appLockEnabled = false,
@@ -52,7 +53,14 @@ class AppSettings {
   final String customThemeJson;
   final double messageFontScale;
   final MessageDensity messageDensity;
+
+  /// Legacy monospace toggle, kept for stored-settings migration; superseded
+  /// by [messageFontFamily] whenever that is not 'system'.
   final bool monospaceMessages;
+
+  /// Message font family: 'system' for the platform default, otherwise an
+  /// Android family name ('monospace', 'serif', 'sans-serif', ...).
+  final String messageFontFamily;
   final NickColorMode nickColorMode;
 
   /// Whether the first-run onboarding + consent flow has been completed.
@@ -109,6 +117,7 @@ class AppSettings {
     double? messageFontScale,
     MessageDensity? messageDensity,
     bool? monospaceMessages,
+    String? messageFontFamily,
     NickColorMode? nickColorMode,
     bool? onboardingCompleted,
     bool? appLockEnabled,
@@ -149,6 +158,7 @@ class AppSettings {
       ),
       messageDensity: messageDensity ?? this.messageDensity,
       monospaceMessages: monospaceMessages ?? this.monospaceMessages,
+      messageFontFamily: messageFontFamily ?? this.messageFontFamily,
       nickColorMode: nickColorMode ?? this.nickColorMode,
       onboardingCompleted: onboardingCompleted ?? this.onboardingCompleted,
       appLockEnabled: appLockEnabled ?? this.appLockEnabled,
@@ -188,6 +198,7 @@ class AppSettings {
       'messageFontScale': messageFontScale,
       'messageDensity': messageDensity.name,
       'monospaceMessages': monospaceMessages,
+      'messageFontFamily': messageFontFamily,
       'nickColorMode': nickColorMode.name,
       'onboardingCompleted': onboardingCompleted,
       'appLockEnabled': appLockEnabled,
@@ -241,6 +252,13 @@ class AppSettings {
         MessageDensity.comfortable,
       ),
       monospaceMessages: (json['monospaceMessages'] as bool?) ?? false,
+      messageFontFamily:
+          (json['messageFontFamily'] as String?)?.trim().isNotEmpty ?? false
+          ? (json['messageFontFamily']! as String).trim()
+          // Migrate the legacy monospace toggle into the font family.
+          : ((json['monospaceMessages'] as bool?) ?? false)
+          ? 'monospace'
+          : 'system',
       nickColorMode: _enumByName(
         NickColorMode.values,
         json['nickColorMode'],

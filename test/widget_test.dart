@@ -730,10 +730,12 @@ void main() {
     await tester.tap(find.text('Compact').last);
     await tester.pumpAndSettle();
 
-    await scrollTo('settings-monospace-messages');
+    await scrollTo('settings-message-font-family');
     await tester.tap(
-      find.byKey(const Key('settings-monospace-messages')).first,
+      find.byKey(const Key('settings-message-font-family')).first,
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Monospace').last);
     await tester.pumpAndSettle();
 
     await scrollTo('settings-nick-color-mode');
@@ -746,6 +748,7 @@ void main() {
     expect(settings.themePreset, AppThemePreset.custom);
     expect(settings.customThemeJson, customJson);
     expect(settings.messageDensity, MessageDensity.compact);
+    expect(settings.messageFontFamily, 'monospace');
     expect(settings.monospaceMessages, isTrue);
     expect(settings.nickColorMode, NickColorMode.vivid);
   });
