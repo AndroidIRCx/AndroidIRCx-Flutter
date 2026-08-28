@@ -12,8 +12,7 @@ class NetworkListController extends ChangeNotifier {
     CertificateStore? certificateStore,
   }) : _repository = repository,
        _certificateStore =
-           certificateStore ??
-           CertificateStore(FlutterSecureSecretStorage());
+           certificateStore ?? CertificateStore(FlutterSecureSecretStorage());
 
   final NetworkRepository _repository;
   final CertificateStore _certificateStore;
@@ -62,6 +61,8 @@ class NetworkListController extends ChangeNotifier {
     String? clientPrivateKeyPem,
     String? clientPkcs12Base64,
     String? clientKeyPassphrase,
+    String encoding = 'utf-8',
+    bool encodingUtf8Fallback = false,
     String? networkId,
   }) async {
     final network = NetworkConfig(
@@ -97,6 +98,8 @@ class NetworkListController extends ChangeNotifier {
       proxyPassword: (proxyPassword ?? '').trim().isEmpty
           ? null
           : proxyPassword,
+      encoding: encoding,
+      encodingUtf8Fallback: encodingUtf8Fallback,
     );
 
     await _repository.saveNetwork(network);

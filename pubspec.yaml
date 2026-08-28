@@ -56,6 +56,7 @@ dependencies:
   firebase_app_check: ^0.4.6
   google_mobile_ads: ^9.1.0
   in_app_purchase: ^3.3.0
+  enough_convert: ^1.6.0
 
 dev_dependencies:
   flutter_test:

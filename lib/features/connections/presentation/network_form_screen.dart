@@ -7,6 +7,7 @@ import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/storage/identity_profile_repository.dart';
 import 'package:androidircx/dcc/services/dcc_file_picker.dart';
 import 'package:androidircx/features/connections/data/pem_bundle.dart';
+import 'package:androidircx/irc/encoding/irc_encoding.dart';
 import 'package:flutter/material.dart';
 
 class NetworkFormResult {
@@ -40,6 +41,8 @@ class NetworkFormResult {
     this.clientPrivateKeyPem,
     this.clientPkcs12Base64,
     this.clientKeyPassphrase,
+    this.encoding = defaultIrcEncoding,
+    this.encodingUtf8Fallback = false,
   });
 
   final String name;
@@ -71,6 +74,8 @@ class NetworkFormResult {
   final String? clientPrivateKeyPem;
   final String? clientPkcs12Base64;
   final String? clientKeyPassphrase;
+  final String encoding;
+  final bool encodingUtf8Fallback;
 }
 
 class NetworkFormScreen extends StatefulWidget {
@@ -121,6 +126,8 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
   late final TextEditingController _proxyUsernameController;
   late final TextEditingController _proxyPasswordController;
   late bool _useTls;
+  late String _encoding;
+  late bool _encodingUtf8Fallback;
   late bool _autoConnect;
   late SaslMechanism _saslMechanism;
   late ServiceAuthFallback _serviceAuthFallback;
@@ -202,6 +209,8 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
     _serviceAuthFallback =
         initial?.serviceAuthFallback ?? ServiceAuthFallback.disabled;
     _proxyType = initial?.proxyType ?? IrcProxyType.none;
+    _encoding = normalizeIrcEncoding(initial?.encoding);
+    _encodingUtf8Fallback = initial?.encodingUtf8Fallback ?? false;
   }
 
   Future<void> _loadProfiles() async {
@@ -590,6 +599,43 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
                   value: _useTls,
                   onChanged: (value) => setState(() => _useTls = value),
                 ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  key: const Key('network-form-encoding'),
+                  initialValue: _encoding,
+                  decoration: const InputDecoration(
+                    labelText: 'Text encoding',
+                    helperText:
+                        'UTF-8 works for modern networks; pick a legacy '
+                        'charset only if text shows garbled characters.',
+                  ),
+                  items: [
+                    for (final option in supportedIrcEncodings)
+                      DropdownMenuItem<String>(
+                        value: option.label,
+                        child: Text(option.name),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() => _encoding = value);
+                  },
+                ),
+                if (_encoding != defaultIrcEncoding)
+                  SwitchListTile(
+                    key: const Key('network-form-encoding-utf8-fallback'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Prefer UTF-8 (fallback to encoding)'),
+                    subtitle: const Text(
+                      'Decode UTF-8 lines normally and use the legacy '
+                      'charset only for non-UTF-8 lines. Sends UTF-8.',
+                    ),
+                    value: _encodingUtf8Fallback,
+                    onChanged: (value) =>
+                        setState(() => _encodingUtf8Fallback = value),
+                  ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Auto connect'),
@@ -785,6 +831,9 @@ class _NetworkFormScreenState extends State<NetworkFormScreen> {
         clientPrivateKeyPem: _clientKeyController.text,
         clientPkcs12Base64: _clientPkcs12Base64,
         clientKeyPassphrase: _clientKeyPassphraseController.text,
+        encoding: _encoding,
+        encodingUtf8Fallback:
+            _encoding != defaultIrcEncoding && _encodingUtf8Fallback,
       ),
     );
   }

@@ -159,6 +159,8 @@ class NetworkListScreen extends StatelessWidget {
       clientPrivateKeyPem: result.clientPrivateKeyPem,
       clientPkcs12Base64: result.clientPkcs12Base64,
       clientKeyPassphrase: result.clientKeyPassphrase,
+      encoding: result.encoding,
+      encodingUtf8Fallback: result.encodingUtf8Fallback,
       networkId: initialValue?.id,
     );
   }
