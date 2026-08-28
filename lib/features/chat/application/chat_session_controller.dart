@@ -1314,8 +1314,14 @@ class ChatSessionController extends ChangeNotifier {
     await _startOutgoingDccSend(nick: normalizedNick, filePath: normalizedPath);
   }
 
-  Future<void> closeActiveDccSession() async {
-    final session = activeDccSession;
+  Future<void> closeActiveDccSession() {
+    return closeDccSessionByTab(activeTabId);
+  }
+
+  /// Closes the DCC session bound to [tabId] (used by the transfers modal,
+  /// which can act on any session, not just the active tab's).
+  Future<void> closeDccSessionByTab(String tabId) async {
+    final session = _dccSessions[tabId];
     if (session == null) {
       return;
     }

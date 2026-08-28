@@ -225,6 +225,17 @@ class _ChatScreenState extends State<ChatScreen> {
                   icon: const Icon(Icons.format_list_bulleted),
                   tooltip: 'Channel list',
                 ),
+                if (_controller.dccSessions.isNotEmpty)
+                  IconButton(
+                    key: const Key('chat-dcc-transfers'),
+                    onPressed: _openDccTransfers,
+                    icon: Badge.count(
+                      count: _activeDccTransferCount,
+                      isLabelVisible: _activeDccTransferCount > 0,
+                      child: const Icon(Icons.swap_vert_circle_outlined),
+                    ),
+                    tooltip: 'DCC transfers',
+                  ),
                 IconButton(
                   onPressed: _openSettings,
                   icon: const Icon(Icons.tune),
@@ -933,6 +944,27 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       isScrollControlled: true,
       builder: (context) => _HistoryToolsSheet(controller: _controller),
+    );
+  }
+
+  /// Sessions still doing work (pending offers or live connections).
+  int get _activeDccTransferCount => _controller.dccSessions
+      .where(
+        (session) => switch (session.status) {
+          DccSessionStatus.pending ||
+          DccSessionStatus.offering ||
+          DccSessionStatus.connecting ||
+          DccSessionStatus.connected => true,
+          DccSessionStatus.closed || DccSessionStatus.failed => false,
+        },
+      )
+      .length;
+
+  Future<void> _openDccTransfers() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _DccTransfersSheet(controller: _controller),
     );
   }
 
@@ -2077,6 +2109,134 @@ class _DccSessionBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Bottom sheet listing every DCC session of this network's controller with
+/// live progress and per-session actions.
+class _DccTransfersSheet extends StatelessWidget {
+  const _DccTransfersSheet({required this.controller});
+
+  final ChatSessionController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final sessions = controller.dccSessions;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'DCC transfers',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 12),
+                if (sessions.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: Text('No DCC sessions.')),
+                  )
+                else
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: sessions.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, index) => _DccTransferRow(
+                        session: sessions[index],
+                        controller: controller,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DccTransferRow extends StatelessWidget {
+  const _DccTransferRow({required this.session, required this.controller});
+
+  final DccSession session;
+  final ChatSessionController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDone =
+        session.status == DccSessionStatus.closed ||
+        session.status == DccSessionStatus.failed;
+    final size = session.size;
+    final progress = (size != null && size > 0)
+        ? (session.bytesTransferred / size).clamp(0.0, 1.0)
+        : null;
+    final title = switch (session.type) {
+      DccSessionType.chat => 'CHAT with ${session.peerNick}',
+      DccSessionType.send =>
+        '${session.direction == 'incoming' ? '⬇' : '⬆'} '
+            '${session.filename ?? 'file'} • ${session.peerNick}',
+      DccSessionType.unknown => 'DCC • ${session.peerNick}',
+    };
+    final subtitle = session.type == DccSessionType.send
+        ? _dccTransferSubtitle(session)
+        : 'Status: ${session.status.name}'
+              '${session.error == null ? '' : ' • ${session.error}'}';
+    return ListTile(
+      key: Key('dcc-transfer-row-${session.tabId}'),
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(switch (session.status) {
+        DccSessionStatus.failed => Icons.error_outline,
+        DccSessionStatus.closed => Icons.check_circle_outline,
+        _ =>
+          session.type == DccSessionType.chat
+              ? Icons.chat_outlined
+              : Icons.swap_vert,
+      }),
+      title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+          if (progress != null && !isDone) ...[
+            const SizedBox(height: 4),
+            LinearProgressIndicator(value: progress),
+          ],
+        ],
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            key: Key('dcc-transfer-open-${session.tabId}'),
+            tooltip: 'Open tab',
+            icon: const Icon(Icons.open_in_new),
+            onPressed: () {
+              controller.selectTab(session.tabId);
+              Navigator.of(context).pop();
+            },
+          ),
+          if (!isDone)
+            IconButton(
+              key: Key('dcc-transfer-close-${session.tabId}'),
+              tooltip: 'Cancel',
+              icon: const Icon(Icons.close),
+              onPressed: () => controller.closeDccSessionByTab(session.tabId),
+            ),
+        ],
+      ),
+      onTap: () {
+        controller.selectTab(session.tabId);
+        Navigator.of(context).pop();
+      },
     );
   }
 }

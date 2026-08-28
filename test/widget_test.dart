@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:androidircx/app/app.dart';
 import 'package:androidircx/core/models/app_settings.dart';
+import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/core/presets/server_preset_service.dart';
@@ -1565,6 +1566,56 @@ void main() {
 
     expect(find.text('Accept'), findsNothing);
     expect(find.text('Close'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('lists dcc sessions in the transfers modal', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    // No sessions yet -> no transfers button in the app bar.
+    expect(find.byKey(const Key('chat-dcc-transfers')), findsNothing);
+
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :DCC SEND notes.txt 2130706433 5002 2048',
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('chat-dcc-transfers')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('chat-dcc-transfers')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('DCC transfers'), findsOneWidget);
+    expect(find.textContaining('notes.txt'), findsWidgets);
+
+    final session = controller.dccSessions.single;
+    await tester.tap(find.byKey(Key('dcc-transfer-close-${session.tabId}')));
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.dccSessions.single.status,
+      anyOf(DccSessionStatus.closed, DccSessionStatus.failed),
+    );
 
     controller.dispose();
   });
