@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 
 class JoinChannelRequest {
-  const JoinChannelRequest({
-    required this.channel,
-  });
+  const JoinChannelRequest({required this.channel});
 
   final String channel;
 }
@@ -46,9 +44,9 @@ class _JoinChannelDialogState extends State<JoinChannelDialog> {
         ),
         FilledButton(
           onPressed: () {
-            Navigator.of(context).pop(
-              JoinChannelRequest(channel: _controller.text.trim()),
-            );
+            Navigator.of(
+              context,
+            ).pop(JoinChannelRequest(channel: _controller.text.trim()));
           },
           child: const Text('Join'),
         ),

@@ -13,8 +13,7 @@ class ChannelNotesRepository {
 
   final Future<SharedPreferences> Function() _prefsLoader;
 
-  String _compositeKey(String network, String channel) =>
-      '$network::$channel';
+  String _compositeKey(String network, String channel) => '$network::$channel';
 
   Future<Map<String, String>> _readAll(SharedPreferences prefs) async {
     final raw = prefs.getString(storageKey);
@@ -24,9 +23,7 @@ class ChannelNotesRepository {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is Map) {
-        return decoded.map(
-          (key, value) => MapEntry('$key', '${value ?? ''}'),
-        );
+        return decoded.map((key, value) => MapEntry('$key', '${value ?? ''}'));
       }
     } catch (_) {
       // Corrupt blob: start fresh rather than throw.

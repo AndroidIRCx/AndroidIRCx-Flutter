@@ -84,10 +84,7 @@ void main() {
     transport.emit(':bob!id@host JOIN #flutter');
     await Future<void>.delayed(Duration.zero);
 
-    expect(
-      transport.sentLines.where((l) => l.startsWith('MODE')),
-      isEmpty,
-    );
+    expect(transport.sentLines.where((l) => l.startsWith('MODE')), isEmpty);
     controller.dispose();
   });
 
@@ -107,9 +104,7 @@ void main() {
 
     await controller.handleComposerSubmit('/unautovoice bob');
     expect(
-      controller.autoModeEntries.where(
-        (e) => e.type == UserListType.autoVoice,
-      ),
+      controller.autoModeEntries.where((e) => e.type == UserListType.autoVoice),
       isEmpty,
     );
     expect(controller.autoModeEntries, hasLength(1));

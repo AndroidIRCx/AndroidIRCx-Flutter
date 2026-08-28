@@ -2,10 +2,8 @@ import 'package:androidircx/core/models/irc_message.dart';
 import 'package:androidircx/features/chat/presentation/chat_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-IrcMessageAttachment att(
-  IrcMessageAttachmentType type, {
-  String? uri,
-}) => IrcMessageAttachment(type: type, label: '', uri: uri);
+IrcMessageAttachment att(IrcMessageAttachmentType type, {String? uri}) =>
+    IrcMessageAttachment(type: type, label: '', uri: uri);
 
 void main() {
   test('null uri means no action', () {

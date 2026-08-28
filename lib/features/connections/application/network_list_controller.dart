@@ -12,8 +12,7 @@ class NetworkListController extends ChangeNotifier {
     CertificateStore? certificateStore,
   }) : _repository = repository,
        _certificateStore =
-           certificateStore ??
-           CertificateStore(FlutterSecureSecretStorage());
+           certificateStore ?? CertificateStore(FlutterSecureSecretStorage());
 
   final NetworkRepository _repository;
   final CertificateStore _certificateStore;
@@ -62,6 +61,8 @@ class NetworkListController extends ChangeNotifier {
     String? clientPrivateKeyPem,
     String? clientPkcs12Base64,
     String? clientKeyPassphrase,
+    String encoding = 'utf-8',
+    bool encodingUtf8Fallback = false,
     String? networkId,
   }) async {
     final network = NetworkConfig(
@@ -97,6 +98,8 @@ class NetworkListController extends ChangeNotifier {
       proxyPassword: (proxyPassword ?? '').trim().isEmpty
           ? null
           : proxyPassword,
+      encoding: encoding,
+      encodingUtf8Fallback: encodingUtf8Fallback,
     );
 
     await _repository.saveNetwork(network);
@@ -133,6 +136,43 @@ class NetworkListController extends ChangeNotifier {
 
   Future<void> deleteNetwork(String networkId) async {
     await _repository.deleteNetwork(networkId);
+    await load();
+  }
+
+  /// Adds or removes [channel] from a network's auto-join list without
+  /// touching any other config (used by the per-channel settings screen).
+  Future<void> setChannelAutoJoin({
+    required String networkId,
+    required String channel,
+    required bool autoJoin,
+  }) async {
+    final networks = await _repository.loadNetworks();
+    NetworkConfig? network;
+    for (final item in networks) {
+      if (item.id == networkId) {
+        network = item;
+        break;
+      }
+    }
+    if (network == null) {
+      return;
+    }
+    final normalized = channel.startsWith('#') ? channel : '#$channel';
+    final channels = [...network.autoJoinChannels];
+    final already = channels.any(
+      (item) => item.toLowerCase() == normalized.toLowerCase(),
+    );
+    if (autoJoin == already) {
+      return;
+    }
+    if (autoJoin) {
+      channels.add(normalized);
+    } else {
+      channels.removeWhere(
+        (item) => item.toLowerCase() == normalized.toLowerCase(),
+      );
+    }
+    await _repository.saveNetwork(network.copyWith(autoJoinChannels: channels));
     await load();
   }
 

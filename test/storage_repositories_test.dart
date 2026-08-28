@@ -630,8 +630,32 @@ void main() {
       expect(settings.messageFontScale, 1.2);
       expect(settings.messageDensity, MessageDensity.compact);
       expect(settings.monospaceMessages, isTrue);
+      expect(settings.messageFontFamily, 'system');
       expect(settings.nickColorMode, NickColorMode.vivid);
     });
+
+    test('legacy monospace toggle migrates into the message font family', () {
+      // Stored settings from before messageFontFamily existed.
+      final settings = AppSettings.fromJson(<String, Object?>{
+        'monospaceMessages': true,
+      });
+      expect(settings.messageFontFamily, 'monospace');
+    });
+
+    test(
+      'settings repository saves and loads the message font family',
+      () async {
+        final repository = SharedPrefsSettingsRepository();
+
+        await repository.saveSettings(
+          const AppSettings(messageFontFamily: 'serif'),
+        );
+        final settings = await repository.loadSettings();
+
+        expect(settings.messageFontFamily, 'serif');
+        expect(settings.monospaceMessages, isFalse);
+      },
+    );
 
     test('chat session persistence saves tabs and history', () async {
       final persistence = ChatSessionPersistence();

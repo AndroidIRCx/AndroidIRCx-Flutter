@@ -1,9 +1,5 @@
 class CtcpMessage {
-  const CtcpMessage({
-    required this.isCtcp,
-    this.command,
-    this.args,
-  });
+  const CtcpMessage({required this.isCtcp, this.command, this.args});
 
   final bool isCtcp;
   final String? command;
@@ -13,7 +9,8 @@ class CtcpMessage {
 const _ctcpDelimiter = '\u0001';
 
 CtcpMessage parseCtcp(String message) {
-  if (!message.startsWith(_ctcpDelimiter) || !message.endsWith(_ctcpDelimiter)) {
+  if (!message.startsWith(_ctcpDelimiter) ||
+      !message.endsWith(_ctcpDelimiter)) {
     return const CtcpMessage(isCtcp: false);
   }
 

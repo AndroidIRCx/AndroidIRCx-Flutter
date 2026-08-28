@@ -16,12 +16,14 @@ List<IdentityProfile> normalizeProfiles(List<IdentityProfile> profiles) {
   final others = profiles.where(
     (profile) => profile.id != IdentityProfile.defaultProfileId,
   );
-  return List<IdentityProfile>.unmodifiable(
-    [IdentityProfile.defaultProfile, ...others],
-  );
+  return List<IdentityProfile>.unmodifiable([
+    IdentityProfile.defaultProfile,
+    ...others,
+  ]);
 }
 
-class SharedPrefsIdentityProfileRepository implements IdentityProfileRepository {
+class SharedPrefsIdentityProfileRepository
+    implements IdentityProfileRepository {
   static const _storageKey = 'androidircx.identityProfiles';
 
   @override
@@ -85,10 +87,10 @@ class SharedPrefsIdentityProfileRepository implements IdentityProfileRepository 
 
 class InMemoryIdentityProfileRepository implements IdentityProfileRepository {
   InMemoryIdentityProfileRepository([List<IdentityProfile> initial = const []])
-      : _profiles = [
-          for (final profile in initial)
-            if (profile.id != IdentityProfile.defaultProfileId) profile,
-        ];
+    : _profiles = [
+        for (final profile in initial)
+          if (profile.id != IdentityProfile.defaultProfileId) profile,
+      ];
 
   final List<IdentityProfile> _profiles;
 

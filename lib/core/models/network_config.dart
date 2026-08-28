@@ -37,6 +37,8 @@ class NetworkConfig {
     this.profileLabel,
     this.profileGroup,
     this.identityProfileId,
+    this.encoding = 'utf-8',
+    this.encodingUtf8Fallback = false,
   });
 
   final String id;
@@ -76,6 +78,16 @@ class NetworkConfig {
   /// SASL account override this network's identity on connect.
   final String? identityProfileId;
 
+  /// Character encoding for wire text (canonical lower-case label, e.g.
+  /// 'utf-8', 'windows-1251'). IRC has no in-band charset negotiation, so
+  /// legacy networks may need a non-UTF-8 charset.
+  final String encoding;
+
+  /// When true and [encoding] is a legacy charset, incoming lines are decoded
+  /// as UTF-8 first (falling back to the legacy charset per line) and
+  /// outgoing lines are sent as UTF-8.
+  final bool encodingUtf8Fallback;
+
   NetworkConfig copyWith({
     String? id,
     String? name,
@@ -106,6 +118,8 @@ class NetworkConfig {
     String? profileLabel,
     String? profileGroup,
     String? identityProfileId,
+    String? encoding,
+    bool? encodingUtf8Fallback,
   }) {
     return NetworkConfig(
       id: id ?? this.id,
@@ -137,6 +151,8 @@ class NetworkConfig {
       profileLabel: profileLabel ?? this.profileLabel,
       profileGroup: profileGroup ?? this.profileGroup,
       identityProfileId: identityProfileId ?? this.identityProfileId,
+      encoding: encoding ?? this.encoding,
+      encodingUtf8Fallback: encodingUtf8Fallback ?? this.encodingUtf8Fallback,
     );
   }
 
@@ -171,6 +187,8 @@ class NetworkConfig {
       'profileLabel': profileLabel,
       'profileGroup': profileGroup,
       'identityProfileId': identityProfileId,
+      'encoding': encoding,
+      'encodingUtf8Fallback': encodingUtf8Fallback,
     };
   }
 
@@ -227,6 +245,8 @@ class NetworkConfig {
       profileLabel: _nonEmptyString(json['profileLabel']),
       profileGroup: _nonEmptyString(json['profileGroup']),
       identityProfileId: _nonEmptyString(json['identityProfileId']),
+      encoding: _nonEmptyString(json['encoding'])?.toLowerCase() ?? 'utf-8',
+      encodingUtf8Fallback: (json['encodingUtf8Fallback'] as bool?) ?? false,
     );
   }
 

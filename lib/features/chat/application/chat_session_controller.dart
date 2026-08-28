@@ -15,6 +15,7 @@ import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/message_history_formatter.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_settings_repository.dart';
+import 'package:androidircx/features/chat/data/channel_notification_rules_repository.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
 import 'package:androidircx/features/chat/data/message_history_repository.dart';
 import 'package:androidircx/features/chat/data/user_list_entry.dart';
@@ -23,6 +24,7 @@ import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart'
 import 'package:androidircx/core/models/channel_list_entry.dart';
 import 'package:androidircx/core/security/certificate_store.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
+import 'package:androidircx/core/sound/sound_service.dart';
 import 'package:androidircx/irc/models/irc_message_frame.dart';
 import 'package:androidircx/irc/parser/ctcp.dart';
 import 'package:androidircx/irc/parser/dcc_parser.dart';
@@ -199,6 +201,8 @@ class ChatSessionController extends ChangeNotifier {
     SettingsRepository? settingsRepository,
     CommandService? commandService,
     UserListsRepository? userListsRepository,
+    SoundService? soundService,
+    ChannelNotificationRulesRepository? channelNotificationRulesRepository,
     int maxReconnectAttempts = 6,
     Duration reconnectBaseDelay = const Duration(seconds: 2),
     Duration reconnectMaxDelay = const Duration(seconds: 60),
@@ -216,6 +220,10 @@ class ChatSessionController extends ChangeNotifier {
            settingsRepository ?? SharedPrefsSettingsRepository(),
        _commandService = commandService ?? CommandService(),
        _userListsRepository = userListsRepository,
+       _soundService = soundService,
+       _channelNotificationRulesRepository =
+           channelNotificationRulesRepository ??
+           ChannelNotificationRulesRepository(),
        _maxReconnectAttempts = maxReconnectAttempts,
        _reconnectBaseDelay = reconnectBaseDelay,
        _reconnectMaxDelay = reconnectMaxDelay,
@@ -241,6 +249,15 @@ class ChatSessionController extends ChangeNotifier {
   final SettingsRepository _settingsRepository;
   final CommandService _commandService;
   final UserListsRepository? _userListsRepository;
+  final SoundService? _soundService;
+  final ChannelNotificationRulesRepository _channelNotificationRulesRepository;
+
+  /// Per-tab notification overrides keyed by lower-case target name.
+  final Map<String, ChannelNotificationRule> _channelNotificationRules = {};
+
+  /// Last connection phase a sound was played for, so repeated snapshots in
+  /// the same phase (or reconnect retries) do not re-trigger sounds.
+  ConnectionPhase? _lastSoundedPhase;
   List<UserListEntry> _userListEntries = const <UserListEntry>[];
   bool _userListEntriesLoaded = false;
   final int _maxReconnectAttempts;
@@ -479,6 +496,9 @@ class ChatSessionController extends ChangeNotifier {
   int get activityCount => _tabs.where((tab) => tab.hasActivity).length;
   bool get hasActivity => activityCount > 0;
   String? get activeChannelTopic => _channelTopics[activeTabId];
+
+  /// Topic for any tab (used by the per-channel settings screen).
+  String? topicForTab(String tabId) => _channelTopics[tabId];
   String? get activeChannelModes => _channelModes[activeTabId];
   DateTime? get activeReadMarker => _readMarkers[activeTabId];
   List<String> get activeTypingUsers => List<String>.unmodifiable(
@@ -614,6 +634,32 @@ class ChatSessionController extends ChangeNotifier {
       summary[entry.key] = entry.value.length;
     }
     return summary;
+  }
+
+  /// Sends a reaction to [message] over TAGMSG and records it locally so the
+  /// chip shows immediately. Returns false when the message has no msgid or
+  /// its tab cannot receive reactions.
+  Future<bool> reactToMessage(IrcMessage message, String emoji) async {
+    final msgid = (message.tags['msgid'] ?? '').trim();
+    final normalizedEmoji = emoji.trim();
+    if (msgid.isEmpty || normalizedEmoji.isEmpty) {
+      return false;
+    }
+    final tab = _findTab(message.tabId);
+    if (tab == null ||
+        (tab.type != ChatTabType.channel && tab.type != ChatTabType.query)) {
+      return false;
+    }
+    await _ircService.sendReaction(
+      target: tab.name,
+      msgid: msgid,
+      emoji: normalizedEmoji,
+    );
+    // Record locally; the echoed TAGMSG re-recording the same nick+emoji is
+    // idempotent because reactions are per-emoji nick sets.
+    _recordReaction(msgid, normalizedEmoji, currentNick);
+    notifyListeners();
+    return true;
   }
 
   String userDetailsForNick(String nick) {
@@ -1068,6 +1114,7 @@ class ChatSessionController extends ChangeNotifier {
       await _commandService.load();
       await _loadPersistedState();
       await _loadAutoModeEntries();
+      await _loadChannelNotificationRules();
       if (_isDisposed) {
         return;
       }
@@ -1200,11 +1247,30 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     final normalizedReply = (replyTo ?? '').trim();
+    // Queue only when clearly offline; while connecting/registering the
+    // transport is live and sends keep their previous behavior.
+    final isOffline = switch (_connection.phase) {
+      ConnectionPhase.idle ||
+      ConnectionPhase.disconnected ||
+      ConnectionPhase.error ||
+      ConnectionPhase.reconnecting => true,
+      _ => false,
+    };
+    if (isOffline) {
+      _queueOfflineMessage(
+        tabId: activeTab.id,
+        target: activeTab.name,
+        text: text,
+        replyTo: normalizedReply.isEmpty ? null : normalizedReply,
+      );
+      return;
+    }
     await _ircService.sendPrivmsg(
       target: activeTab.name,
       text: text,
       replyTo: normalizedReply.isEmpty ? null : normalizedReply,
     );
+    _playSound(SoundEvent.send);
     if (!_ircService.enabledCapabilities.contains('echo-message')) {
       _appendMessage(
         tabId: activeTab.id,
@@ -1305,8 +1371,14 @@ class ChatSessionController extends ChangeNotifier {
     await _startOutgoingDccSend(nick: normalizedNick, filePath: normalizedPath);
   }
 
-  Future<void> closeActiveDccSession() async {
-    final session = activeDccSession;
+  Future<void> closeActiveDccSession() {
+    return closeDccSessionByTab(activeTabId);
+  }
+
+  /// Closes the DCC session bound to [tabId] (used by the transfers modal,
+  /// which can act on any session, not just the active tab's).
+  Future<void> closeDccSessionByTab(String tabId) async {
+    final session = _dccSessions[tabId];
     if (session == null) {
       return;
     }
@@ -1967,6 +2039,8 @@ class ChatSessionController extends ChangeNotifier {
 
   Future<void> reloadSettings() async {
     _settings = await _settingsRepository.loadSettings();
+    // Pick up alias edits made in Settings → Command aliases.
+    await _commandService.load();
     _applySettingsToServices();
     notifyListeners();
   }
@@ -2041,6 +2115,10 @@ class ChatSessionController extends ChangeNotifier {
     }
 
     if (snapshot.phase == ConnectionPhase.connected) {
+      if (_lastSoundedPhase != ConnectionPhase.connected) {
+        _lastSoundedPhase = ConnectionPhase.connected;
+        _playSound(SoundEvent.login);
+      }
       _autoHistoryRequestedChannels.clear();
       _reconnectAttempt = 0;
       _pendingReconnectDelay = null;
@@ -2055,6 +2133,12 @@ class ChatSessionController extends ChangeNotifier {
 
     if (snapshot.phase == ConnectionPhase.error ||
         snapshot.phase == ConnectionPhase.disconnected) {
+      // Only beep on the drop from an established connection, not on every
+      // failed reconnect attempt.
+      if (_lastSoundedPhase == ConnectionPhase.connected) {
+        _lastSoundedPhase = snapshot.phase;
+        _playSound(SoundEvent.disconnect);
+      }
       _autoHistoryRequestedChannels.clear();
       _autoJoinAttempted = false;
       _serviceAuthFallbackAttempted = false;
@@ -2062,9 +2146,92 @@ class ChatSessionController extends ChangeNotifier {
     }
   }
 
+  /// Fire-and-forget event sound; failures never affect message handling.
+  void _playSound(SoundEvent event) {
+    final service = _soundService;
+    if (service == null) {
+      return;
+    }
+    unawaited(service.playEvent(event));
+  }
+
   Future<void> _runPostRegistrationActions() async {
     await _sendServiceAuthFallbackIfNeeded();
     await _autoJoinConfiguredChannels();
+    await _flushOfflineOutbox();
+  }
+
+  /// Messages typed while disconnected, sent in order after the next
+  /// successful registration (after auto-join, so channel sends follow the
+  /// JOIN on the wire).
+  final List<({String tabId, String target, String text, String? replyTo})>
+  _offlineOutbox = [];
+  static const int _maxOfflineOutbox = 50;
+
+  int get queuedOfflineMessages => _offlineOutbox.length;
+
+  void _queueOfflineMessage({
+    required String tabId,
+    required String target,
+    required String text,
+    String? replyTo,
+  }) {
+    if (_offlineOutbox.length >= _maxOfflineOutbox) {
+      _appendMessage(
+        tabId: tabId,
+        sender: 'error',
+        content: 'Offline queue is full; message dropped.',
+        kind: IrcMessageKind.system,
+      );
+      notifyListeners();
+      return;
+    }
+    _offlineOutbox.add((
+      tabId: tabId,
+      target: target,
+      text: text,
+      replyTo: replyTo,
+    ));
+    _appendMessage(
+      tabId: tabId,
+      sender: '*',
+      content: 'Not connected — message queued and will be sent on reconnect.',
+      kind: IrcMessageKind.system,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _flushOfflineOutbox() async {
+    if (_offlineOutbox.isEmpty) {
+      return;
+    }
+    final pending = List.of(_offlineOutbox);
+    _offlineOutbox.clear();
+    for (final item in pending) {
+      if (_connection.phase != ConnectionPhase.connected) {
+        // Connection dropped mid-flush: requeue the rest for the next cycle.
+        _offlineOutbox.add(item);
+        continue;
+      }
+      await _ircService.sendPrivmsg(
+        target: item.target,
+        text: item.text,
+        replyTo: item.replyTo,
+      );
+      if (!_ircService.enabledCapabilities.contains('echo-message')) {
+        _appendMessage(
+          tabId: item.tabId,
+          sender: _ircService.currentNick ?? network.nickname,
+          content: item.text,
+          tags: {
+            if ((item.replyTo ?? '').isNotEmpty) 'draft/reply': item.replyTo!,
+          },
+          isOwn: true,
+        );
+      }
+    }
+    unawaited(_persistState());
+    notifyListeners();
   }
 
   Future<void> _sendServiceAuthFallbackIfNeeded() async {
@@ -4674,6 +4841,7 @@ class ChatSessionController extends ChangeNotifier {
           if (nick == (_ircService.currentNick ?? network.nickname)) {
             _activeTabId = tab.id;
           } else {
+            _playSound(SoundEvent.join);
             _maybeApplyAutoModes(
               channel,
               nick,
@@ -4720,6 +4888,9 @@ class ChatSessionController extends ChangeNotifier {
                 '$kickedNick was kicked from $channel by ${frame.senderNick ?? '*'}${frame.trailing == null ? '' : ' (${frame.trailing})'}',
             kind: IrcMessageKind.system,
           );
+          if (_isSelfNick(kickedNick)) {
+            _playSound(SoundEvent.kick);
+          }
           if (_isSelfNick(kickedNick) &&
               _settings.autoRejoinOnKick &&
               _connection.phase == ConnectionPhase.connected) {
@@ -5744,6 +5915,7 @@ class ChatSessionController extends ChangeNotifier {
       kind: IrcMessageKind.system,
     );
     _markActivityIfInactive(tabId);
+    _playSound(SoundEvent.ctcp);
     unawaited(_respondToCtcpRequest(senderNick, command, ctcp.args));
   }
 
@@ -6382,6 +6554,35 @@ class ChatSessionController extends ChangeNotifier {
     return appended;
   }
 
+  /// Per-tab notification override for [target] (channel or query name).
+  ChannelNotificationRule notificationRuleFor(String target) {
+    return _channelNotificationRules[target.toLowerCase()] ??
+        ChannelNotificationRule.defaults;
+  }
+
+  Future<void> setChannelNotificationRule(
+    String target,
+    ChannelNotificationRule rule,
+  ) async {
+    final key = target.toLowerCase();
+    if (rule == ChannelNotificationRule.defaults) {
+      _channelNotificationRules.remove(key);
+    } else {
+      _channelNotificationRules[key] = rule;
+    }
+    notifyListeners();
+    await _channelNotificationRulesRepository.setRule(network.id, target, rule);
+  }
+
+  Future<void> _loadChannelNotificationRules() async {
+    final rules = await _channelNotificationRulesRepository.loadRules(
+      network.id,
+    );
+    _channelNotificationRules
+      ..clear()
+      ..addAll(rules);
+  }
+
   void _emitIncomingMessageNotification(IrcMessage? message) {
     if (message == null || message.isOwn || message.isPlayback) {
       return;
@@ -6396,10 +6597,39 @@ class ChatSessionController extends ChangeNotifier {
       return;
     }
 
-    final channelKind = _notificationKindForMessage(message, tab);
+    final rule =
+        (tab.type == ChatTabType.channel || tab.type == ChatTabType.query)
+        ? notificationRuleFor(tab.name)
+        : ChannelNotificationRule.defaults;
+    if (rule == ChannelNotificationRule.mute) {
+      return;
+    }
+
+    var channelKind = _notificationKindForMessage(message, tab);
+    // "All messages" promotes regular channel chat to a highlight-channel
+    // notification; by default channels only notify on highlights/media.
+    if (channelKind == null &&
+        rule == ChannelNotificationRule.all &&
+        tab.type == ChatTabType.channel &&
+        (message.kind == IrcMessageKind.chat ||
+            message.kind == IrcMessageKind.action)) {
+      channelKind = ForegroundNotificationChannelKind.highlights;
+    }
     if (channelKind == null) {
       return;
     }
+    if (rule == ChannelNotificationRule.mentionsOnly &&
+        channelKind != ForegroundNotificationChannelKind.highlights) {
+      return;
+    }
+
+    // Sounds are independent of the notification permission gating below.
+    _playSound(switch (channelKind) {
+      ForegroundNotificationChannelKind.highlights => SoundEvent.mention,
+      ForegroundNotificationChannelKind.dccTransfers => SoundEvent.ring,
+      _ when tab.type == ChatTabType.notice => SoundEvent.notice,
+      _ => SoundEvent.privateMessage,
+    });
 
     _emitNotification(
       channelKind: channelKind,
@@ -6420,6 +6650,7 @@ class ChatSessionController extends ChangeNotifier {
     if (normalizedBody.isEmpty) {
       return;
     }
+    _playSound(SoundEvent.fail);
     _emitNotification(
       channelKind: ForegroundNotificationChannelKind.errors,
       tabId: tabId,

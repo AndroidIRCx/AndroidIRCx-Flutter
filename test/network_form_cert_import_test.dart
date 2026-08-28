@@ -15,8 +15,7 @@ class _FakePicker implements DccFilePicker {
 
 const _cert =
     '-----BEGIN CERTIFICATE-----\nMIIByyCERT\n-----END CERTIFICATE-----';
-const _key =
-    '-----BEGIN PRIVATE KEY-----\nMIIEvKEY\n-----END PRIVATE KEY-----';
+const _key = '-----BEGIN PRIVATE KEY-----\nMIIEvKEY\n-----END PRIVATE KEY-----';
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -78,10 +77,7 @@ void main() {
     await tester.tap(find.byKey(const Key('network-form-import-cert')));
     await tester.pumpAndSettle();
 
-    expect(
-      find.byKey(const Key('network-form-pkcs12-loaded')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const Key('network-form-pkcs12-loaded')), findsOneWidget);
     expect(find.text('PKCS#12 bundle loaded'), findsOneWidget);
   });
 }

@@ -23,7 +23,10 @@ class PemBundle {
   /// [text]. Returns an empty bundle when no PEM blocks are present (e.g. the
   /// file is binary DER/PKCS#12).
   static PemBundle parse(String text) {
-    final certs = _certificate.allMatches(text).map((m) => m.group(0)!).toList();
+    final certs = _certificate
+        .allMatches(text)
+        .map((m) => m.group(0)!)
+        .toList();
     final keyMatch = _privateKey.firstMatch(text);
     return PemBundle(
       certificate: certs.isEmpty ? null : certs.join('\n'),

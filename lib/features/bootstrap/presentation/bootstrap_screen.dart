@@ -5,6 +5,8 @@ import 'package:androidircx/core/review/review_prompt_service.dart';
 import 'package:androidircx/core/security/history_encryption_key_manager.dart';
 import 'package:androidircx/core/security/local_auth_history_unlock.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
+import 'package:androidircx/core/sound/audioplayers_sound_player.dart';
+import 'package:androidircx/core/sound/sound_service.dart';
 import 'package:androidircx/core/storage/network_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_network_repository.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
@@ -34,10 +36,14 @@ class BootstrapScreen extends StatefulWidget {
     this.foregroundConnectionService =
         const MethodChannelForegroundConnectionService(),
     this.historyRepositoryLoader,
+    this.soundService,
   });
 
   final NetworkRepository? networkRepository;
   final ForegroundConnectionService foregroundConnectionService;
+
+  /// Overridable for tests; defaults to the audioplayers-backed service.
+  final SoundService? soundService;
 
   /// Overridable for tests; defaults to the biometric/PIN-gated encrypted
   /// history repository. When it returns null (e.g. auth declined), sessions
@@ -54,6 +60,7 @@ class _BootstrapScreenState extends State<BootstrapScreen>
   late final NetworkListController _controller;
   late final SessionRegistry _sessionRegistry;
   final UserListsRepository _userListsRepository = UserListsRepository();
+  late final SoundService _soundService;
   MessageHistoryRepository? _historyRepository;
   bool _bootstrapComplete = false;
 
@@ -62,12 +69,16 @@ class _BootstrapScreenState extends State<BootstrapScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _foregroundConnectionService = widget.foregroundConnectionService;
+    _soundService =
+        widget.soundService ?? SoundService(player: AudioplayersSoundPlayer());
+    unawaited(_soundService.load());
     _sessionRegistry = SessionRegistry(
       foregroundService: _foregroundConnectionService,
       sessionFactory: (network) => ChatSessionController(
         network: network,
         historyRepository: _historyRepository,
         userListsRepository: _userListsRepository,
+        soundService: _soundService,
       ),
     );
     _controller = NetworkListController(

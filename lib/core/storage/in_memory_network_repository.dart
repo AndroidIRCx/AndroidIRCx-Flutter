@@ -2,9 +2,8 @@ import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/storage/network_repository.dart';
 
 class InMemoryNetworkRepository implements NetworkRepository {
-  InMemoryNetworkRepository([
-    List<NetworkConfig>? seed,
-  ]) : _networks = List<NetworkConfig>.from(seed ?? _defaultSeed);
+  InMemoryNetworkRepository([List<NetworkConfig>? seed])
+    : _networks = List<NetworkConfig>.from(seed ?? _defaultSeed);
 
   final List<NetworkConfig> _networks;
 
@@ -28,9 +27,7 @@ class InMemoryNetworkRepository implements NetworkRepository {
 
   @override
   Future<List<NetworkConfig>> loadNetworks() async {
-    return List<NetworkConfig>.unmodifiable(
-      _networks.map(_normalizeNetwork),
-    );
+    return List<NetworkConfig>.unmodifiable(_networks.map(_normalizeNetwork));
   }
 
   @override

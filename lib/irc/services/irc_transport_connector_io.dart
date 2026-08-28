@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/security/certificate_store.dart';
+import 'package:androidircx/irc/encoding/irc_encoding.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
 
 Future<IrcTransport> connectDefaultTransport(
@@ -50,11 +51,21 @@ class SocketIrcTransport implements IrcTransport {
     this._socket, {
     StreamSubscription<Uint8List>? subscription,
     List<int> initialData = const <int>[],
-  }) {
+    String encoding = defaultIrcEncoding,
+    bool encodingUtf8Fallback = false,
+  }) : _encoding = normalizeIrcEncoding(encoding),
+       _encodingUtf8Fallback = encodingUtf8Fallback {
     _byteController = StreamController<List<int>>();
+    final lineSplitter = IrcByteLineSplitter();
     lines = _byteController.stream
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
+        .expand(lineSplitter.addChunk)
+        .map(
+          (lineBytes) => decodeIrcLine(
+            lineBytes,
+            encoding: _encoding,
+            utf8Fallback: _encodingUtf8Fallback,
+          ),
+        )
         .where((line) => line.isNotEmpty)
         .asBroadcastStream();
 
@@ -75,6 +86,8 @@ class SocketIrcTransport implements IrcTransport {
   }
 
   final Socket _socket;
+  final String _encoding;
+  final bool _encodingUtf8Fallback;
   late final StreamController<List<int>> _byteController;
   late final StreamSubscription<Uint8List> _subscription;
 
@@ -92,7 +105,11 @@ class SocketIrcTransport implements IrcTransport {
       network,
       securityContext: securityContext,
     );
-    return SocketIrcTransport._(socket);
+    return SocketIrcTransport._(
+      socket,
+      encoding: network.encoding,
+      encodingUtf8Fallback: network.encodingUtf8Fallback,
+    );
   }
 
   @override
@@ -106,7 +123,16 @@ class SocketIrcTransport implements IrcTransport {
 
   @override
   Future<void> sendLine(String line) async {
-    _socket.write('$line\r\n');
+    final legacyBytes = encodeIrcLine(
+      line,
+      encoding: _encoding,
+      utf8Fallback: _encodingUtf8Fallback,
+    );
+    if (legacyBytes != null) {
+      _socket.add(<int>[...legacyBytes, 0x0d, 0x0a]);
+    } else {
+      _socket.write('$line\r\n');
+    }
     await _socket.flush();
   }
 
@@ -146,7 +172,11 @@ class SocketIrcTransport implements IrcTransport {
           socket,
           host: network.host,
         );
-        return SocketIrcTransport._(secureSocket);
+        return SocketIrcTransport._(
+          secureSocket,
+          encoding: network.encoding,
+          encodingUtf8Fallback: network.encodingUtf8Fallback,
+        );
       }
 
       final subscription = reader.takeSubscription();
@@ -154,6 +184,8 @@ class SocketIrcTransport implements IrcTransport {
         socket,
         subscription: subscription,
         initialData: remainingData,
+        encoding: network.encoding,
+        encodingUtf8Fallback: network.encodingUtf8Fallback,
       );
     } catch (_) {
       await reader.cancel();

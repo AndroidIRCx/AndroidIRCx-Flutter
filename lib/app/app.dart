@@ -6,6 +6,8 @@ import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/core/platform/screen_security.dart';
 import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/core/settings/app_settings_controller.dart';
+import 'package:androidircx/core/sound/audioplayers_sound_player.dart';
+import 'package:androidircx/core/sound/sound_service.dart';
 import 'package:androidircx/core/storage/network_repository.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/core/storage/shared_prefs_network_repository.dart';
@@ -31,6 +33,7 @@ class AndroidIrcxApp extends StatefulWidget {
     this.monetizationController,
     this.rewardedAdService,
     this.purchaseService,
+    this.soundService,
   });
 
   final NetworkRepository? networkRepository;
@@ -41,6 +44,9 @@ class AndroidIrcxApp extends StatefulWidget {
   final RewardedAdService? rewardedAdService;
   final StorePurchaseService? purchaseService;
 
+  /// Overridable for tests; defaults to the audioplayers-backed service.
+  final SoundService? soundService;
+
   @override
   State<AndroidIrcxApp> createState() => _AndroidIrcxAppState();
 }
@@ -50,6 +56,7 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
   late final MonetizationController _monetizationController;
   late final RewardedAdService _rewardedAdService;
   late final StorePurchaseService _purchaseService;
+  late final SoundService _soundService;
   late final bool _ownsMonetizationController;
   late final bool _ownsRewardedAdService;
   late final bool _ownsPurchaseService;
@@ -73,6 +80,9 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
     _purchaseService =
         widget.purchaseService ??
         StorePurchaseService(monetizationController: _monetizationController);
+    _soundService =
+        widget.soundService ?? SoundService(player: AudioplayersSoundPlayer());
+    unawaited(_soundService.load());
     _settingsController.addListener(_applySettingsSideEffects);
     _settingsController.load();
     unawaited(_monetizationController.initialize());
@@ -122,29 +132,32 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
       controller: _monetizationController,
       rewardedAdService: _rewardedAdService,
       purchaseService: _purchaseService,
-      child: AppSettingsScope(
-        controller: _settingsController,
-        child: AnimatedBuilder(
-          animation: _settingsController,
-          builder: (context, _) {
-            return MaterialApp(
-              title: 'AndroidIRCx Flutter',
-              debugShowCheckedModeBanner: false,
-              theme: buildAppTheme(_settingsController.settings),
-              builder: (context, child) => AppLockGate(
-                enabled:
-                    !_settingsController.isLoading &&
-                    _settingsController.settings.appLockEnabled,
-                child: MonetizationBanner(
-                  controller: _monetizationController,
-                  onboardingCompleted:
-                      _settingsController.settings.onboardingCompleted,
-                  child: child ?? const SizedBox.shrink(),
+      child: SoundScope(
+        service: _soundService,
+        child: AppSettingsScope(
+          controller: _settingsController,
+          child: AnimatedBuilder(
+            animation: _settingsController,
+            builder: (context, _) {
+              return MaterialApp(
+                title: 'AndroidIRCx Flutter',
+                debugShowCheckedModeBanner: false,
+                theme: buildAppTheme(_settingsController.settings),
+                builder: (context, child) => AppLockGate(
+                  enabled:
+                      !_settingsController.isLoading &&
+                      _settingsController.settings.appLockEnabled,
+                  child: MonetizationBanner(
+                    controller: _monetizationController,
+                    onboardingCompleted:
+                        _settingsController.settings.onboardingCompleted,
+                    child: child ?? const SizedBox.shrink(),
+                  ),
                 ),
-              ),
-              home: _buildHome(),
-            );
-          },
+                home: _buildHome(),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -171,6 +184,7 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
       networkRepository: widget.networkRepository,
       foregroundConnectionService: widget.foregroundConnectionService,
       historyRepositoryLoader: widget.historyRepositoryLoader,
+      soundService: _soundService,
     );
   }
 }

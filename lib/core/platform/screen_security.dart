@@ -4,8 +4,9 @@ import 'package:flutter/services.dart';
 class ScreenSecurity {
   const ScreenSecurity();
 
-  static const MethodChannel _channel =
-      MethodChannel('androidircx/screen_security');
+  static const MethodChannel _channel = MethodChannel(
+    'androidircx/screen_security',
+  );
 
   Future<void> setSecure(bool secure) async {
     try {

@@ -165,8 +165,8 @@ class _ProfileEditorDialogState extends State<_ProfileEditorDialog> {
       return;
     }
     final existing = widget.profile;
-    final id = existing?.id ??
-        'profile-${DateTime.now().microsecondsSinceEpoch}';
+    final id =
+        existing?.id ?? 'profile-${DateTime.now().microsecondsSinceEpoch}';
     Navigator.of(context).pop(
       IdentityProfile(
         id: id,

@@ -4,10 +4,12 @@ import 'package:androidircx/core/security/secret_storage.dart';
 import 'package:androidircx/core/storage/network_secret_keys.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const _certPem = '-----BEGIN CERTIFICATE-----\n'
+const _certPem =
+    '-----BEGIN CERTIFICATE-----\n'
     'MIIBmockCertBody0123456789ABCDEFabcdef+/==\n'
     '-----END CERTIFICATE-----';
-const _keyPem = '-----BEGIN PRIVATE KEY-----\n'
+const _keyPem =
+    '-----BEGIN PRIVATE KEY-----\n'
     'MIIEmockKeyBody0123456789ABCDEFabcdef+/==\n'
     '-----END PRIVATE KEY-----';
 
@@ -19,7 +21,10 @@ void main() {
 
       await store.save(
         'net-1',
-        const ClientCertificate(certificatePem: _certPem, privateKeyPem: _keyPem),
+        const ClientCertificate(
+          certificatePem: _certPem,
+          privateKeyPem: _keyPem,
+        ),
       );
 
       expect(await store.has('net-1'), isTrue);
@@ -96,7 +101,8 @@ void main() {
         () => validateClientCertificate(
           const ClientCertificate(
             certificatePem: _certPem,
-            privateKeyPem: '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----',
+            privateKeyPem:
+                '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----',
           ),
         ),
         throwsA(isA<CertificateFormatException>()),
@@ -104,11 +110,15 @@ void main() {
     });
 
     test('accepts RSA and EC private-key PEM labels', () {
-      const rsaKey = '-----BEGIN RSA PRIVATE KEY-----\nAAAABBBBCCCC+/==\n'
+      const rsaKey =
+          '-----BEGIN RSA PRIVATE KEY-----\nAAAABBBBCCCC+/==\n'
           '-----END RSA PRIVATE KEY-----';
       expect(
         () => validateClientCertificate(
-          const ClientCertificate(certificatePem: _certPem, privateKeyPem: rsaKey),
+          const ClientCertificate(
+            certificatePem: _certPem,
+            privateKeyPem: rsaKey,
+          ),
         ),
         returnsNormally,
       );
@@ -142,7 +152,10 @@ void main() {
       );
       await store.save(
         'net-1',
-        const ClientCertificate(certificatePem: _certPem, privateKeyPem: _keyPem),
+        const ClientCertificate(
+          certificatePem: _certPem,
+          privateKeyPem: _keyPem,
+        ),
       );
       final read = await store.read('net-1');
       expect(read!.isPkcs12, isFalse);

@@ -134,7 +134,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final nick = _nickname.text.trim().isEmpty
         ? 'AndroidIRCX'
         : _nickname.text.trim();
-    final alt = _altNick.text.trim().isEmpty ? '${nick}_' : _altNick.text.trim();
+    final alt = _altNick.text.trim().isEmpty
+        ? '${nick}_'
+        : _altNick.text.trim();
     final realName = _realName.text.trim().isEmpty
         ? 'AndroidIRCX User'
         : _realName.text.trim();
@@ -300,7 +302,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           color: theme.colorScheme.primary,
         ),
         const SizedBox(height: 16),
-        Text('Stay reachable in the background', style: theme.textTheme.titleMedium),
+        Text(
+          'Stay reachable in the background',
+          style: theme.textTheme.titleMedium,
+        ),
         const SizedBox(height: 8),
         Text(
           'Allow notifications so highlights and private messages can alert you, '
@@ -379,9 +384,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => Navigator.of(context).push<void>(
-            MaterialPageRoute<void>(
-              builder: (_) => const DataPrivacyScreen(),
-            ),
+            MaterialPageRoute<void>(builder: (_) => const DataPrivacyScreen()),
           ),
           icon: const Icon(Icons.privacy_tip_outlined),
           label: const Text('Read data & privacy details'),

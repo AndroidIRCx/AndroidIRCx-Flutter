@@ -139,10 +139,7 @@ void main() {
       session.createClientFinalMessage(
         'r=clientNonceServer,s=c2FsdHlTYWx0,i=4096',
       );
-      expect(
-        session.validateServerFinalMessage('e=invalid-proof'),
-        isFalse,
-      );
+      expect(session.validateServerFinalMessage('e=invalid-proof'), isFalse);
     });
   });
 }

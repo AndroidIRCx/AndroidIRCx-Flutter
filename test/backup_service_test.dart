@@ -33,9 +33,7 @@ void main() {
         saslPassword: 'saslsecret',
       ),
     ]);
-    final settings = _FakeSettings(
-      const AppSettings(monospaceMessages: true),
-    );
+    final settings = _FakeSettings(const AppSettings(monospaceMessages: true));
     final profiles = InMemoryIdentityProfileRepository([
       const IdentityProfile(id: 'p', name: 'Work', nick: 'w'),
     ]);
@@ -68,10 +66,7 @@ void main() {
     expect(restored.single.name, 'N');
     expect(restored.single.password, isNull);
     expect((await settings2.loadSettings()).monospaceMessages, isTrue);
-    expect(
-      (await profiles2.loadProfiles()).any((p) => p.id == 'p'),
-      isTrue,
-    );
+    expect((await profiles2.loadProfiles()).any((p) => p.id == 'p'), isTrue);
   });
 
   test('rejects a non-object backup', () async {

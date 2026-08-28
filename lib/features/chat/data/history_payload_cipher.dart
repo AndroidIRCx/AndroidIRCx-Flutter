@@ -10,7 +10,7 @@ import 'package:cryptography/cryptography.dart';
 /// nonce, the ciphertext, and the GCM authentication tag, all base64-encoded.
 class AesGcmHistoryPayloadCodec implements HistoryPayloadCodec {
   AesGcmHistoryPayloadCodec(List<int> keyBytes)
-      : _secretKey = SecretKey(keyBytes);
+    : _secretKey = SecretKey(keyBytes);
 
   factory AesGcmHistoryPayloadCodec.fromBase64Key(String base64Key) {
     return AesGcmHistoryPayloadCodec(base64Decode(base64Key));

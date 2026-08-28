@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:androidircx/app/theme/app_theme.dart';
+import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/models/chat_tab.dart';
 import 'package:androidircx/core/models/connection_state.dart';
 import 'package:androidircx/core/models/dcc_session.dart';
@@ -12,12 +13,15 @@ import 'package:androidircx/features/chat/application/command_service.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
 import 'package:androidircx/features/chat/application/session_registry.dart';
 import 'package:androidircx/features/chat/data/channel_notes_repository.dart';
+import 'package:androidircx/features/chat/data/kick_ban_reasons_repository.dart';
 import 'package:androidircx/features/chat/data/user_list_entry.dart';
 import 'package:androidircx/features/chat/data/user_notes_repository.dart';
 import 'package:androidircx/features/connections/application/network_list_controller.dart';
 import 'package:androidircx/features/chat/presentation/channel_list_screen.dart';
+import 'package:androidircx/features/chat/presentation/channel_settings_screen.dart';
 import 'package:androidircx/features/chat/presentation/connection_details_screen.dart';
 import 'package:androidircx/features/chat/presentation/media_player_screen.dart';
+import 'package:androidircx/features/chat/presentation/message_line_format.dart';
 import 'package:androidircx/features/chat/presentation/ignore_list_screen.dart';
 import 'package:androidircx/features/chat/presentation/irc_formatted_text.dart';
 import 'package:androidircx/features/chat/presentation/join_channel_dialog.dart';
@@ -169,382 +173,453 @@ class _ChatScreenState extends State<ChatScreen> {
                     .where((message) => message.kind != IrcMessageKind.event)
                     .toList(growable: false)
               : baseMessages;
-          return Scaffold(
-            appBar: AppBar(
-              title: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(_controller.activeTab.name),
-                  Text(
-                    _controller.activeTab.type == ChatTabType.channel &&
-                            _controller.activeChannelSummary.isNotEmpty
-                        ? _controller.activeChannelSummary
-                        : _controller.activeTab.type == ChatTabType.dcc &&
-                              _controller.activeDccSession != null
-                        ? _dccSummary(_controller.activeDccSession!)
-                        : _statusText(_controller.connection),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-              actions: [
-                if (_controller.activeTab.type == ChatTabType.channel)
-                  Builder(
-                    builder: (context) {
-                      return IconButton(
-                        onPressed: () => Scaffold.of(context).openEndDrawer(),
-                        icon: const Icon(Icons.people_outline),
-                        tooltip: 'Nick list',
-                      );
-                    },
-                  ),
-                if (_controller.settings.showHeaderSearchButton)
-                  IconButton(
-                    onPressed: _toggleMessageSearch,
-                    icon: Icon(
-                      _messageSearchVisible ? Icons.search_off : Icons.search,
-                    ),
-                    tooltip: _messageSearchVisible
-                        ? 'Close search'
-                        : 'Search messages',
-                  ),
-                IconButton(
-                  onPressed: _openHistoryTools,
-                  icon: const Icon(Icons.history),
-                  tooltip: 'History tools',
-                ),
-                IconButton(
-                  onPressed: _showJoinDialog,
-                  icon: const Icon(Icons.tag),
-                  tooltip: 'Join channel',
-                ),
-                IconButton(
-                  onPressed: _openChannelList,
-                  icon: const Icon(Icons.format_list_bulleted),
-                  tooltip: 'Channel list',
-                ),
-                IconButton(
-                  onPressed: _openSettings,
-                  icon: const Icon(Icons.tune),
-                  tooltip: 'Settings',
-                ),
-                IconButton(
-                  onPressed:
-                      _controller.connection.phase == ConnectionPhase.connected
-                      ? _controller.disconnect
-                      : _controller.start,
-                  icon: Icon(
-                    _controller.connection.phase == ConnectionPhase.connected
-                        ? Icons.link_off
-                        : Icons.wifi_tethering,
-                  ),
-                  tooltip:
-                      _controller.connection.phase == ConnectionPhase.connected
-                      ? 'Disconnect'
-                      : 'Connect',
-                ),
-              ],
-            ),
-            drawer: Drawer(
-              child: SafeArea(
-                child: ListView(
-                  padding: EdgeInsets.zero,
+          return CallbackShortcuts(
+            bindings: _keyboardBindings(),
+            child: Scaffold(
+              appBar: AppBar(
+                title: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (widget.onSwitchNetwork != null &&
-                        widget.networkController != null) ...[
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-                        child: Text(
-                          'NETWORKS',
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 0.8,
-                              ),
-                        ),
-                      ),
-                      for (final network in widget.networkController!.networks)
-                        _buildNetworkSwitchTile(network),
-                      ListTile(
-                        leading: const Icon(Icons.dns_outlined),
-                        title: const Text('Manage networks'),
-                        subtitle: const Text('Add, edit, or browse servers'),
-                        onTap: () {
-                          Navigator.of(context).pop();
-                          widget.onManageNetworks?.call();
-                        },
-                      ),
-                      const Divider(height: 1),
-                    ],
-                    ListTile(
-                      title: Text(_controller.network.name),
-                      subtitle: Text(
-                        '${_controller.network.host}:${_controller.network.port}',
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    for (final tab in _controller.tabs)
-                      _buildTabTile(context, tab),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.block),
-                      title: const Text('Ignore list'),
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) =>
-                                IgnoreListScreen(controller: _controller),
-                          ),
-                        );
-                      },
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.rule_outlined),
-                      title: const Text('User lists'),
-                      subtitle: const Text(
-                        'Notify, protected, blacklist, auto-mode',
-                      ),
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) =>
-                                UserListsScreen(controller: _controller),
-                          ),
-                        );
-                      },
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.info_outline),
-                      title: const Text('Connection details'),
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) => ConnectionDetailsScreen(
-                              controller: _controller,
-                            ),
-                          ),
-                        );
-                      },
+                    Text(_controller.activeTab.name),
+                    Text(
+                      _controller.activeTab.type == ChatTabType.channel &&
+                              _controller.activeChannelSummary.isNotEmpty
+                          ? _controller.activeChannelSummary
+                          : _controller.activeTab.type == ChatTabType.dcc &&
+                                _controller.activeDccSession != null
+                          ? _dccSummary(_controller.activeDccSession!)
+                          : _statusText(_controller.connection),
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
                 ),
+                actions: [
+                  if (_controller.activeTab.type == ChatTabType.channel)
+                    Builder(
+                      builder: (context) {
+                        return IconButton(
+                          onPressed: () => Scaffold.of(context).openEndDrawer(),
+                          icon: const Icon(Icons.people_outline),
+                          tooltip: 'Nick list',
+                        );
+                      },
+                    ),
+                  if (_controller.settings.showHeaderSearchButton)
+                    IconButton(
+                      onPressed: _toggleMessageSearch,
+                      icon: Icon(
+                        _messageSearchVisible ? Icons.search_off : Icons.search,
+                      ),
+                      tooltip: _messageSearchVisible
+                          ? 'Close search'
+                          : 'Search messages',
+                    ),
+                  IconButton(
+                    onPressed: _openHistoryTools,
+                    icon: const Icon(Icons.history),
+                    tooltip: 'History tools',
+                  ),
+                  IconButton(
+                    onPressed: _showJoinDialog,
+                    icon: const Icon(Icons.tag),
+                    tooltip: 'Join channel',
+                  ),
+                  IconButton(
+                    onPressed: _openChannelList,
+                    icon: const Icon(Icons.format_list_bulleted),
+                    tooltip: 'Channel list',
+                  ),
+                  if (_controller.dccSessions.isNotEmpty)
+                    IconButton(
+                      key: const Key('chat-dcc-transfers'),
+                      onPressed: _openDccTransfers,
+                      icon: Badge.count(
+                        count: _activeDccTransferCount,
+                        isLabelVisible: _activeDccTransferCount > 0,
+                        child: const Icon(Icons.swap_vert_circle_outlined),
+                      ),
+                      tooltip: 'DCC transfers',
+                    ),
+                  IconButton(
+                    onPressed: _openSettings,
+                    icon: const Icon(Icons.tune),
+                    tooltip: 'Settings',
+                  ),
+                  IconButton(
+                    onPressed:
+                        _controller.connection.phase ==
+                            ConnectionPhase.connected
+                        ? _controller.disconnect
+                        : _controller.start,
+                    icon: Icon(
+                      _controller.connection.phase == ConnectionPhase.connected
+                          ? Icons.link_off
+                          : Icons.wifi_tethering,
+                    ),
+                    tooltip:
+                        _controller.connection.phase ==
+                            ConnectionPhase.connected
+                        ? 'Disconnect'
+                        : 'Connect',
+                  ),
+                ],
               ),
-            ),
-            endDrawer: _controller.activeTab.type == ChatTabType.channel
-                ? _buildNickListDrawer(context)
-                : null,
-            body: SafeArea(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  // In short viewports (landscape, or portrait with the keyboard
-                  // open) the chrome around the message list (status/topic
-                  // banners on top, composer + its bars on the bottom) can be
-                  // taller than the available height and would crush the list to
-                  // zero. When space is tight, cap the top/bottom chrome and let
-                  // each scroll internally so the message list always keeps room
-                  // and nothing overflows. In normal viewports the caps are the
-                  // full height (a no-op), so interactive banners such as the DCC
-                  // accept/decline actions stay at their natural, hittable size.
-                  final tight = constraints.maxHeight < 380;
-                  final topChromeMaxHeight = tight
-                      ? constraints.maxHeight * 0.35
-                      : constraints.maxHeight;
-                  final bottomClusterMaxHeight = tight
-                      ? constraints.maxHeight * 0.5
-                      : constraints.maxHeight;
-                  return Column(
+              drawer: Drawer(
+                child: SafeArea(
+                  child: ListView(
+                    padding: EdgeInsets.zero,
                     children: [
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: topChromeMaxHeight,
+                      if (widget.onSwitchNetwork != null &&
+                          widget.networkController != null) ...[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                          child: Text(
+                            'NETWORKS',
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.8,
+                                ),
+                          ),
                         ),
-                        child: SingleChildScrollView(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _ConnectionBanner(
+                        for (final network
+                            in widget.networkController!.networks)
+                          _buildNetworkSwitchTile(network),
+                        ListTile(
+                          leading: const Icon(Icons.dns_outlined),
+                          title: const Text('Manage networks'),
+                          subtitle: const Text('Add, edit, or browse servers'),
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            widget.onManageNetworks?.call();
+                          },
+                        ),
+                        const Divider(height: 1),
+                      ],
+                      ListTile(
+                        title: Text(_controller.network.name),
+                        subtitle: Text(
+                          '${_controller.network.host}:${_controller.network.port}',
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      for (final tab in _controller.tabs)
+                        _buildTabTile(context, tab),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.block),
+                        title: const Text('Ignore list'),
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  IgnoreListScreen(controller: _controller),
+                            ),
+                          );
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.rule_outlined),
+                        title: const Text('User lists'),
+                        subtitle: const Text(
+                          'Notify, protected, blacklist, auto-mode',
+                        ),
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  UserListsScreen(controller: _controller),
+                            ),
+                          );
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.info_outline),
+                        title: const Text('Connection details'),
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) => ConnectionDetailsScreen(
                                 controller: _controller,
-                                network: _controller.network,
-                                connectedBannerDismissed:
-                                    _connectedBannerDismissed,
-                                onDismissConnectedBanner: () => setState(
-                                  () => _connectedBannerDismissed = true,
-                                ),
                               ),
-                              if (_messageSearchVisible)
-                                _InlineMessageSearchBar(
-                                  controller: _messageSearchController,
-                                  filter: _messageSearchFilter,
-                                  resultCount: visibleMessages.length,
-                                  onFilterChanged: (filter) => setState(
-                                    () => _messageSearchFilter = filter,
-                                  ),
-                                  onChanged: (_) => setState(() {}),
-                                  onClose: _toggleMessageSearch,
-                                ),
-                              if ((_controller.activeChannelTopic ?? '')
-                                  .trim()
-                                  .isNotEmpty)
-                                _ChannelTopicBar(
-                                  topic: _controller.activeChannelTopic!.trim(),
-                                ),
-                              if (_controller.activeTab.type ==
-                                      ChatTabType.dcc &&
-                                  _controller.activeDccSession != null)
-                                _DccSessionBanner(
-                                  session: _controller.activeDccSession!,
-                                  onAccept: _controller.acceptActiveDccSession,
-                                  onDecline:
-                                      _controller.declineActiveDccSession,
-                                  onClose: _controller.closeActiveDccSession,
-                                ),
-                              if (_controller.activeTab.type ==
-                                  ChatTabType.server)
-                                _ServiceQuickActions(
-                                  onRun: (service, command) async {
-                                    await _controller.sendServiceShortcut(
-                                      service,
-                                      command,
-                                    );
-                                  },
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: _MessageList(
-                          messages: visibleMessages,
-                          knownNicks: <String>{
-                            ..._controller.activeChannelUsers,
-                            _controller.currentNick,
-                          },
-                          channelPrefixes: _controller.channelPrefixChars,
-                          nickPrefixes: _controller.nickPrefixChars,
-                          showAttachmentPreviews:
-                              _controller.settings.showAttachmentPreviews,
-                          resolveReplyTarget: (replyId) => _controller
-                              .messageByMsgId(_controller.activeTabId, replyId),
-                          resolveReactions: _controller.reactionsForMessage,
-                          onRedactMessage: _controller.redactMessage,
-                          onQuoteMessage: (message) => _insertIntoComposer(
-                            '> ${stripIrcFormatting(message.content)}',
-                          ),
-                          onReplyWithNick: (message) {
-                            final prefix =
-                                message.sender == _controller.currentNick
-                                ? ''
-                                : '${message.sender}: ';
-                            _insertIntoComposer(prefix);
-                          },
-                          onReplyToMessage: _setPendingReply,
-                          onDownloadAttachment: _downloadAttachment,
-                          onNickTap: (nick) => unawaited(
-                            _controller.performChannelUserAction(
-                              nick,
-                              ChannelUserAction.query,
                             ),
-                          ),
-                          onNickLongPress: (nick) =>
-                              unawaited(_showChannelUserActions(nick)),
-                          onChannelTap: (channel) => unawaited(
-                            _controller.joinChannel(
-                              JoinChannelRequest(channel: channel),
-                            ),
-                          ),
-                          showTimestamps: _controller.settings.showTimestamps,
-                          onLoadOlder:
-                              _controller.hasPersistentHistory &&
-                                  !_messageSearchVisible
-                              ? () async {
-                                  await _controller.loadOlderHistory(
-                                    _controller.activeTabId,
-                                  );
-                                }
-                              : null,
-                        ),
-                      ),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: bottomClusterMaxHeight,
-                        ),
-                        child: SingleChildScrollView(
-                          reverse: true,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (_controller.commandHistory.isNotEmpty)
-                                _CommandHistoryBar(
-                                  entries: _controller.commandHistory,
-                                  onSelect: (value) => setState(
-                                    () => _composerController.text = value,
-                                  ),
-                                ),
-                              if (_controller.activeTypingUsers.isNotEmpty)
-                                _TypingIndicator(
-                                  users: _controller.activeTypingUsers,
-                                ),
-                              if (_pendingReplyMessage != null)
-                                _PendingReplyBar(
-                                  message: _pendingReplyMessage!,
-                                  onCancel: () => setState(
-                                    () => _pendingReplyMessage = null,
-                                  ),
-                                ),
-                              const Divider(height: 1),
-                              _ComposerArea(
-                                suggestions: _composerSuggestions,
-                                autocompleteSuggestions:
-                                    _autocompleteSuggestions,
-                                controller: _composerController,
-                                hintText:
-                                    _controller.activeTab.type ==
-                                        ChatTabType.server
-                                    ? 'Type raw IRC or /join #channel'
-                                    : _controller.activeTab.type ==
-                                          ChatTabType.dcc
-                                    ? (_controller.activeDccSession?.type ==
-                                              DccSessionType.chat
-                                          ? 'Type DCC chat message'
-                                          : 'DCC SEND tabs do not accept messages')
-                                    : 'Message ${_controller.activeTab.name}',
-                                onChanged: _handleComposerChanged,
-                                onSubmitted: _submit,
-                                canSendDccFile:
-                                    _controller.activeTab.type ==
-                                    ChatTabType.query,
-                                onPickDccFile: _pickAndSendDccFile,
-                                onSuggestionSelected: _applyComposerSuggestion,
-                                onAutocompleteSelected:
-                                    _applyAutocompleteSuggestion,
-                                enterToSend: _controller.settings.enterToSend,
-                                showSendButton:
-                                    _controller.settings.showSendButton,
-                                onCameraPhoto: () =>
-                                    _captureAndSendMedia(ImageSource.camera),
-                                onGalleryImage: () =>
-                                    _captureAndSendMedia(ImageSource.gallery),
-                                onCameraVideo: () => _captureAndSendMedia(
-                                  ImageSource.camera,
-                                  video: true,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                          );
+                        },
                       ),
                     ],
-                  );
-                },
+                  ),
+                ),
+              ),
+              endDrawer: _controller.activeTab.type == ChatTabType.channel
+                  ? _buildNickListDrawer(context)
+                  : null,
+              body: SafeArea(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // In short viewports (landscape, or portrait with the keyboard
+                    // open) the chrome around the message list (status/topic
+                    // banners on top, composer + its bars on the bottom) can be
+                    // taller than the available height and would crush the list to
+                    // zero. When space is tight, cap the top/bottom chrome and let
+                    // each scroll internally so the message list always keeps room
+                    // and nothing overflows. In normal viewports the caps are the
+                    // full height (a no-op), so interactive banners such as the DCC
+                    // accept/decline actions stay at their natural, hittable size.
+                    final tight = constraints.maxHeight < 380;
+                    final topChromeMaxHeight = tight
+                        ? constraints.maxHeight * 0.35
+                        : constraints.maxHeight;
+                    final bottomClusterMaxHeight = tight
+                        ? constraints.maxHeight * 0.5
+                        : constraints.maxHeight;
+                    return Column(
+                      children: [
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: topChromeMaxHeight,
+                          ),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _ConnectionBanner(
+                                  controller: _controller,
+                                  network: _controller.network,
+                                  connectedBannerDismissed:
+                                      _connectedBannerDismissed,
+                                  onDismissConnectedBanner: () => setState(
+                                    () => _connectedBannerDismissed = true,
+                                  ),
+                                ),
+                                if (_messageSearchVisible)
+                                  _InlineMessageSearchBar(
+                                    controller: _messageSearchController,
+                                    filter: _messageSearchFilter,
+                                    resultCount: visibleMessages.length,
+                                    onFilterChanged: (filter) => setState(
+                                      () => _messageSearchFilter = filter,
+                                    ),
+                                    onChanged: (_) => setState(() {}),
+                                    onClose: _toggleMessageSearch,
+                                  ),
+                                if ((_controller.activeChannelTopic ?? '')
+                                    .trim()
+                                    .isNotEmpty)
+                                  _ChannelTopicBar(
+                                    topic: _controller.activeChannelTopic!
+                                        .trim(),
+                                  ),
+                                if (_controller.activeTab.type ==
+                                        ChatTabType.dcc &&
+                                    _controller.activeDccSession != null)
+                                  _DccSessionBanner(
+                                    session: _controller.activeDccSession!,
+                                    onAccept:
+                                        _controller.acceptActiveDccSession,
+                                    onDecline:
+                                        _controller.declineActiveDccSession,
+                                    onClose: _controller.closeActiveDccSession,
+                                  ),
+                                if (_controller.activeTab.type ==
+                                    ChatTabType.server)
+                                  _ServiceQuickActions(
+                                    onRun: (service, command) async {
+                                      await _controller.sendServiceShortcut(
+                                        service,
+                                        command,
+                                      );
+                                    },
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: _MessageList(
+                            messages: visibleMessages,
+                            knownNicks: <String>{
+                              ..._controller.activeChannelUsers,
+                              _controller.currentNick,
+                            },
+                            channelPrefixes: _controller.channelPrefixChars,
+                            nickPrefixes: _controller.nickPrefixChars,
+                            showAttachmentPreviews:
+                                _controller.settings.showAttachmentPreviews,
+                            resolveReplyTarget: (replyId) =>
+                                _controller.messageByMsgId(
+                                  _controller.activeTabId,
+                                  replyId,
+                                ),
+                            resolveReactions: _controller.reactionsForMessage,
+                            onReactToMessage: _controller.reactToMessage,
+                            onRedactMessage: _controller.redactMessage,
+                            onQuoteMessage: (message) => _insertIntoComposer(
+                              '> ${stripIrcFormatting(message.content)}',
+                            ),
+                            onReplyWithNick: (message) {
+                              final prefix =
+                                  message.sender == _controller.currentNick
+                                  ? ''
+                                  : '${message.sender}: ';
+                              _insertIntoComposer(prefix);
+                            },
+                            onReplyToMessage: _setPendingReply,
+                            onDownloadAttachment: _downloadAttachment,
+                            onNickTap: (nick) => unawaited(
+                              _controller.performChannelUserAction(
+                                nick,
+                                ChannelUserAction.query,
+                              ),
+                            ),
+                            onNickLongPress: (nick) =>
+                                unawaited(_showChannelUserActions(nick)),
+                            onChannelTap: (channel) => unawaited(
+                              _controller.joinChannel(
+                                JoinChannelRequest(channel: channel),
+                              ),
+                            ),
+                            showTimestamps: _controller.settings.showTimestamps,
+                            timestampFormat:
+                                _controller.settings.timestampFormat,
+                            timestampPosition:
+                                _controller.settings.timestampPosition,
+                            nickDisplayFormat:
+                                _controller.settings.nickDisplayFormat,
+                            onLoadOlder:
+                                _controller.hasPersistentHistory &&
+                                    !_messageSearchVisible
+                                ? () async {
+                                    await _controller.loadOlderHistory(
+                                      _controller.activeTabId,
+                                    );
+                                  }
+                                : null,
+                          ),
+                        ),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: bottomClusterMaxHeight,
+                          ),
+                          child: SingleChildScrollView(
+                            reverse: true,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_controller.commandHistory.isNotEmpty)
+                                  _CommandHistoryBar(
+                                    entries: _controller.commandHistory,
+                                    onSelect: (value) => setState(
+                                      () => _composerController.text = value,
+                                    ),
+                                  ),
+                                if (_controller.activeTypingUsers.isNotEmpty)
+                                  _TypingIndicator(
+                                    users: _controller.activeTypingUsers,
+                                  ),
+                                if (_pendingReplyMessage != null)
+                                  _PendingReplyBar(
+                                    message: _pendingReplyMessage!,
+                                    onCancel: () => setState(
+                                      () => _pendingReplyMessage = null,
+                                    ),
+                                  ),
+                                const Divider(height: 1),
+                                _ComposerArea(
+                                  suggestions: _composerSuggestions,
+                                  autocompleteSuggestions:
+                                      _autocompleteSuggestions,
+                                  controller: _composerController,
+                                  hintText:
+                                      _controller.activeTab.type ==
+                                          ChatTabType.server
+                                      ? 'Type raw IRC or /join #channel'
+                                      : _controller.activeTab.type ==
+                                            ChatTabType.dcc
+                                      ? (_controller.activeDccSession?.type ==
+                                                DccSessionType.chat
+                                            ? 'Type DCC chat message'
+                                            : 'DCC SEND tabs do not accept messages')
+                                      : 'Message ${_controller.activeTab.name}',
+                                  onChanged: _handleComposerChanged,
+                                  onSubmitted: _submit,
+                                  canSendDccFile:
+                                      _controller.activeTab.type ==
+                                      ChatTabType.query,
+                                  onPickDccFile: _pickAndSendDccFile,
+                                  onSuggestionSelected:
+                                      _applyComposerSuggestion,
+                                  onAutocompleteSelected:
+                                      _applyAutocompleteSuggestion,
+                                  enterToSend: _controller.settings.enterToSend,
+                                  showSendButton:
+                                      _controller.settings.showSendButton,
+                                  autocorrect:
+                                      _controller.settings.composerAutocorrect,
+                                  enableSuggestions:
+                                      _controller.settings.composerSuggestions,
+                                  capitalizeSentences: _controller
+                                      .settings
+                                      .composerCapitalizeSentences,
+                                  onCameraPhoto: () =>
+                                      _captureAndSendMedia(ImageSource.camera),
+                                  onGalleryImage: () =>
+                                      _captureAndSendMedia(ImageSource.gallery),
+                                  onCameraVideo: () => _captureAndSendMedia(
+                                    ImageSource.camera,
+                                    video: true,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           );
         },
       ),
     );
+  }
+
+  /// Hardware keyboard shortcuts: Ctrl+Tab / Alt+arrows switch tabs, and Tab
+  /// accepts the first nick-completion suggestion while the panel is open.
+  Map<ShortcutActivator, VoidCallback> _keyboardBindings() {
+    return {
+      const SingleActivator(LogicalKeyboardKey.tab, control: true): () =>
+          _selectAdjacentTab(1),
+      const SingleActivator(
+        LogicalKeyboardKey.tab,
+        control: true,
+        shift: true,
+      ): () =>
+          _selectAdjacentTab(-1),
+      const SingleActivator(LogicalKeyboardKey.arrowDown, alt: true): () =>
+          _selectAdjacentTab(1),
+      const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true): () =>
+          _selectAdjacentTab(-1),
+      if (_autocompleteSuggestions.isNotEmpty)
+        const SingleActivator(LogicalKeyboardKey.tab): () =>
+            _applyAutocompleteSuggestion(_autocompleteSuggestions.first),
+    };
+  }
+
+  void _selectAdjacentTab(int delta) {
+    final tabs = _controller.tabs;
+    if (tabs.length < 2) {
+      return;
+    }
+    final currentIndex = tabs.indexWhere(
+      (tab) => tab.id == _controller.activeTabId,
+    );
+    final nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
+    _controller.selectTab(tabs[nextIndex].id);
   }
 
   Future<void> _showJoinDialog() async {
@@ -929,6 +1004,27 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Sessions still doing work (pending offers or live connections).
+  int get _activeDccTransferCount => _controller.dccSessions
+      .where(
+        (session) => switch (session.status) {
+          DccSessionStatus.pending ||
+          DccSessionStatus.offering ||
+          DccSessionStatus.connecting ||
+          DccSessionStatus.connected => true,
+          DccSessionStatus.closed || DccSessionStatus.failed => false,
+        },
+      )
+      .length;
+
+  Future<void> _openDccTransfers() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _DccTransfersSheet(controller: _controller),
+    );
+  }
+
   void _toggleMessageSearch() {
     setState(() {
       if (_messageSearchVisible) {
@@ -969,7 +1065,16 @@ class _ChatScreenState extends State<ChatScreen> {
       case ConnectionPhase.authenticating:
         return snapshot.message ?? 'Authenticating';
       case ConnectionPhase.connected:
-        return 'Connected';
+        final lag = _controller.lag;
+        if (lag == null) {
+          return 'Connected';
+        }
+        final quality = lag.inMilliseconds < 150
+            ? 'good'
+            : lag.inMilliseconds < 500
+            ? 'ok'
+            : 'slow';
+        return 'Connected • ${lag.inMilliseconds} ms ($quality)';
       case ConnectionPhase.reconnecting:
         return snapshot.message ?? 'Reconnecting';
       case ConnectionPhase.disconnecting:
@@ -1192,6 +1297,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   unawaited(_showTabLog(tab));
                 }),
                 if (tab.type == ChatTabType.channel) ...[
+                  action('Channel settings', Icons.settings_outlined, () {
+                    unawaited(_openChannelSettings(tab));
+                  }),
                   action('Channel note', Icons.sticky_note_2_outlined, () {
                     unawaited(_showChannelNoteDialog(tab));
                   }),
@@ -1221,6 +1329,19 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       },
+    );
+  }
+
+  Future<void> _openChannelSettings(ChatTab tab) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChannelSettingsScreen(
+          controller: _controller,
+          tab: tab,
+          networkController: widget.networkController,
+          notesRepository: _channelNotesRepository,
+        ),
+      ),
     );
   }
 
@@ -1438,12 +1559,17 @@ class _ChatScreenState extends State<ChatScreen> {
     String nick,
     ChannelModerationAction action,
   ) async {
+    final presetReasons = await KickBanReasonsRepository().loadReasons();
+    if (!mounted) {
+      return;
+    }
     final request = await showDialog<_KickBanRequest>(
       context: context,
       builder: (context) => _KickBanDialog(
         nick: nick,
         action: action,
         maskPreview: (type) => _controller.banMaskPreviewForNick(nick, type),
+        presetReasons: presetReasons,
       ),
     );
     if (request == null) {
@@ -1595,13 +1721,6 @@ bool _isActiveDccTransfer(DccSession session) {
       session.status == DccSessionStatus.connected;
 }
 
-String _formatClock(DateTime timestamp) {
-  final local = timestamp.toLocal();
-  final hh = local.hour.toString().padLeft(2, '0');
-  final mm = local.minute.toString().padLeft(2, '0');
-  return '$hh:$mm';
-}
-
 class _ComposerArea extends StatelessWidget {
   const _ComposerArea({
     required this.suggestions,
@@ -1616,6 +1735,9 @@ class _ComposerArea extends StatelessWidget {
     required this.onAutocompleteSelected,
     required this.enterToSend,
     required this.showSendButton,
+    this.autocorrect = true,
+    this.enableSuggestions = true,
+    this.capitalizeSentences = false,
     required this.onCameraPhoto,
     required this.onGalleryImage,
     required this.onCameraVideo,
@@ -1633,6 +1755,9 @@ class _ComposerArea extends StatelessWidget {
   final ValueChanged<ComposerAutocompleteSuggestion> onAutocompleteSelected;
   final bool enterToSend;
   final bool showSendButton;
+  final bool autocorrect;
+  final bool enableSuggestions;
+  final bool capitalizeSentences;
   final VoidCallback onCameraPhoto;
   final VoidCallback onGalleryImage;
   final VoidCallback onCameraVideo;
@@ -1666,6 +1791,11 @@ class _ComposerArea extends StatelessWidget {
                   textInputAction: enterToSend
                       ? TextInputAction.send
                       : TextInputAction.newline,
+                  autocorrect: autocorrect,
+                  enableSuggestions: enableSuggestions,
+                  textCapitalization: capitalizeSentences
+                      ? TextCapitalization.sentences
+                      : TextCapitalization.none,
                   onChanged: onChanged,
                   onSubmitted: enterToSend ? (_) => onSubmitted() : null,
                   decoration: InputDecoration(hintText: hintText),
@@ -2081,6 +2211,134 @@ class _DccSessionBanner extends StatelessWidget {
   }
 }
 
+/// Bottom sheet listing every DCC session of this network's controller with
+/// live progress and per-session actions.
+class _DccTransfersSheet extends StatelessWidget {
+  const _DccTransfersSheet({required this.controller});
+
+  final ChatSessionController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final sessions = controller.dccSessions;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'DCC transfers',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 12),
+                if (sessions.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: Text('No DCC sessions.')),
+                  )
+                else
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: sessions.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, index) => _DccTransferRow(
+                        session: sessions[index],
+                        controller: controller,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DccTransferRow extends StatelessWidget {
+  const _DccTransferRow({required this.session, required this.controller});
+
+  final DccSession session;
+  final ChatSessionController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDone =
+        session.status == DccSessionStatus.closed ||
+        session.status == DccSessionStatus.failed;
+    final size = session.size;
+    final progress = (size != null && size > 0)
+        ? (session.bytesTransferred / size).clamp(0.0, 1.0)
+        : null;
+    final title = switch (session.type) {
+      DccSessionType.chat => 'CHAT with ${session.peerNick}',
+      DccSessionType.send =>
+        '${session.direction == 'incoming' ? '⬇' : '⬆'} '
+            '${session.filename ?? 'file'} • ${session.peerNick}',
+      DccSessionType.unknown => 'DCC • ${session.peerNick}',
+    };
+    final subtitle = session.type == DccSessionType.send
+        ? _dccTransferSubtitle(session)
+        : 'Status: ${session.status.name}'
+              '${session.error == null ? '' : ' • ${session.error}'}';
+    return ListTile(
+      key: Key('dcc-transfer-row-${session.tabId}'),
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(switch (session.status) {
+        DccSessionStatus.failed => Icons.error_outline,
+        DccSessionStatus.closed => Icons.check_circle_outline,
+        _ =>
+          session.type == DccSessionType.chat
+              ? Icons.chat_outlined
+              : Icons.swap_vert,
+      }),
+      title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+          if (progress != null && !isDone) ...[
+            const SizedBox(height: 4),
+            LinearProgressIndicator(value: progress),
+          ],
+        ],
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            key: Key('dcc-transfer-open-${session.tabId}'),
+            tooltip: 'Open tab',
+            icon: const Icon(Icons.open_in_new),
+            onPressed: () {
+              controller.selectTab(session.tabId);
+              Navigator.of(context).pop();
+            },
+          ),
+          if (!isDone)
+            IconButton(
+              key: Key('dcc-transfer-close-${session.tabId}'),
+              tooltip: 'Cancel',
+              icon: const Icon(Icons.close),
+              onPressed: () => controller.closeDccSessionByTab(session.tabId),
+            ),
+        ],
+      ),
+      onTap: () {
+        controller.selectTab(session.tabId);
+        Navigator.of(context).pop();
+      },
+    );
+  }
+}
+
 class _ReplyPreview extends StatelessWidget {
   const _ReplyPreview({required this.referenced, required this.replyId});
 
@@ -2392,24 +2650,22 @@ class _KickBanDialog extends StatefulWidget {
     required this.nick,
     required this.action,
     required this.maskPreview,
+    this.presetReasons = KickBanReasonsRepository.defaultReasons,
   });
 
   final String nick;
   final ChannelModerationAction action;
   final String Function(int type) maskPreview;
+  final List<String> presetReasons;
 
   @override
   State<_KickBanDialog> createState() => _KickBanDialogState();
 }
 
 class _KickBanDialogState extends State<_KickBanDialog> {
-  static const List<String> _presetReasons = <String>[
+  late final List<String> _presetReasons = <String>[
     '',
-    'Spam',
-    'Flooding',
-    'Abuse',
-    'Off-topic',
-    'Policy violation',
+    ...widget.presetReasons,
   ];
 
   final TextEditingController _reason = TextEditingController();
@@ -3009,6 +3265,7 @@ class _MessageList extends StatelessWidget {
     required this.showAttachmentPreviews,
     required this.resolveReplyTarget,
     required this.resolveReactions,
+    required this.onReactToMessage,
     required this.onRedactMessage,
     required this.onQuoteMessage,
     required this.onReplyWithNick,
@@ -3019,6 +3276,9 @@ class _MessageList extends StatelessWidget {
     required this.onChannelTap,
     this.onLoadOlder,
     this.showTimestamps = true,
+    this.timestampFormat = 'HH:mm',
+    this.timestampPosition = TimestampPosition.afterNick,
+    this.nickDisplayFormat = NickDisplayFormat.plain,
   });
 
   final List<IrcMessage> messages;
@@ -3027,9 +3287,14 @@ class _MessageList extends StatelessWidget {
   final String nickPrefixes;
   final bool showAttachmentPreviews;
   final bool showTimestamps;
+  final String timestampFormat;
+  final TimestampPosition timestampPosition;
+  final NickDisplayFormat nickDisplayFormat;
   final Future<void> Function()? onLoadOlder;
   final IrcMessage? Function(String replyId) resolveReplyTarget;
   final Map<String, int> Function(IrcMessage message) resolveReactions;
+  final Future<bool> Function(IrcMessage message, String emoji)
+  onReactToMessage;
   final Future<bool> Function(IrcMessage message) onRedactMessage;
   final ValueChanged<IrcMessage> onQuoteMessage;
   final ValueChanged<IrcMessage> onReplyWithNick;
@@ -3119,7 +3384,15 @@ class _MessageList extends StatelessWidget {
               ircTheme.nickColorFor(message.sender) ??
               Theme.of(context).colorScheme.onSurface,
         );
+        final nickLabel = formatNickLabel(message.sender, nickDisplayFormat);
+        final clockText = formatIrcTimestamp(
+          message.timestamp,
+          timestampFormat,
+        );
         final leadingSpans = <InlineSpan>[
+          if (showTimestamps &&
+              timestampPosition == TimestampPosition.beforeNick)
+            TextSpan(text: '$clockText  ', style: metaStyle),
           if (_isInteractiveSender(message))
             WidgetSpan(
               alignment: PlaceholderAlignment.baseline,
@@ -3129,17 +3402,15 @@ class _MessageList extends StatelessWidget {
                 onTap: () => onNickTap(message.sender),
                 onLongPress: () => onNickLongPress(message.sender),
                 child: RichText(
-                  text: TextSpan(text: message.sender, style: senderStyle),
+                  text: TextSpan(text: nickLabel, style: senderStyle),
                 ),
               ),
             )
           else
-            TextSpan(text: message.sender, style: senderStyle),
-          if (showTimestamps)
-            TextSpan(
-              text: '  ${_formatClock(message.timestamp)}',
-              style: metaStyle,
-            ),
+            TextSpan(text: nickLabel, style: senderStyle),
+          if (showTimestamps &&
+              timestampPosition == TimestampPosition.afterNick)
+            TextSpan(text: '  $clockText', style: metaStyle),
           if (message.isPlayback)
             TextSpan(text: '  · history', style: metaStyle),
           const TextSpan(text: '   '),
@@ -3221,6 +3492,8 @@ class _MessageList extends StatelessWidget {
   ) async {
     final urls = extractUrls(stripIrcFormatting(message.content));
     final canRedact = (message.tags['msgid'] ?? '').trim().isNotEmpty;
+    final canReact =
+        (message.tags['msgid'] ?? '').trim().isNotEmpty && !message.isOwn;
     await showModalBottomSheet<void>(
       context: context,
       builder: (context) {
@@ -3232,6 +3505,52 @@ class _MessageList extends StatelessWidget {
             child: ListView(
               shrinkWrap: true,
               children: [
+                if (canReact)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Wrap(
+                      spacing: 4,
+                      children: [
+                        for (final emoji in const [
+                          '👍',
+                          '❤️',
+                          '😂',
+                          '😮',
+                          '😢',
+                          '🎉',
+                        ])
+                          IconButton(
+                            key: Key('message-react-$emoji'),
+                            onPressed: () async {
+                              final sent = await onReactToMessage(
+                                message,
+                                emoji,
+                              );
+                              if (!context.mounted) {
+                                return;
+                              }
+                              Navigator.of(context).pop();
+                              if (!sent) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'This message cannot be reacted to.',
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                            icon: Text(
+                              emoji,
+                              style: const TextStyle(fontSize: 22),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ListTile(
                   leading: const Icon(Icons.copy),
                   title: const Text('Copy clean text'),

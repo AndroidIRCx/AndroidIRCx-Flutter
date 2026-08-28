@@ -26,6 +26,19 @@ class _FakePermissions implements AppPermissions {
     return notifResult;
   }
 
+  bool hasBattery = false;
+  int batteryRequests = 0;
+
+  @override
+  Future<bool> hasIgnoreBatteryOptimizations() async => hasBattery;
+
+  @override
+  Future<AppPermissionResult> requestIgnoreBatteryOptimizations() async {
+    batteryRequests++;
+    hasBattery = true;
+    return AppPermissionResult.granted;
+  }
+
   @override
   Future<void> openSettingsPage() async {}
 }
@@ -50,18 +63,20 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('enabling notifications requests permission and enables on grant',
-      (tester) async {
-    final perms = _FakePermissions(notifResult: AppPermissionResult.granted);
-    await pump(tester, perms);
+  testWidgets(
+    'enabling notifications requests permission and enables on grant',
+    (tester) async {
+      final perms = _FakePermissions(notifResult: AppPermissionResult.granted);
+      await pump(tester, perms);
 
-    await tester.tap(find.byKey(const Key('settings-notifications-enabled')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('settings-notifications-enabled')));
+      await tester.pumpAndSettle();
 
-    expect(perms.notifRequests, 1);
-    final saved = await SharedPrefsSettingsRepository().loadSettings();
-    expect(saved.notificationsEnabled, isTrue);
-  });
+      expect(perms.notifRequests, 1);
+      final saved = await SharedPrefsSettingsRepository().loadSettings();
+      expect(saved.notificationsEnabled, isTrue);
+    },
+  );
 
   testWidgets('denied permission keeps notifications off', (tester) async {
     final perms = _FakePermissions(notifResult: AppPermissionResult.denied);
@@ -79,11 +94,13 @@ void main() {
     );
   });
 
-  testWidgets('reconciles notifications off when OS permission is missing',
-      (tester) async {
+  testWidgets('reconciles notifications off when OS permission is missing', (
+    tester,
+  ) async {
     // Stored as enabled, but the OS permission is not granted.
-    await SharedPrefsSettingsRepository()
-        .saveSettings(const AppSettings(notificationsEnabled: true));
+    await SharedPrefsSettingsRepository().saveSettings(
+      const AppSettings(notificationsEnabled: true),
+    );
     final perms = _FakePermissions(hasNotif: false);
 
     await tester.pumpWidget(
@@ -123,5 +140,4 @@ void main() {
     saved = await SharedPrefsSettingsRepository().loadSettings();
     expect(saved.analyticsConsent, isTrue);
   });
-
 }

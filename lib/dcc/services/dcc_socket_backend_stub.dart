@@ -15,4 +15,5 @@ class _UnsupportedDccSocketBackend implements DccSocketBackend {
   }
 }
 
-DccSocketBackend createPlatformDccSocketBackend() => _UnsupportedDccSocketBackend();
+DccSocketBackend createPlatformDccSocketBackend() =>
+    _UnsupportedDccSocketBackend();

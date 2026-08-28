@@ -15,14 +15,17 @@ void main() {
     expect(await codec.decrypt(cipher), 'hello #room secret message');
   });
 
-  test('uses a fresh random nonce so equal plaintext differs on disk', () async {
-    final codec = AesGcmHistoryPayloadCodec.fromBase64Key(key);
-    final a = await codec.encrypt('same');
-    final b = await codec.encrypt('same');
-    expect(a, isNot(b));
-    expect(await codec.decrypt(a), 'same');
-    expect(await codec.decrypt(b), 'same');
-  });
+  test(
+    'uses a fresh random nonce so equal plaintext differs on disk',
+    () async {
+      final codec = AesGcmHistoryPayloadCodec.fromBase64Key(key);
+      final a = await codec.encrypt('same');
+      final b = await codec.encrypt('same');
+      expect(a, isNot(b));
+      expect(await codec.decrypt(a), 'same');
+      expect(await codec.decrypt(b), 'same');
+    },
+  );
 
   test('a wrong key cannot decrypt (tamper/theft protection)', () async {
     final codec = AesGcmHistoryPayloadCodec.fromBase64Key(key);

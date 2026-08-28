@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:androidircx/app/theme/app_theme.dart';
+import 'package:androidircx/core/app/app_version.dart';
 import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/platform/app_permissions.dart';
 import 'package:androidircx/core/presets/server_preset_service.dart';
@@ -13,14 +14,31 @@ import 'package:androidircx/features/connections/presentation/server_directory_p
 import 'package:androidircx/features/monetization/presentation/purchase_screen.dart';
 import 'package:androidircx/features/onboarding/presentation/data_privacy_screen.dart';
 import 'package:androidircx/features/settings/presentation/backup_screen.dart';
+import 'package:androidircx/features/settings/presentation/command_aliases_screen.dart';
+import 'package:androidircx/features/settings/presentation/kick_ban_reasons_screen.dart';
 import 'package:androidircx/features/settings/presentation/crash_reports_screen.dart';
+import 'package:androidircx/features/settings/presentation/message_format_screen.dart';
+import 'package:androidircx/features/settings/presentation/sound_settings_screen.dart';
 import 'package:androidircx/features/settings/presentation/theme_editor_screen.dart';
 import 'package:androidircx/monetization/monetization_config.dart';
 import 'package:androidircx/monetization/monetization_controller.dart';
 import 'package:androidircx/monetization/monetization_scope.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
+
+/// Message font choices. Values are Android built-in family names ('system'
+/// maps to the platform default); no font assets are bundled.
+const _messageFontOptions = <({String family, String label})>[
+  (family: 'system', label: 'System default'),
+  (family: 'sans-serif', label: 'Sans-serif'),
+  (family: 'sans-serif-light', label: 'Sans-serif Light'),
+  (family: 'sans-serif-medium', label: 'Sans-serif Medium'),
+  (family: 'sans-serif-condensed', label: 'Sans-serif Condensed'),
+  (family: 'serif', label: 'Serif'),
+  (family: 'monospace', label: 'Monospace'),
+];
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -66,6 +84,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool? _lastHasNoAds;
   bool _isLoading = true;
   bool _didResolveController = false;
+  bool _hasBatteryExemption = false;
 
   AppPermissions get _permissions =>
       widget.permissions ?? const PermissionHandlerAppPermissions();
@@ -288,18 +307,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       const Divider(height: 1),
-                      SwitchListTile(
-                        key: const Key('settings-monospace-messages'),
-                        title: const Text('Monospace messages'),
+                      ListTile(
+                        title: const Text('Message font'),
                         subtitle: const Text(
-                          'Render IRC message bodies in a fixed-width font.',
+                          'Typeface used for IRC message bodies.',
                         ),
-                        value: _settings.monospaceMessages,
-                        onChanged: (value) async {
-                          await _saveSettings(
-                            _settings.copyWith(monospaceMessages: value),
-                          );
-                        },
+                        trailing: DropdownButton<String>(
+                          key: const Key('settings-message-font-family'),
+                          value: _effectiveMessageFontFamily,
+                          onChanged: (value) async {
+                            if (value == null) {
+                              return;
+                            }
+                            await _saveSettings(
+                              _settings.copyWith(
+                                messageFontFamily: value,
+                                monospaceMessages: value == 'monospace',
+                              ),
+                            );
+                          },
+                          items: _messageFontOptions
+                              .map(
+                                (option) => DropdownMenuItem(
+                                  value: option.family,
+                                  child: Text(option.label),
+                                ),
+                              )
+                              .toList(growable: false),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-message-format'),
+                        leading: const Icon(Icons.short_text),
+                        title: const Text('Message format'),
+                        subtitle: const Text(
+                          'Timestamp format/position and nick style.',
+                        ),
+                        onTap: _openMessageFormatEditor,
                       ),
                       const Divider(height: 1),
                       ListTile(
@@ -484,6 +529,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _SettingsSection(
                     title: 'Notifications',
                     children: [
+                      ListTile(
+                        key: const Key('settings-sound-settings'),
+                        leading: const Icon(Icons.music_note_outlined),
+                        title: const Text('Sounds'),
+                        subtitle: const Text(
+                          'Per-event sounds, volume, and preview.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const SoundSettingsScreen(),
+                          ),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-system-channels'),
+                        leading: const Icon(Icons.vibration),
+                        title: const Text('Vibration & LED'),
+                        subtitle: const Text(
+                          'Configured per notification channel in Android '
+                          'system settings.',
+                        ),
+                        onTap: () => unawaited(_permissions.openSettingsPage()),
+                      ),
+                      const Divider(height: 1),
                       SwitchListTile(
                         key: const Key('settings-notifications-enabled'),
                         secondary: const Icon(
@@ -574,6 +644,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _settings.copyWith(analyticsConsent: value),
                         ),
                       ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-battery-optimization'),
+                        leading: const Icon(Icons.battery_saver_outlined),
+                        title: const Text('Battery optimization'),
+                        subtitle: Text(
+                          _hasBatteryExemption
+                              ? 'Exempted — background connections stay alive.'
+                              : 'Ask Android to keep IRC connections alive in '
+                                    'the background.',
+                        ),
+                        trailing: _hasBatteryExemption
+                            ? const Icon(Icons.check_circle_outline)
+                            : null,
+                        onTap: _hasBatteryExemption
+                            ? null
+                            : () => unawaited(_requestBatteryExemption()),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -624,6 +712,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         value: _settings.showSendButton,
                         onChanged: (value) => _saveSettings(
                           _settings.copyWith(showSendButton: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-composer-autocorrect'),
+                        title: const Text('Autocorrect'),
+                        subtitle: const Text(
+                          'Let the keyboard auto-correct while typing.',
+                        ),
+                        value: _settings.composerAutocorrect,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(composerAutocorrect: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-composer-suggestions'),
+                        title: const Text('Keyboard suggestions'),
+                        subtitle: const Text(
+                          'Show the keyboard suggestion strip.',
+                        ),
+                        value: _settings.composerSuggestions,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(composerSuggestions: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-composer-capitalize'),
+                        title: const Text('Capitalize sentences'),
+                        value: _settings.composerCapitalizeSentences,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(
+                            composerCapitalizeSentences: value,
+                          ),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-command-aliases'),
+                        leading: const Icon(Icons.bolt_outlined),
+                        title: const Text('Command aliases'),
+                        subtitle: const Text(
+                          'Shortcuts like /j for /join; add your own.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const CommandAliasesScreen(),
+                          ),
                         ),
                       ),
                     ],
@@ -769,6 +906,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _settings.copyWith(autoRejoinOnKick: value),
                         ),
                       ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-kick-ban-reasons'),
+                        leading: const Icon(Icons.gavel_outlined),
+                        title: const Text('Kick/ban reasons'),
+                        subtitle: const Text(
+                          'Preset reasons offered by the moderation dialog.',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const KickBanReasonsScreen(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Advanced',
+                    children: [
+                      const ListTile(
+                        key: Key('settings-app-version'),
+                        leading: Icon(Icons.info_outline),
+                        title: Text('App version'),
+                        subtitle: Text('AndroidIRCX Flutter v$appVersion'),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-copy-diagnostics'),
+                        leading: const Icon(Icons.bug_report_outlined),
+                        title: const Text('Copy diagnostics'),
+                        subtitle: const Text(
+                          'Copy version and display settings for bug reports. '
+                          'Contains no passwords or chat content.',
+                        ),
+                        onTap: () => unawaited(_copyDiagnostics()),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -910,6 +1084,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     controller.selection = TextSelection.collapsed(offset: value.length);
   }
 
+  Future<void> _openMessageFormatEditor() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => MessageFormatScreen(
+          initialSettings: _settings,
+          onSettingsChanged: _saveSettings,
+        ),
+      ),
+    );
+  }
+
   Future<void> _openThemeEditor() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -977,11 +1162,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// on while the OS permission is granted.
   Future<void> _refreshPermissionStatuses() async {
     final hasNotifications = await _permissions.hasNotifications();
+    final hasBatteryExemption = await _permissions
+        .hasIgnoreBatteryOptimizations();
     if (!mounted) {
       return;
     }
+    setState(() => _hasBatteryExemption = hasBatteryExemption);
     if (_settings.notificationsEnabled && !hasNotifications) {
       await _saveSettings(_settings.copyWith(notificationsEnabled: false));
+    }
+  }
+
+  Future<void> _copyDiagnostics() async {
+    final diagnostics = [
+      'AndroidIRCX Flutter v$appVersion',
+      'Platform: $defaultTargetPlatform',
+      'Theme: ${_settings.themePreset.name}',
+      'Density: ${_settings.messageDensity.name}',
+      'Font: ${_settings.messageFontFamily} '
+          '(${(_settings.messageFontScale * 100).round()}%)',
+      'Timestamps: ${_settings.showTimestamps} '
+          '(${_settings.timestampFormat}, '
+          '${_settings.timestampPosition.name})',
+      'Nick style: ${_settings.nickDisplayFormat.name}',
+      'Notifications: ${_settings.notificationsEnabled}',
+      'Battery exemption: $_hasBatteryExemption',
+      'History retention/tab: ${_settings.historyRetentionPerTab}',
+    ].join('\n');
+    await Clipboard.setData(ClipboardData(text: diagnostics));
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Diagnostics copied to clipboard.')),
+    );
+  }
+
+  Future<void> _requestBatteryExemption() async {
+    final result = await _permissions.requestIgnoreBatteryOptimizations();
+    if (!mounted) {
+      return;
+    }
+    if (result == AppPermissionResult.granted) {
+      setState(() => _hasBatteryExemption = true);
+      return;
+    }
+    if (result == AppPermissionResult.permanentlyDenied) {
+      await _permissions.openSettingsPage();
     }
   }
 
@@ -1240,6 +1467,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       MessageDensity.comfortable => 'Comfortable',
       MessageDensity.relaxed => 'Relaxed',
     };
+  }
+
+  /// Current font-family dropdown value, folding the legacy monospace toggle
+  /// into 'monospace' so old settings show the right selection.
+  String get _effectiveMessageFontFamily {
+    final family = _settings.messageFontFamily;
+    if (family == 'system' && _settings.monospaceMessages) {
+      return 'monospace';
+    }
+    return _messageFontOptions.any((option) => option.family == family)
+        ? family
+        : 'system';
   }
 
   String _labelForNickColorMode(NickColorMode mode) {

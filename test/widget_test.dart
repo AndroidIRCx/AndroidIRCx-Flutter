@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:androidircx/app/app.dart';
 import 'package:androidircx/core/models/app_settings.dart';
+import 'package:androidircx/core/models/dcc_session.dart';
 import 'package:androidircx/core/models/network_config.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/core/presets/server_preset_service.dart';
@@ -32,6 +32,7 @@ import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
 import 'package:androidircx/media/services/media_download_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -730,10 +731,12 @@ void main() {
     await tester.tap(find.text('Compact').last);
     await tester.pumpAndSettle();
 
-    await scrollTo('settings-monospace-messages');
+    await scrollTo('settings-message-font-family');
     await tester.tap(
-      find.byKey(const Key('settings-monospace-messages')).first,
+      find.byKey(const Key('settings-message-font-family')).first,
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Monospace').last);
     await tester.pumpAndSettle();
 
     await scrollTo('settings-nick-color-mode');
@@ -746,6 +749,7 @@ void main() {
     expect(settings.themePreset, AppThemePreset.custom);
     expect(settings.customThemeJson, customJson);
     expect(settings.messageDensity, MessageDensity.compact);
+    expect(settings.messageFontFamily, 'monospace');
     expect(settings.monospaceMessages, isTrue);
     expect(settings.nickColorMode, NickColorMode.vivid);
   });
@@ -1470,12 +1474,28 @@ void main() {
     await tester.pump();
     await tester.pump();
 
+    // Reacting from the actions sheet sends a TAGMSG with the combined tag.
     await tester.longPress(find.textContaining('Delete this').first);
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('message-react-👍')));
+    await tester.pumpAndSettle();
+    expect(
+      transport.sentLines,
+      contains('@+draft/react=seed-redact\\:👍 TAGMSG #room'),
+    );
+
+    await tester.longPress(find.textContaining('Delete this').first);
+    await tester.pumpAndSettle();
+
+    // The quick-reaction row sits above the actions and can push this item
+    // below the fold in the sheet's list.
+    await tester.scrollUntilVisible(
+      find.text('Delete message'),
+      120,
+      scrollable: find.byType(Scrollable).last,
+    );
     expect(find.text('Delete message'), findsOneWidget);
 
-    await tester.ensureVisible(find.text('Delete message'));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Delete message'));
     await tester.pump();
 
@@ -1562,6 +1582,104 @@ void main() {
 
     expect(find.text('Accept'), findsNothing);
     expect(find.text('Close'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('switches tabs with hardware keyboard shortcuts', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    await tester.pump();
+
+    // Joining focuses the channel tab; the server tab is the other one.
+    final startTab = controller.activeTab.name;
+    expect(startTab, '#room');
+
+    // Focus the composer so key events land inside the shortcut scope.
+    await tester.tap(find.byType(TextField).first);
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+
+    expect(controller.activeTab.name, isNot('#room'));
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+    await tester.pump();
+
+    expect(controller.activeTab.name, '#room');
+
+    controller.dispose();
+  });
+
+  testWidgets('lists dcc sessions in the transfers modal', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    // No sessions yet -> no transfers button in the app bar.
+    expect(find.byKey(const Key('chat-dcc-transfers')), findsNothing);
+
+    transport.emit(
+      ':alice!user@example PRIVMSG AndroidIRCX :DCC SEND notes.txt 2130706433 5002 2048',
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('chat-dcc-transfers')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('chat-dcc-transfers')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('DCC transfers'), findsOneWidget);
+    expect(find.textContaining('notes.txt'), findsWidgets);
+
+    final session = controller.dccSessions.single;
+    await tester.tap(find.byKey(Key('dcc-transfer-close-${session.tabId}')));
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.dccSessions.single.status,
+      anyOf(DccSessionStatus.closed, DccSessionStatus.failed),
+    );
 
     controller.dispose();
   });

@@ -1,5 +1,11 @@
 enum NoticeRoutingMode { server, active, notice, private }
 
+/// How sender nicks are decorated in the message list.
+enum NickDisplayFormat { plain, angle, colon, bracket }
+
+/// Where the timestamp sits relative to the sender nick.
+enum TimestampPosition { afterNick, beforeNick }
+
 enum AppThemePreset { light, dark, ircap, custom }
 
 enum MessageDensity { compact, comfortable, relaxed }
@@ -19,6 +25,7 @@ class AppSettings {
     this.messageFontScale = 1.0,
     this.messageDensity = MessageDensity.comfortable,
     this.monospaceMessages = false,
+    this.messageFontFamily = 'system',
     this.nickColorMode = NickColorMode.soft,
     this.onboardingCompleted = false,
     this.appLockEnabled = false,
@@ -31,8 +38,14 @@ class AppSettings {
     this.notificationSound = true,
     this.hideJoinPartQuit = false,
     this.showTimestamps = true,
+    this.timestampFormat = 'HH:mm',
+    this.timestampPosition = TimestampPosition.afterNick,
+    this.nickDisplayFormat = NickDisplayFormat.plain,
     this.enterToSend = true,
     this.showSendButton = true,
+    this.composerAutocorrect = true,
+    this.composerSuggestions = true,
+    this.composerCapitalizeSentences = false,
     this.highlightWords = const <String>[],
     this.autoAwayEnabled = false,
     this.autoAwayMinutes = 10,
@@ -52,7 +65,14 @@ class AppSettings {
   final String customThemeJson;
   final double messageFontScale;
   final MessageDensity messageDensity;
+
+  /// Legacy monospace toggle, kept for stored-settings migration; superseded
+  /// by [messageFontFamily] whenever that is not 'system'.
   final bool monospaceMessages;
+
+  /// Message font family: 'system' for the platform default, otherwise an
+  /// Android family name ('monospace', 'serif', 'sans-serif', ...).
+  final String messageFontFamily;
   final NickColorMode nickColorMode;
 
   /// Whether the first-run onboarding + consent flow has been completed.
@@ -79,8 +99,19 @@ class AppSettings {
   // Display / writing.
   final bool hideJoinPartQuit;
   final bool showTimestamps;
+
+  /// Timestamp pattern for message lines ('HH:mm', 'HH:mm:ss', 'h:mm a',
+  /// 'h:mm:ss a').
+  final String timestampFormat;
+  final TimestampPosition timestampPosition;
+  final NickDisplayFormat nickDisplayFormat;
   final bool enterToSend;
   final bool showSendButton;
+
+  /// Composer keyboard behavior.
+  final bool composerAutocorrect;
+  final bool composerSuggestions;
+  final bool composerCapitalizeSentences;
 
   /// Extra words (besides your nick) that trigger a highlight notification.
   final List<String> highlightWords;
@@ -109,6 +140,7 @@ class AppSettings {
     double? messageFontScale,
     MessageDensity? messageDensity,
     bool? monospaceMessages,
+    String? messageFontFamily,
     NickColorMode? nickColorMode,
     bool? onboardingCompleted,
     bool? appLockEnabled,
@@ -121,8 +153,14 @@ class AppSettings {
     bool? notificationSound,
     bool? hideJoinPartQuit,
     bool? showTimestamps,
+    String? timestampFormat,
+    TimestampPosition? timestampPosition,
+    NickDisplayFormat? nickDisplayFormat,
     bool? enterToSend,
     bool? showSendButton,
+    bool? composerAutocorrect,
+    bool? composerSuggestions,
+    bool? composerCapitalizeSentences,
     List<String>? highlightWords,
     bool? autoAwayEnabled,
     int? autoAwayMinutes,
@@ -149,6 +187,7 @@ class AppSettings {
       ),
       messageDensity: messageDensity ?? this.messageDensity,
       monospaceMessages: monospaceMessages ?? this.monospaceMessages,
+      messageFontFamily: messageFontFamily ?? this.messageFontFamily,
       nickColorMode: nickColorMode ?? this.nickColorMode,
       onboardingCompleted: onboardingCompleted ?? this.onboardingCompleted,
       appLockEnabled: appLockEnabled ?? this.appLockEnabled,
@@ -162,8 +201,15 @@ class AppSettings {
       notificationSound: notificationSound ?? this.notificationSound,
       hideJoinPartQuit: hideJoinPartQuit ?? this.hideJoinPartQuit,
       showTimestamps: showTimestamps ?? this.showTimestamps,
+      timestampFormat: timestampFormat ?? this.timestampFormat,
+      timestampPosition: timestampPosition ?? this.timestampPosition,
+      nickDisplayFormat: nickDisplayFormat ?? this.nickDisplayFormat,
       enterToSend: enterToSend ?? this.enterToSend,
       showSendButton: showSendButton ?? this.showSendButton,
+      composerAutocorrect: composerAutocorrect ?? this.composerAutocorrect,
+      composerSuggestions: composerSuggestions ?? this.composerSuggestions,
+      composerCapitalizeSentences:
+          composerCapitalizeSentences ?? this.composerCapitalizeSentences,
       highlightWords: highlightWords ?? this.highlightWords,
       autoAwayEnabled: autoAwayEnabled ?? this.autoAwayEnabled,
       autoAwayMinutes: autoAwayMinutes ?? this.autoAwayMinutes,
@@ -188,6 +234,7 @@ class AppSettings {
       'messageFontScale': messageFontScale,
       'messageDensity': messageDensity.name,
       'monospaceMessages': monospaceMessages,
+      'messageFontFamily': messageFontFamily,
       'nickColorMode': nickColorMode.name,
       'onboardingCompleted': onboardingCompleted,
       'appLockEnabled': appLockEnabled,
@@ -200,8 +247,14 @@ class AppSettings {
       'notificationSound': notificationSound,
       'hideJoinPartQuit': hideJoinPartQuit,
       'showTimestamps': showTimestamps,
+      'timestampFormat': timestampFormat,
+      'timestampPosition': timestampPosition.name,
+      'nickDisplayFormat': nickDisplayFormat.name,
       'enterToSend': enterToSend,
       'showSendButton': showSendButton,
+      'composerAutocorrect': composerAutocorrect,
+      'composerSuggestions': composerSuggestions,
+      'composerCapitalizeSentences': composerCapitalizeSentences,
       'highlightWords': highlightWords,
       'autoAwayEnabled': autoAwayEnabled,
       'autoAwayMinutes': autoAwayMinutes,
@@ -241,6 +294,13 @@ class AppSettings {
         MessageDensity.comfortable,
       ),
       monospaceMessages: (json['monospaceMessages'] as bool?) ?? false,
+      messageFontFamily:
+          (json['messageFontFamily'] as String?)?.trim().isNotEmpty ?? false
+          ? (json['messageFontFamily']! as String).trim()
+          // Migrate the legacy monospace toggle into the font family.
+          : ((json['monospaceMessages'] as bool?) ?? false)
+          ? 'monospace'
+          : 'system',
       nickColorMode: _enumByName(
         NickColorMode.values,
         json['nickColorMode'],
@@ -257,8 +317,26 @@ class AppSettings {
       notificationSound: (json['notificationSound'] as bool?) ?? true,
       hideJoinPartQuit: (json['hideJoinPartQuit'] as bool?) ?? false,
       showTimestamps: (json['showTimestamps'] as bool?) ?? true,
+      timestampFormat:
+          (json['timestampFormat'] as String?)?.trim().isNotEmpty ?? false
+          ? (json['timestampFormat']! as String).trim()
+          : 'HH:mm',
+      timestampPosition: _enumByName(
+        TimestampPosition.values,
+        json['timestampPosition'],
+        TimestampPosition.afterNick,
+      ),
+      nickDisplayFormat: _enumByName(
+        NickDisplayFormat.values,
+        json['nickDisplayFormat'],
+        NickDisplayFormat.plain,
+      ),
       enterToSend: (json['enterToSend'] as bool?) ?? true,
       showSendButton: (json['showSendButton'] as bool?) ?? true,
+      composerAutocorrect: (json['composerAutocorrect'] as bool?) ?? true,
+      composerSuggestions: (json['composerSuggestions'] as bool?) ?? true,
+      composerCapitalizeSentences:
+          (json['composerCapitalizeSentences'] as bool?) ?? false,
       highlightWords: _stringList(json['highlightWords']),
       autoAwayEnabled: (json['autoAwayEnabled'] as bool?) ?? false,
       autoAwayMinutes: (json['autoAwayMinutes'] as num?)?.toInt() ?? 10,

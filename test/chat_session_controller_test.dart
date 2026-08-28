@@ -14,6 +14,7 @@ import 'package:androidircx/dcc/services/dcc_service.dart';
 import 'package:androidircx/dcc/services/dcc_socket_backend.dart';
 import 'package:androidircx/core/storage/settings_repository.dart';
 import 'package:androidircx/features/chat/application/chat_session_controller.dart';
+import 'package:androidircx/features/chat/data/channel_notification_rules_repository.dart';
 import 'package:androidircx/features/chat/data/chat_session_persistence.dart';
 import 'package:androidircx/features/chat/data/message_history_repository.dart';
 import 'package:androidircx/features/chat/data/user_list_entry.dart';
@@ -2063,6 +2064,101 @@ void main() {
     controller.dispose();
   });
 
+  test('reactToMessage sends TAGMSG and records the local reaction', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+    );
+
+    await controller.start();
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    transport.emit('@msgid=react-2 :alice!user@example PRIVMSG #room :Hi');
+    await Future<void>.delayed(Duration.zero);
+
+    final message = controller
+        .messagesForTab(
+          controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+        )
+        .firstWhere((item) => item.tags['msgid'] == 'react-2');
+
+    final sent = await controller.reactToMessage(message, '👍');
+    expect(sent, isTrue);
+    expect(
+      transport.sentLines,
+      contains('@+draft/react=react-2\\:👍 TAGMSG #room'),
+    );
+    expect(controller.reactionsForMessage(message), containsPair('👍', 1));
+
+    // Messages without a msgid cannot be reacted to.
+    transport.emit(':alice!user@example PRIVMSG #room :No msgid here');
+    await Future<void>.delayed(Duration.zero);
+    final plain = controller
+        .messagesForTab(
+          controller.tabs.firstWhere((tab) => tab.name == '#room').id,
+        )
+        .lastWhere((item) => item.content == 'No msgid here');
+    expect(await controller.reactToMessage(plain, '👍'), isFalse);
+
+    controller.dispose();
+  });
+
+  test(
+    'queues messages typed while disconnected and flushes on connect',
+    () async {
+      final transport = _FakeTransport();
+      final service = IrcService(transportConnector: (_) async => transport);
+      final controller = ChatSessionController(
+        network: const NetworkConfig(
+          id: 'dbase',
+          name: 'DBase',
+          host: 'irc.example.test',
+          port: 6697,
+          nickname: 'AndroidIRCX',
+          altNickname: 'AndroidIRCX_',
+        ),
+        ircService: service,
+      );
+
+      // Open a query tab and type while still disconnected.
+      await controller.handleComposerSubmit('/query alice');
+      await controller.handleComposerSubmit('first offline');
+      await controller.handleComposerSubmit('second offline');
+      expect(controller.queuedOfflineMessages, 2);
+      expect(
+        transport.sentLines.where((line) => line.contains('offline')),
+        isEmpty,
+      );
+
+      await controller.start();
+      transport.emit(':server 001 AndroidIRCX :Welcome');
+      // Post-registration actions (including the outbox flush) run at the
+      // end of the MOTD.
+      transport.emit(':server 422 AndroidIRCX :MOTD File is missing');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.queuedOfflineMessages, 0);
+      final sent = transport.sentLines
+          .where((line) => line.startsWith('PRIVMSG alice'))
+          .toList();
+      expect(sent, [
+        'PRIVMSG alice :first offline',
+        'PRIVMSG alice :second offline',
+      ]);
+
+      controller.dispose();
+    },
+  );
+
   test('handles account away host and setname user-state frames', () async {
     final transport = _FakeTransport();
     final service = IrcService(transportConnector: (_) async => transport);
@@ -2929,6 +3025,88 @@ void main() {
 
     await sub.cancel();
     controller.dispose();
+  });
+
+  test('per-channel notification rules mute, filter, and promote', () async {
+    final transport = _FakeTransport();
+    final service = IrcService(transportConnector: (_) async => transport);
+    final controller = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: service,
+      settingsRepository: _FakeSettingsRepository(
+        const AppSettings(
+          highlightWords: ['flutter'],
+          notificationsEnabled: true,
+        ),
+      ),
+    );
+
+    final received = <ForegroundUserNotification>[];
+    final sub = controller.notifications.listen(received.add);
+    await controller.start();
+
+    // Regular channel chatter does not notify by default.
+    transport.emit(':alice!u@h PRIVMSG #room :plain chatter');
+    await Future<void>.delayed(Duration.zero);
+    expect(received, isEmpty);
+
+    // "All messages" promotes regular channel chat to a notification.
+    await controller.setChannelNotificationRule(
+      '#room',
+      ChannelNotificationRule.all,
+    );
+    transport.emit(':alice!u@h PRIVMSG #room :more chatter');
+    await Future<void>.delayed(Duration.zero);
+    expect(received, hasLength(1));
+
+    // "Mentions only" drops plain chatter but keeps highlights.
+    await controller.setChannelNotificationRule(
+      '#room',
+      ChannelNotificationRule.mentionsOnly,
+    );
+    transport.emit(':alice!u@h PRIVMSG #room :still chatter');
+    transport.emit(':alice!u@h PRIVMSG #room :flutter rocks');
+    await Future<void>.delayed(Duration.zero);
+    expect(received, hasLength(2));
+    expect(
+      received.last.channelKind,
+      ForegroundNotificationChannelKind.highlights,
+    );
+
+    // "Muted" suppresses even highlights.
+    await controller.setChannelNotificationRule(
+      '#room',
+      ChannelNotificationRule.mute,
+    );
+    transport.emit(':alice!u@h PRIVMSG #room :flutter again');
+    await Future<void>.delayed(Duration.zero);
+    expect(received, hasLength(2));
+
+    // Rules persist per network and reload into a fresh controller.
+    final reloaded = ChatSessionController(
+      network: const NetworkConfig(
+        id: 'dbase',
+        name: 'DBase',
+        host: 'irc.example.test',
+        port: 6697,
+        nickname: 'AndroidIRCX',
+        altNickname: 'AndroidIRCX_',
+      ),
+      ircService: IrcService(transportConnector: (_) async => _FakeTransport()),
+    );
+    await reloaded.start();
+    expect(reloaded.notificationRuleFor('#ROOM'), ChannelNotificationRule.mute);
+
+    await sub.cancel();
+    controller.dispose();
+    reloaded.dispose();
   });
 
   test('suppresses notifications disabled in settings', () async {
