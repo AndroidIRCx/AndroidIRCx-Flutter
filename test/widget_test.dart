@@ -30,6 +30,7 @@ import 'package:androidircx/media/services/link_preview_service.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
+import 'package:androidircx/media/services/media_auto_download_policy.dart';
 import 'package:androidircx/media/services/media_download_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -163,6 +164,19 @@ class _FakeMediaDownloadService implements MediaDownloadService {
       localPath: r'C:\Downloads\Media\manual.pdf',
       bytesDownloaded: 6,
     );
+  }
+}
+
+class _FakeMediaAutoDownloadPolicy implements MediaAutoDownloadPolicy {
+  _FakeMediaAutoDownloadPolicy({required this.allowed});
+
+  bool allowed;
+  final modes = <MediaAutoDownloadMode>[];
+
+  @override
+  Future<bool> canAutoDownload(MediaAutoDownloadMode mode) async {
+    modes.add(mode);
+    return allowed;
   }
 }
 
@@ -691,6 +705,28 @@ void main() {
     final settings = await SharedPrefsSettingsRepository().loadSettings();
 
     expect(settings.mediaDownloadDirectoryPath, r'C:\Downloads\Media');
+  });
+
+  testWidgets('settings saves media auto-download mode', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-media-auto-download')),
+      500,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('settings-media-auto-download')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Any network').last);
+    await tester.pumpAndSettle();
+
+    final settings = await SharedPrefsSettingsRepository().loadSettings();
+
+    expect(settings.mediaAutoDownloadMode, MediaAutoDownloadMode.always);
   });
 
   testWidgets('settings saves appearance and theme options', (tester) async {
@@ -1349,6 +1385,69 @@ void main() {
       r'C:\Downloads\Media',
     );
     expect(find.textContaining('Downloaded manual.pdf'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('auto-downloads new media attachments when enabled', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final mediaDownloadService = _FakeMediaDownloadService();
+    final autoDownloadPolicy = _FakeMediaAutoDownloadPolicy(allowed: true);
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+      settingsRepository: _FakeSettingsRepository(
+        const AppSettings(
+          mediaDownloadDirectoryPath: r'C:\Downloads\Media',
+          mediaAutoDownloadMode: MediaAutoDownloadMode.always,
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          controller: controller,
+          mediaDownloadService: mediaDownloadService,
+          mediaAutoDownloadPolicy: autoDownloadPolicy,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    await tester.pump();
+    transport.emit(
+      ':alice!user@example PRIVMSG #room :auto https://example.com/auto.pdf',
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+
+    expect(autoDownloadPolicy.modes, [MediaAutoDownloadMode.always]);
+    expect(mediaDownloadService.calls, hasLength(1));
+    expect(
+      mediaDownloadService.calls.single.url,
+      'https://example.com/auto.pdf',
+    );
+    expect(
+      mediaDownloadService.calls.single.directoryPath,
+      r'C:\Downloads\Media',
+    );
+
+    controller.selectTab(controller.activeTabId);
+    await tester.pump();
+    expect(mediaDownloadService.calls, hasLength(1));
 
     controller.dispose();
   });

@@ -30,6 +30,7 @@ import 'package:androidircx/irc/parser/irc_formatter.dart';
 import 'package:androidircx/irc/parser/message_content_parser.dart';
 import 'package:androidircx/features/settings/presentation/settings_screen.dart';
 import 'package:androidircx/media/services/link_preview_service.dart';
+import 'package:androidircx/media/services/media_auto_download_policy.dart';
 import 'package:androidircx/media/services/media_download_service.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -42,6 +43,7 @@ class ChatScreen extends StatefulWidget {
     required this.controller,
     this.filePicker,
     this.mediaDownloadService,
+    this.mediaAutoDownloadPolicy,
     this.sessionRegistry,
     this.networkController,
     this.onSwitchNetwork,
@@ -53,6 +55,7 @@ class ChatScreen extends StatefulWidget {
   final ChatSessionController controller;
   final DccFilePicker? filePicker;
   final MediaDownloadService? mediaDownloadService;
+  final MediaAutoDownloadPolicy? mediaAutoDownloadPolicy;
 
   /// Local per-channel notes store; defaults to a shared-preferences backed
   /// instance. Injectable for tests.
@@ -92,12 +95,19 @@ class _ChatScreenState extends State<ChatScreen> {
   String _nickSearchQuery = '';
   IrcMessage? _pendingReplyMessage;
   bool _connectedBannerDismissed = false;
+  final Set<String> _autoDownloadSeenAttachmentKeys = <String>{};
+  final Set<String> _autoDownloadInFlightAttachmentKeys = <String>{};
 
   ChatSessionController get _controller => widget.controller;
   DccFilePicker get _filePicker =>
       widget.filePicker ?? const MethodChannelDccFilePicker();
   MediaDownloadService get _mediaDownloadService =>
       widget.mediaDownloadService ?? createMediaDownloadService();
+  MediaAutoDownloadPolicy? _defaultMediaAutoDownloadPolicy;
+  MediaAutoDownloadPolicy get _mediaAutoDownloadPolicy =>
+      widget.mediaAutoDownloadPolicy ??
+      (_defaultMediaAutoDownloadPolicy ??=
+          ConnectivityMediaAutoDownloadPolicy());
   ChannelNotesRepository? _defaultChannelNotes;
   ChannelNotesRepository get _channelNotesRepository =>
       widget.channelNotesRepository ??
@@ -110,7 +120,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    _controller.addListener(_syncConnectionBannerDismissal);
+    _rememberExistingAutoDownloadAttachments();
+    _controller.addListener(_handleControllerChanged);
     _controller.start();
   }
 
@@ -118,20 +129,28 @@ class _ChatScreenState extends State<ChatScreen> {
   void didUpdateWidget(covariant ChatScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.controller, widget.controller)) {
-      oldWidget.controller.removeListener(_syncConnectionBannerDismissal);
+      oldWidget.controller.removeListener(_handleControllerChanged);
       _connectedBannerDismissed = false;
-      _controller.addListener(_syncConnectionBannerDismissal);
+      _autoDownloadSeenAttachmentKeys.clear();
+      _autoDownloadInFlightAttachmentKeys.clear();
+      _rememberExistingAutoDownloadAttachments();
+      _controller.addListener(_handleControllerChanged);
       _controller.start();
     }
   }
 
   @override
   void dispose() {
-    _controller.removeListener(_syncConnectionBannerDismissal);
+    _controller.removeListener(_handleControllerChanged);
     _composerController.dispose();
     _messageSearchController.dispose();
     _nickSearchController.dispose();
     super.dispose();
+  }
+
+  void _handleControllerChanged() {
+    _syncConnectionBannerDismissal();
+    _queueMediaAutoDownloads();
   }
 
   void _syncConnectionBannerDismissal() {
@@ -143,6 +162,74 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     setState(() => _connectedBannerDismissed = false);
+  }
+
+  void _rememberExistingAutoDownloadAttachments() {
+    for (final tab in _controller.tabs) {
+      for (final message in _controller.messagesForTab(tab.id)) {
+        for (final attachment in message.attachments) {
+          if (_canDownloadAttachment(attachment)) {
+            _autoDownloadSeenAttachmentKeys.add(
+              _autoDownloadAttachmentKey(message, attachment),
+            );
+          }
+        }
+      }
+    }
+  }
+
+  void _queueMediaAutoDownloads() {
+    final mode = _controller.settings.mediaAutoDownloadMode;
+    if (mode == MediaAutoDownloadMode.never) {
+      _rememberExistingAutoDownloadAttachments();
+      return;
+    }
+
+    for (final tab in _controller.tabs) {
+      for (final message in _controller.messagesForTab(tab.id)) {
+        for (final attachment in message.attachments) {
+          if (!_canDownloadAttachment(attachment)) {
+            continue;
+          }
+          final key = _autoDownloadAttachmentKey(message, attachment);
+          if (!_autoDownloadSeenAttachmentKeys.add(key)) {
+            continue;
+          }
+          if (message.isOwn || message.isPlayback) {
+            continue;
+          }
+          if (!_autoDownloadInFlightAttachmentKeys.add(key)) {
+            continue;
+          }
+          unawaited(_autoDownloadAttachment(key, attachment, mode));
+        }
+      }
+    }
+  }
+
+  Future<void> _autoDownloadAttachment(
+    String key,
+    IrcMessageAttachment attachment,
+    MediaAutoDownloadMode mode,
+  ) async {
+    try {
+      if (!await _mediaAutoDownloadPolicy.canAutoDownload(mode)) {
+        return;
+      }
+      final url = attachment.uri;
+      if (url == null || url.trim().isEmpty) {
+        return;
+      }
+      await _mediaDownloadService.download(
+        url,
+        directoryPath: _controller.settings.mediaDownloadDirectoryPath,
+      );
+    } catch (_) {
+      // Auto-download must never interrupt chat; manual download remains
+      // available from the attachment card when a background attempt fails.
+    } finally {
+      _autoDownloadInFlightAttachmentKeys.remove(key);
+    }
   }
 
   @override
@@ -4194,6 +4281,18 @@ bool _canDownloadAttachment(IrcMessageAttachment attachment) {
     IrcMessageAttachmentType.dccChat ||
     IrcMessageAttachmentType.dccSend => false,
   };
+}
+
+String _autoDownloadAttachmentKey(
+  IrcMessage message,
+  IrcMessageAttachment attachment,
+) {
+  return [
+    message.networkId ?? '',
+    message.tabId,
+    message.id,
+    attachment.uri?.trim() ?? '',
+  ].join('\u001f');
 }
 
 class _ConnectionBanner extends StatelessWidget {

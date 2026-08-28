@@ -12,6 +12,8 @@ enum MessageDensity { compact, comfortable, relaxed }
 
 enum NickColorMode { none, soft, vivid }
 
+enum MediaAutoDownloadMode { never, wifiOnly, always }
+
 class AppSettings {
   const AppSettings({
     this.showRawEvents = true,
@@ -20,6 +22,7 @@ class AppSettings {
     this.showAttachmentPreviews = true,
     this.dccDownloadDirectoryPath = '',
     this.mediaDownloadDirectoryPath = '',
+    this.mediaAutoDownloadMode = MediaAutoDownloadMode.never,
     this.themePreset = AppThemePreset.light,
     this.customThemeJson = '',
     this.messageFontScale = 1.0,
@@ -61,6 +64,7 @@ class AppSettings {
   final bool showAttachmentPreviews;
   final String dccDownloadDirectoryPath;
   final String mediaDownloadDirectoryPath;
+  final MediaAutoDownloadMode mediaAutoDownloadMode;
   final AppThemePreset themePreset;
   final String customThemeJson;
   final double messageFontScale;
@@ -135,6 +139,7 @@ class AppSettings {
     bool? showAttachmentPreviews,
     String? dccDownloadDirectoryPath,
     String? mediaDownloadDirectoryPath,
+    MediaAutoDownloadMode? mediaAutoDownloadMode,
     AppThemePreset? themePreset,
     String? customThemeJson,
     double? messageFontScale,
@@ -180,6 +185,8 @@ class AppSettings {
           dccDownloadDirectoryPath ?? this.dccDownloadDirectoryPath,
       mediaDownloadDirectoryPath:
           mediaDownloadDirectoryPath ?? this.mediaDownloadDirectoryPath,
+      mediaAutoDownloadMode:
+          mediaAutoDownloadMode ?? this.mediaAutoDownloadMode,
       themePreset: themePreset ?? this.themePreset,
       customThemeJson: customThemeJson ?? this.customThemeJson,
       messageFontScale: _clampFontScale(
@@ -229,6 +236,7 @@ class AppSettings {
       'showAttachmentPreviews': showAttachmentPreviews,
       'dccDownloadDirectoryPath': dccDownloadDirectoryPath,
       'mediaDownloadDirectoryPath': mediaDownloadDirectoryPath,
+      'mediaAutoDownloadMode': mediaAutoDownloadMode.name,
       'themePreset': themePreset.name,
       'customThemeJson': customThemeJson,
       'messageFontScale': messageFontScale,
@@ -279,6 +287,11 @@ class AppSettings {
           (json['dccDownloadDirectoryPath'] as String?)?.trim() ?? '',
       mediaDownloadDirectoryPath:
           (json['mediaDownloadDirectoryPath'] as String?)?.trim() ?? '',
+      mediaAutoDownloadMode: _enumByName(
+        MediaAutoDownloadMode.values,
+        json['mediaAutoDownloadMode'],
+        MediaAutoDownloadMode.never,
+      ),
       themePreset: _enumByName(
         AppThemePreset.values,
         json['themePreset'],

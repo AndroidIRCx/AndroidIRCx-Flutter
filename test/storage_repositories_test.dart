@@ -609,6 +609,7 @@ void main() {
           showAttachmentPreviews: false,
           dccDownloadDirectoryPath: r'C:\Downloads\IRC',
           mediaDownloadDirectoryPath: r'C:\Downloads\Media',
+          mediaAutoDownloadMode: MediaAutoDownloadMode.wifiOnly,
           themePreset: AppThemePreset.dark,
           customThemeJson: '{"primary":"#123456"}',
           messageFontScale: 1.2,
@@ -625,6 +626,7 @@ void main() {
       expect(settings.showAttachmentPreviews, isFalse);
       expect(settings.dccDownloadDirectoryPath, r'C:\Downloads\IRC');
       expect(settings.mediaDownloadDirectoryPath, r'C:\Downloads\Media');
+      expect(settings.mediaAutoDownloadMode, MediaAutoDownloadMode.wifiOnly);
       expect(settings.themePreset, AppThemePreset.dark);
       expect(settings.customThemeJson, '{"primary":"#123456"}');
       expect(settings.messageFontScale, 1.2);
