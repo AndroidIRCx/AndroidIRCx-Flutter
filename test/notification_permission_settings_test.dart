@@ -26,6 +26,19 @@ class _FakePermissions implements AppPermissions {
     return notifResult;
   }
 
+  bool hasBattery = false;
+  int batteryRequests = 0;
+
+  @override
+  Future<bool> hasIgnoreBatteryOptimizations() async => hasBattery;
+
+  @override
+  Future<AppPermissionResult> requestIgnoreBatteryOptimizations() async {
+    batteryRequests++;
+    hasBattery = true;
+    return AppPermissionResult.granted;
+  }
+
   @override
   Future<void> openSettingsPage() async {}
 }

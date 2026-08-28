@@ -43,6 +43,9 @@ class AppSettings {
     this.nickDisplayFormat = NickDisplayFormat.plain,
     this.enterToSend = true,
     this.showSendButton = true,
+    this.composerAutocorrect = true,
+    this.composerSuggestions = true,
+    this.composerCapitalizeSentences = false,
     this.highlightWords = const <String>[],
     this.autoAwayEnabled = false,
     this.autoAwayMinutes = 10,
@@ -105,6 +108,11 @@ class AppSettings {
   final bool enterToSend;
   final bool showSendButton;
 
+  /// Composer keyboard behavior.
+  final bool composerAutocorrect;
+  final bool composerSuggestions;
+  final bool composerCapitalizeSentences;
+
   /// Extra words (besides your nick) that trigger a highlight notification.
   final List<String> highlightWords;
   final bool autoAwayEnabled;
@@ -150,6 +158,9 @@ class AppSettings {
     NickDisplayFormat? nickDisplayFormat,
     bool? enterToSend,
     bool? showSendButton,
+    bool? composerAutocorrect,
+    bool? composerSuggestions,
+    bool? composerCapitalizeSentences,
     List<String>? highlightWords,
     bool? autoAwayEnabled,
     int? autoAwayMinutes,
@@ -195,6 +206,10 @@ class AppSettings {
       nickDisplayFormat: nickDisplayFormat ?? this.nickDisplayFormat,
       enterToSend: enterToSend ?? this.enterToSend,
       showSendButton: showSendButton ?? this.showSendButton,
+      composerAutocorrect: composerAutocorrect ?? this.composerAutocorrect,
+      composerSuggestions: composerSuggestions ?? this.composerSuggestions,
+      composerCapitalizeSentences:
+          composerCapitalizeSentences ?? this.composerCapitalizeSentences,
       highlightWords: highlightWords ?? this.highlightWords,
       autoAwayEnabled: autoAwayEnabled ?? this.autoAwayEnabled,
       autoAwayMinutes: autoAwayMinutes ?? this.autoAwayMinutes,
@@ -237,6 +252,9 @@ class AppSettings {
       'nickDisplayFormat': nickDisplayFormat.name,
       'enterToSend': enterToSend,
       'showSendButton': showSendButton,
+      'composerAutocorrect': composerAutocorrect,
+      'composerSuggestions': composerSuggestions,
+      'composerCapitalizeSentences': composerCapitalizeSentences,
       'highlightWords': highlightWords,
       'autoAwayEnabled': autoAwayEnabled,
       'autoAwayMinutes': autoAwayMinutes,
@@ -315,6 +333,10 @@ class AppSettings {
       ),
       enterToSend: (json['enterToSend'] as bool?) ?? true,
       showSendButton: (json['showSendButton'] as bool?) ?? true,
+      composerAutocorrect: (json['composerAutocorrect'] as bool?) ?? true,
+      composerSuggestions: (json['composerSuggestions'] as bool?) ?? true,
+      composerCapitalizeSentences:
+          (json['composerCapitalizeSentences'] as bool?) ?? false,
       highlightWords: _stringList(json['highlightWords']),
       autoAwayEnabled: (json['autoAwayEnabled'] as bool?) ?? false,
       autoAwayMinutes: (json['autoAwayMinutes'] as num?)?.toInt() ?? 10,

@@ -8,6 +8,11 @@ abstract class AppPermissions {
   Future<AppPermissionResult> requestNotifications();
   Future<bool> hasNotifications();
 
+  /// Asks Android to exempt the app from battery optimization so background
+  /// IRC connections are not killed by Doze.
+  Future<AppPermissionResult> requestIgnoreBatteryOptimizations();
+  Future<bool> hasIgnoreBatteryOptimizations();
+
   /// Opens the OS app-settings page (used after a permanent denial).
   Future<void> openSettingsPage();
 }
@@ -35,6 +40,14 @@ class PermissionHandlerAppPermissions implements AppPermissions {
   @override
   Future<bool> hasNotifications() async =>
       (await Permission.notification.status).isGranted;
+
+  @override
+  Future<AppPermissionResult> requestIgnoreBatteryOptimizations() async =>
+      _map(await Permission.ignoreBatteryOptimizations.request());
+
+  @override
+  Future<bool> hasIgnoreBatteryOptimizations() async =>
+      (await Permission.ignoreBatteryOptimizations.status).isGranted;
 
   @override
   Future<void> openSettingsPage() async {

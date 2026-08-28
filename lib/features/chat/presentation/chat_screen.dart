@@ -173,399 +173,453 @@ class _ChatScreenState extends State<ChatScreen> {
                     .where((message) => message.kind != IrcMessageKind.event)
                     .toList(growable: false)
               : baseMessages;
-          return Scaffold(
-            appBar: AppBar(
-              title: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(_controller.activeTab.name),
-                  Text(
-                    _controller.activeTab.type == ChatTabType.channel &&
-                            _controller.activeChannelSummary.isNotEmpty
-                        ? _controller.activeChannelSummary
-                        : _controller.activeTab.type == ChatTabType.dcc &&
-                              _controller.activeDccSession != null
-                        ? _dccSummary(_controller.activeDccSession!)
-                        : _statusText(_controller.connection),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-              actions: [
-                if (_controller.activeTab.type == ChatTabType.channel)
-                  Builder(
-                    builder: (context) {
-                      return IconButton(
-                        onPressed: () => Scaffold.of(context).openEndDrawer(),
-                        icon: const Icon(Icons.people_outline),
-                        tooltip: 'Nick list',
-                      );
-                    },
-                  ),
-                if (_controller.settings.showHeaderSearchButton)
-                  IconButton(
-                    onPressed: _toggleMessageSearch,
-                    icon: Icon(
-                      _messageSearchVisible ? Icons.search_off : Icons.search,
-                    ),
-                    tooltip: _messageSearchVisible
-                        ? 'Close search'
-                        : 'Search messages',
-                  ),
-                IconButton(
-                  onPressed: _openHistoryTools,
-                  icon: const Icon(Icons.history),
-                  tooltip: 'History tools',
-                ),
-                IconButton(
-                  onPressed: _showJoinDialog,
-                  icon: const Icon(Icons.tag),
-                  tooltip: 'Join channel',
-                ),
-                IconButton(
-                  onPressed: _openChannelList,
-                  icon: const Icon(Icons.format_list_bulleted),
-                  tooltip: 'Channel list',
-                ),
-                if (_controller.dccSessions.isNotEmpty)
-                  IconButton(
-                    key: const Key('chat-dcc-transfers'),
-                    onPressed: _openDccTransfers,
-                    icon: Badge.count(
-                      count: _activeDccTransferCount,
-                      isLabelVisible: _activeDccTransferCount > 0,
-                      child: const Icon(Icons.swap_vert_circle_outlined),
-                    ),
-                    tooltip: 'DCC transfers',
-                  ),
-                IconButton(
-                  onPressed: _openSettings,
-                  icon: const Icon(Icons.tune),
-                  tooltip: 'Settings',
-                ),
-                IconButton(
-                  onPressed:
-                      _controller.connection.phase == ConnectionPhase.connected
-                      ? _controller.disconnect
-                      : _controller.start,
-                  icon: Icon(
-                    _controller.connection.phase == ConnectionPhase.connected
-                        ? Icons.link_off
-                        : Icons.wifi_tethering,
-                  ),
-                  tooltip:
-                      _controller.connection.phase == ConnectionPhase.connected
-                      ? 'Disconnect'
-                      : 'Connect',
-                ),
-              ],
-            ),
-            drawer: Drawer(
-              child: SafeArea(
-                child: ListView(
-                  padding: EdgeInsets.zero,
+          return CallbackShortcuts(
+            bindings: _keyboardBindings(),
+            child: Scaffold(
+              appBar: AppBar(
+                title: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (widget.onSwitchNetwork != null &&
-                        widget.networkController != null) ...[
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-                        child: Text(
-                          'NETWORKS',
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 0.8,
-                              ),
-                        ),
-                      ),
-                      for (final network in widget.networkController!.networks)
-                        _buildNetworkSwitchTile(network),
-                      ListTile(
-                        leading: const Icon(Icons.dns_outlined),
-                        title: const Text('Manage networks'),
-                        subtitle: const Text('Add, edit, or browse servers'),
-                        onTap: () {
-                          Navigator.of(context).pop();
-                          widget.onManageNetworks?.call();
-                        },
-                      ),
-                      const Divider(height: 1),
-                    ],
-                    ListTile(
-                      title: Text(_controller.network.name),
-                      subtitle: Text(
-                        '${_controller.network.host}:${_controller.network.port}',
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    for (final tab in _controller.tabs)
-                      _buildTabTile(context, tab),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.block),
-                      title: const Text('Ignore list'),
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) =>
-                                IgnoreListScreen(controller: _controller),
-                          ),
-                        );
-                      },
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.rule_outlined),
-                      title: const Text('User lists'),
-                      subtitle: const Text(
-                        'Notify, protected, blacklist, auto-mode',
-                      ),
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) =>
-                                UserListsScreen(controller: _controller),
-                          ),
-                        );
-                      },
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.info_outline),
-                      title: const Text('Connection details'),
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) => ConnectionDetailsScreen(
-                              controller: _controller,
-                            ),
-                          ),
-                        );
-                      },
+                    Text(_controller.activeTab.name),
+                    Text(
+                      _controller.activeTab.type == ChatTabType.channel &&
+                              _controller.activeChannelSummary.isNotEmpty
+                          ? _controller.activeChannelSummary
+                          : _controller.activeTab.type == ChatTabType.dcc &&
+                                _controller.activeDccSession != null
+                          ? _dccSummary(_controller.activeDccSession!)
+                          : _statusText(_controller.connection),
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
                 ),
+                actions: [
+                  if (_controller.activeTab.type == ChatTabType.channel)
+                    Builder(
+                      builder: (context) {
+                        return IconButton(
+                          onPressed: () => Scaffold.of(context).openEndDrawer(),
+                          icon: const Icon(Icons.people_outline),
+                          tooltip: 'Nick list',
+                        );
+                      },
+                    ),
+                  if (_controller.settings.showHeaderSearchButton)
+                    IconButton(
+                      onPressed: _toggleMessageSearch,
+                      icon: Icon(
+                        _messageSearchVisible ? Icons.search_off : Icons.search,
+                      ),
+                      tooltip: _messageSearchVisible
+                          ? 'Close search'
+                          : 'Search messages',
+                    ),
+                  IconButton(
+                    onPressed: _openHistoryTools,
+                    icon: const Icon(Icons.history),
+                    tooltip: 'History tools',
+                  ),
+                  IconButton(
+                    onPressed: _showJoinDialog,
+                    icon: const Icon(Icons.tag),
+                    tooltip: 'Join channel',
+                  ),
+                  IconButton(
+                    onPressed: _openChannelList,
+                    icon: const Icon(Icons.format_list_bulleted),
+                    tooltip: 'Channel list',
+                  ),
+                  if (_controller.dccSessions.isNotEmpty)
+                    IconButton(
+                      key: const Key('chat-dcc-transfers'),
+                      onPressed: _openDccTransfers,
+                      icon: Badge.count(
+                        count: _activeDccTransferCount,
+                        isLabelVisible: _activeDccTransferCount > 0,
+                        child: const Icon(Icons.swap_vert_circle_outlined),
+                      ),
+                      tooltip: 'DCC transfers',
+                    ),
+                  IconButton(
+                    onPressed: _openSettings,
+                    icon: const Icon(Icons.tune),
+                    tooltip: 'Settings',
+                  ),
+                  IconButton(
+                    onPressed:
+                        _controller.connection.phase ==
+                            ConnectionPhase.connected
+                        ? _controller.disconnect
+                        : _controller.start,
+                    icon: Icon(
+                      _controller.connection.phase == ConnectionPhase.connected
+                          ? Icons.link_off
+                          : Icons.wifi_tethering,
+                    ),
+                    tooltip:
+                        _controller.connection.phase ==
+                            ConnectionPhase.connected
+                        ? 'Disconnect'
+                        : 'Connect',
+                  ),
+                ],
               ),
-            ),
-            endDrawer: _controller.activeTab.type == ChatTabType.channel
-                ? _buildNickListDrawer(context)
-                : null,
-            body: SafeArea(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  // In short viewports (landscape, or portrait with the keyboard
-                  // open) the chrome around the message list (status/topic
-                  // banners on top, composer + its bars on the bottom) can be
-                  // taller than the available height and would crush the list to
-                  // zero. When space is tight, cap the top/bottom chrome and let
-                  // each scroll internally so the message list always keeps room
-                  // and nothing overflows. In normal viewports the caps are the
-                  // full height (a no-op), so interactive banners such as the DCC
-                  // accept/decline actions stay at their natural, hittable size.
-                  final tight = constraints.maxHeight < 380;
-                  final topChromeMaxHeight = tight
-                      ? constraints.maxHeight * 0.35
-                      : constraints.maxHeight;
-                  final bottomClusterMaxHeight = tight
-                      ? constraints.maxHeight * 0.5
-                      : constraints.maxHeight;
-                  return Column(
+              drawer: Drawer(
+                child: SafeArea(
+                  child: ListView(
+                    padding: EdgeInsets.zero,
                     children: [
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: topChromeMaxHeight,
+                      if (widget.onSwitchNetwork != null &&
+                          widget.networkController != null) ...[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                          child: Text(
+                            'NETWORKS',
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.8,
+                                ),
+                          ),
                         ),
-                        child: SingleChildScrollView(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _ConnectionBanner(
+                        for (final network
+                            in widget.networkController!.networks)
+                          _buildNetworkSwitchTile(network),
+                        ListTile(
+                          leading: const Icon(Icons.dns_outlined),
+                          title: const Text('Manage networks'),
+                          subtitle: const Text('Add, edit, or browse servers'),
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            widget.onManageNetworks?.call();
+                          },
+                        ),
+                        const Divider(height: 1),
+                      ],
+                      ListTile(
+                        title: Text(_controller.network.name),
+                        subtitle: Text(
+                          '${_controller.network.host}:${_controller.network.port}',
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      for (final tab in _controller.tabs)
+                        _buildTabTile(context, tab),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.block),
+                        title: const Text('Ignore list'),
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  IgnoreListScreen(controller: _controller),
+                            ),
+                          );
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.rule_outlined),
+                        title: const Text('User lists'),
+                        subtitle: const Text(
+                          'Notify, protected, blacklist, auto-mode',
+                        ),
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  UserListsScreen(controller: _controller),
+                            ),
+                          );
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.info_outline),
+                        title: const Text('Connection details'),
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) => ConnectionDetailsScreen(
                                 controller: _controller,
-                                network: _controller.network,
-                                connectedBannerDismissed:
-                                    _connectedBannerDismissed,
-                                onDismissConnectedBanner: () => setState(
-                                  () => _connectedBannerDismissed = true,
-                                ),
                               ),
-                              if (_messageSearchVisible)
-                                _InlineMessageSearchBar(
-                                  controller: _messageSearchController,
-                                  filter: _messageSearchFilter,
-                                  resultCount: visibleMessages.length,
-                                  onFilterChanged: (filter) => setState(
-                                    () => _messageSearchFilter = filter,
-                                  ),
-                                  onChanged: (_) => setState(() {}),
-                                  onClose: _toggleMessageSearch,
-                                ),
-                              if ((_controller.activeChannelTopic ?? '')
-                                  .trim()
-                                  .isNotEmpty)
-                                _ChannelTopicBar(
-                                  topic: _controller.activeChannelTopic!.trim(),
-                                ),
-                              if (_controller.activeTab.type ==
-                                      ChatTabType.dcc &&
-                                  _controller.activeDccSession != null)
-                                _DccSessionBanner(
-                                  session: _controller.activeDccSession!,
-                                  onAccept: _controller.acceptActiveDccSession,
-                                  onDecline:
-                                      _controller.declineActiveDccSession,
-                                  onClose: _controller.closeActiveDccSession,
-                                ),
-                              if (_controller.activeTab.type ==
-                                  ChatTabType.server)
-                                _ServiceQuickActions(
-                                  onRun: (service, command) async {
-                                    await _controller.sendServiceShortcut(
-                                      service,
-                                      command,
-                                    );
-                                  },
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: _MessageList(
-                          messages: visibleMessages,
-                          knownNicks: <String>{
-                            ..._controller.activeChannelUsers,
-                            _controller.currentNick,
-                          },
-                          channelPrefixes: _controller.channelPrefixChars,
-                          nickPrefixes: _controller.nickPrefixChars,
-                          showAttachmentPreviews:
-                              _controller.settings.showAttachmentPreviews,
-                          resolveReplyTarget: (replyId) => _controller
-                              .messageByMsgId(_controller.activeTabId, replyId),
-                          resolveReactions: _controller.reactionsForMessage,
-                          onReactToMessage: _controller.reactToMessage,
-                          onRedactMessage: _controller.redactMessage,
-                          onQuoteMessage: (message) => _insertIntoComposer(
-                            '> ${stripIrcFormatting(message.content)}',
-                          ),
-                          onReplyWithNick: (message) {
-                            final prefix =
-                                message.sender == _controller.currentNick
-                                ? ''
-                                : '${message.sender}: ';
-                            _insertIntoComposer(prefix);
-                          },
-                          onReplyToMessage: _setPendingReply,
-                          onDownloadAttachment: _downloadAttachment,
-                          onNickTap: (nick) => unawaited(
-                            _controller.performChannelUserAction(
-                              nick,
-                              ChannelUserAction.query,
                             ),
-                          ),
-                          onNickLongPress: (nick) =>
-                              unawaited(_showChannelUserActions(nick)),
-                          onChannelTap: (channel) => unawaited(
-                            _controller.joinChannel(
-                              JoinChannelRequest(channel: channel),
-                            ),
-                          ),
-                          showTimestamps: _controller.settings.showTimestamps,
-                          timestampFormat: _controller.settings.timestampFormat,
-                          timestampPosition:
-                              _controller.settings.timestampPosition,
-                          nickDisplayFormat:
-                              _controller.settings.nickDisplayFormat,
-                          onLoadOlder:
-                              _controller.hasPersistentHistory &&
-                                  !_messageSearchVisible
-                              ? () async {
-                                  await _controller.loadOlderHistory(
-                                    _controller.activeTabId,
-                                  );
-                                }
-                              : null,
-                        ),
-                      ),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: bottomClusterMaxHeight,
-                        ),
-                        child: SingleChildScrollView(
-                          reverse: true,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (_controller.commandHistory.isNotEmpty)
-                                _CommandHistoryBar(
-                                  entries: _controller.commandHistory,
-                                  onSelect: (value) => setState(
-                                    () => _composerController.text = value,
-                                  ),
-                                ),
-                              if (_controller.activeTypingUsers.isNotEmpty)
-                                _TypingIndicator(
-                                  users: _controller.activeTypingUsers,
-                                ),
-                              if (_pendingReplyMessage != null)
-                                _PendingReplyBar(
-                                  message: _pendingReplyMessage!,
-                                  onCancel: () => setState(
-                                    () => _pendingReplyMessage = null,
-                                  ),
-                                ),
-                              const Divider(height: 1),
-                              _ComposerArea(
-                                suggestions: _composerSuggestions,
-                                autocompleteSuggestions:
-                                    _autocompleteSuggestions,
-                                controller: _composerController,
-                                hintText:
-                                    _controller.activeTab.type ==
-                                        ChatTabType.server
-                                    ? 'Type raw IRC or /join #channel'
-                                    : _controller.activeTab.type ==
-                                          ChatTabType.dcc
-                                    ? (_controller.activeDccSession?.type ==
-                                              DccSessionType.chat
-                                          ? 'Type DCC chat message'
-                                          : 'DCC SEND tabs do not accept messages')
-                                    : 'Message ${_controller.activeTab.name}',
-                                onChanged: _handleComposerChanged,
-                                onSubmitted: _submit,
-                                canSendDccFile:
-                                    _controller.activeTab.type ==
-                                    ChatTabType.query,
-                                onPickDccFile: _pickAndSendDccFile,
-                                onSuggestionSelected: _applyComposerSuggestion,
-                                onAutocompleteSelected:
-                                    _applyAutocompleteSuggestion,
-                                enterToSend: _controller.settings.enterToSend,
-                                showSendButton:
-                                    _controller.settings.showSendButton,
-                                onCameraPhoto: () =>
-                                    _captureAndSendMedia(ImageSource.camera),
-                                onGalleryImage: () =>
-                                    _captureAndSendMedia(ImageSource.gallery),
-                                onCameraVideo: () => _captureAndSendMedia(
-                                  ImageSource.camera,
-                                  video: true,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                          );
+                        },
                       ),
                     ],
-                  );
-                },
+                  ),
+                ),
+              ),
+              endDrawer: _controller.activeTab.type == ChatTabType.channel
+                  ? _buildNickListDrawer(context)
+                  : null,
+              body: SafeArea(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // In short viewports (landscape, or portrait with the keyboard
+                    // open) the chrome around the message list (status/topic
+                    // banners on top, composer + its bars on the bottom) can be
+                    // taller than the available height and would crush the list to
+                    // zero. When space is tight, cap the top/bottom chrome and let
+                    // each scroll internally so the message list always keeps room
+                    // and nothing overflows. In normal viewports the caps are the
+                    // full height (a no-op), so interactive banners such as the DCC
+                    // accept/decline actions stay at their natural, hittable size.
+                    final tight = constraints.maxHeight < 380;
+                    final topChromeMaxHeight = tight
+                        ? constraints.maxHeight * 0.35
+                        : constraints.maxHeight;
+                    final bottomClusterMaxHeight = tight
+                        ? constraints.maxHeight * 0.5
+                        : constraints.maxHeight;
+                    return Column(
+                      children: [
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: topChromeMaxHeight,
+                          ),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _ConnectionBanner(
+                                  controller: _controller,
+                                  network: _controller.network,
+                                  connectedBannerDismissed:
+                                      _connectedBannerDismissed,
+                                  onDismissConnectedBanner: () => setState(
+                                    () => _connectedBannerDismissed = true,
+                                  ),
+                                ),
+                                if (_messageSearchVisible)
+                                  _InlineMessageSearchBar(
+                                    controller: _messageSearchController,
+                                    filter: _messageSearchFilter,
+                                    resultCount: visibleMessages.length,
+                                    onFilterChanged: (filter) => setState(
+                                      () => _messageSearchFilter = filter,
+                                    ),
+                                    onChanged: (_) => setState(() {}),
+                                    onClose: _toggleMessageSearch,
+                                  ),
+                                if ((_controller.activeChannelTopic ?? '')
+                                    .trim()
+                                    .isNotEmpty)
+                                  _ChannelTopicBar(
+                                    topic: _controller.activeChannelTopic!
+                                        .trim(),
+                                  ),
+                                if (_controller.activeTab.type ==
+                                        ChatTabType.dcc &&
+                                    _controller.activeDccSession != null)
+                                  _DccSessionBanner(
+                                    session: _controller.activeDccSession!,
+                                    onAccept:
+                                        _controller.acceptActiveDccSession,
+                                    onDecline:
+                                        _controller.declineActiveDccSession,
+                                    onClose: _controller.closeActiveDccSession,
+                                  ),
+                                if (_controller.activeTab.type ==
+                                    ChatTabType.server)
+                                  _ServiceQuickActions(
+                                    onRun: (service, command) async {
+                                      await _controller.sendServiceShortcut(
+                                        service,
+                                        command,
+                                      );
+                                    },
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: _MessageList(
+                            messages: visibleMessages,
+                            knownNicks: <String>{
+                              ..._controller.activeChannelUsers,
+                              _controller.currentNick,
+                            },
+                            channelPrefixes: _controller.channelPrefixChars,
+                            nickPrefixes: _controller.nickPrefixChars,
+                            showAttachmentPreviews:
+                                _controller.settings.showAttachmentPreviews,
+                            resolveReplyTarget: (replyId) =>
+                                _controller.messageByMsgId(
+                                  _controller.activeTabId,
+                                  replyId,
+                                ),
+                            resolveReactions: _controller.reactionsForMessage,
+                            onReactToMessage: _controller.reactToMessage,
+                            onRedactMessage: _controller.redactMessage,
+                            onQuoteMessage: (message) => _insertIntoComposer(
+                              '> ${stripIrcFormatting(message.content)}',
+                            ),
+                            onReplyWithNick: (message) {
+                              final prefix =
+                                  message.sender == _controller.currentNick
+                                  ? ''
+                                  : '${message.sender}: ';
+                              _insertIntoComposer(prefix);
+                            },
+                            onReplyToMessage: _setPendingReply,
+                            onDownloadAttachment: _downloadAttachment,
+                            onNickTap: (nick) => unawaited(
+                              _controller.performChannelUserAction(
+                                nick,
+                                ChannelUserAction.query,
+                              ),
+                            ),
+                            onNickLongPress: (nick) =>
+                                unawaited(_showChannelUserActions(nick)),
+                            onChannelTap: (channel) => unawaited(
+                              _controller.joinChannel(
+                                JoinChannelRequest(channel: channel),
+                              ),
+                            ),
+                            showTimestamps: _controller.settings.showTimestamps,
+                            timestampFormat:
+                                _controller.settings.timestampFormat,
+                            timestampPosition:
+                                _controller.settings.timestampPosition,
+                            nickDisplayFormat:
+                                _controller.settings.nickDisplayFormat,
+                            onLoadOlder:
+                                _controller.hasPersistentHistory &&
+                                    !_messageSearchVisible
+                                ? () async {
+                                    await _controller.loadOlderHistory(
+                                      _controller.activeTabId,
+                                    );
+                                  }
+                                : null,
+                          ),
+                        ),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: bottomClusterMaxHeight,
+                          ),
+                          child: SingleChildScrollView(
+                            reverse: true,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_controller.commandHistory.isNotEmpty)
+                                  _CommandHistoryBar(
+                                    entries: _controller.commandHistory,
+                                    onSelect: (value) => setState(
+                                      () => _composerController.text = value,
+                                    ),
+                                  ),
+                                if (_controller.activeTypingUsers.isNotEmpty)
+                                  _TypingIndicator(
+                                    users: _controller.activeTypingUsers,
+                                  ),
+                                if (_pendingReplyMessage != null)
+                                  _PendingReplyBar(
+                                    message: _pendingReplyMessage!,
+                                    onCancel: () => setState(
+                                      () => _pendingReplyMessage = null,
+                                    ),
+                                  ),
+                                const Divider(height: 1),
+                                _ComposerArea(
+                                  suggestions: _composerSuggestions,
+                                  autocompleteSuggestions:
+                                      _autocompleteSuggestions,
+                                  controller: _composerController,
+                                  hintText:
+                                      _controller.activeTab.type ==
+                                          ChatTabType.server
+                                      ? 'Type raw IRC or /join #channel'
+                                      : _controller.activeTab.type ==
+                                            ChatTabType.dcc
+                                      ? (_controller.activeDccSession?.type ==
+                                                DccSessionType.chat
+                                            ? 'Type DCC chat message'
+                                            : 'DCC SEND tabs do not accept messages')
+                                      : 'Message ${_controller.activeTab.name}',
+                                  onChanged: _handleComposerChanged,
+                                  onSubmitted: _submit,
+                                  canSendDccFile:
+                                      _controller.activeTab.type ==
+                                      ChatTabType.query,
+                                  onPickDccFile: _pickAndSendDccFile,
+                                  onSuggestionSelected:
+                                      _applyComposerSuggestion,
+                                  onAutocompleteSelected:
+                                      _applyAutocompleteSuggestion,
+                                  enterToSend: _controller.settings.enterToSend,
+                                  showSendButton:
+                                      _controller.settings.showSendButton,
+                                  autocorrect:
+                                      _controller.settings.composerAutocorrect,
+                                  enableSuggestions:
+                                      _controller.settings.composerSuggestions,
+                                  capitalizeSentences: _controller
+                                      .settings
+                                      .composerCapitalizeSentences,
+                                  onCameraPhoto: () =>
+                                      _captureAndSendMedia(ImageSource.camera),
+                                  onGalleryImage: () =>
+                                      _captureAndSendMedia(ImageSource.gallery),
+                                  onCameraVideo: () => _captureAndSendMedia(
+                                    ImageSource.camera,
+                                    video: true,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           );
         },
       ),
     );
+  }
+
+  /// Hardware keyboard shortcuts: Ctrl+Tab / Alt+arrows switch tabs, and Tab
+  /// accepts the first nick-completion suggestion while the panel is open.
+  Map<ShortcutActivator, VoidCallback> _keyboardBindings() {
+    return {
+      const SingleActivator(LogicalKeyboardKey.tab, control: true): () =>
+          _selectAdjacentTab(1),
+      const SingleActivator(
+        LogicalKeyboardKey.tab,
+        control: true,
+        shift: true,
+      ): () =>
+          _selectAdjacentTab(-1),
+      const SingleActivator(LogicalKeyboardKey.arrowDown, alt: true): () =>
+          _selectAdjacentTab(1),
+      const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true): () =>
+          _selectAdjacentTab(-1),
+      if (_autocompleteSuggestions.isNotEmpty)
+        const SingleActivator(LogicalKeyboardKey.tab): () =>
+            _applyAutocompleteSuggestion(_autocompleteSuggestions.first),
+    };
+  }
+
+  void _selectAdjacentTab(int delta) {
+    final tabs = _controller.tabs;
+    if (tabs.length < 2) {
+      return;
+    }
+    final currentIndex = tabs.indexWhere(
+      (tab) => tab.id == _controller.activeTabId,
+    );
+    final nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
+    _controller.selectTab(tabs[nextIndex].id);
   }
 
   Future<void> _showJoinDialog() async {
@@ -1681,6 +1735,9 @@ class _ComposerArea extends StatelessWidget {
     required this.onAutocompleteSelected,
     required this.enterToSend,
     required this.showSendButton,
+    this.autocorrect = true,
+    this.enableSuggestions = true,
+    this.capitalizeSentences = false,
     required this.onCameraPhoto,
     required this.onGalleryImage,
     required this.onCameraVideo,
@@ -1698,6 +1755,9 @@ class _ComposerArea extends StatelessWidget {
   final ValueChanged<ComposerAutocompleteSuggestion> onAutocompleteSelected;
   final bool enterToSend;
   final bool showSendButton;
+  final bool autocorrect;
+  final bool enableSuggestions;
+  final bool capitalizeSentences;
   final VoidCallback onCameraPhoto;
   final VoidCallback onGalleryImage;
   final VoidCallback onCameraVideo;
@@ -1731,6 +1791,11 @@ class _ComposerArea extends StatelessWidget {
                   textInputAction: enterToSend
                       ? TextInputAction.send
                       : TextInputAction.newline,
+                  autocorrect: autocorrect,
+                  enableSuggestions: enableSuggestions,
+                  textCapitalization: capitalizeSentences
+                      ? TextCapitalization.sentences
+                      : TextCapitalization.none,
                   onChanged: onChanged,
                   onSubmitted: enterToSend ? (_) => onSubmitted() : null,
                   decoration: InputDecoration(hintText: hintText),

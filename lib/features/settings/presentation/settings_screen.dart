@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:androidircx/app/theme/app_theme.dart';
+import 'package:androidircx/core/app/app_version.dart';
 import 'package:androidircx/core/models/app_settings.dart';
 import 'package:androidircx/core/platform/app_permissions.dart';
 import 'package:androidircx/core/presets/server_preset_service.dart';
@@ -22,6 +23,7 @@ import 'package:androidircx/features/settings/presentation/theme_editor_screen.d
 import 'package:androidircx/monetization/monetization_config.dart';
 import 'package:androidircx/monetization/monetization_controller.dart';
 import 'package:androidircx/monetization/monetization_scope.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
@@ -82,6 +84,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool? _lastHasNoAds;
   bool _isLoading = true;
   bool _didResolveController = false;
+  bool _hasBatteryExemption = false;
 
   AppPermissions get _permissions =>
       widget.permissions ?? const PermissionHandlerAppPermissions();
@@ -630,6 +633,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _settings.copyWith(analyticsConsent: value),
                         ),
                       ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-battery-optimization'),
+                        leading: const Icon(Icons.battery_saver_outlined),
+                        title: const Text('Battery optimization'),
+                        subtitle: Text(
+                          _hasBatteryExemption
+                              ? 'Exempted — background connections stay alive.'
+                              : 'Ask Android to keep IRC connections alive in '
+                                    'the background.',
+                        ),
+                        trailing: _hasBatteryExemption
+                            ? const Icon(Icons.check_circle_outline)
+                            : null,
+                        onTap: _hasBatteryExemption
+                            ? null
+                            : () => unawaited(_requestBatteryExemption()),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -680,6 +701,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         value: _settings.showSendButton,
                         onChanged: (value) => _saveSettings(
                           _settings.copyWith(showSendButton: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-composer-autocorrect'),
+                        title: const Text('Autocorrect'),
+                        subtitle: const Text(
+                          'Let the keyboard auto-correct while typing.',
+                        ),
+                        value: _settings.composerAutocorrect,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(composerAutocorrect: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-composer-suggestions'),
+                        title: const Text('Keyboard suggestions'),
+                        subtitle: const Text(
+                          'Show the keyboard suggestion strip.',
+                        ),
+                        value: _settings.composerSuggestions,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(composerSuggestions: value),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const Key('settings-composer-capitalize'),
+                        title: const Text('Capitalize sentences'),
+                        value: _settings.composerCapitalizeSentences,
+                        onChanged: (value) => _saveSettings(
+                          _settings.copyWith(
+                            composerCapitalizeSentences: value,
+                          ),
                         ),
                       ),
                       const Divider(height: 1),
@@ -852,6 +908,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             builder: (_) => const KickBanReasonsScreen(),
                           ),
                         ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SettingsSection(
+                    title: 'Advanced',
+                    children: [
+                      const ListTile(
+                        key: Key('settings-app-version'),
+                        leading: Icon(Icons.info_outline),
+                        title: Text('App version'),
+                        subtitle: Text('AndroidIRCX Flutter v$appVersion'),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('settings-copy-diagnostics'),
+                        leading: const Icon(Icons.bug_report_outlined),
+                        title: const Text('Copy diagnostics'),
+                        subtitle: const Text(
+                          'Copy version and display settings for bug reports. '
+                          'Contains no passwords or chat content.',
+                        ),
+                        onTap: () => unawaited(_copyDiagnostics()),
                       ),
                     ],
                   ),
@@ -1072,11 +1151,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// on while the OS permission is granted.
   Future<void> _refreshPermissionStatuses() async {
     final hasNotifications = await _permissions.hasNotifications();
+    final hasBatteryExemption = await _permissions
+        .hasIgnoreBatteryOptimizations();
     if (!mounted) {
       return;
     }
+    setState(() => _hasBatteryExemption = hasBatteryExemption);
     if (_settings.notificationsEnabled && !hasNotifications) {
       await _saveSettings(_settings.copyWith(notificationsEnabled: false));
+    }
+  }
+
+  Future<void> _copyDiagnostics() async {
+    final diagnostics = [
+      'AndroidIRCX Flutter v$appVersion',
+      'Platform: $defaultTargetPlatform',
+      'Theme: ${_settings.themePreset.name}',
+      'Density: ${_settings.messageDensity.name}',
+      'Font: ${_settings.messageFontFamily} '
+          '(${(_settings.messageFontScale * 100).round()}%)',
+      'Timestamps: ${_settings.showTimestamps} '
+          '(${_settings.timestampFormat}, '
+          '${_settings.timestampPosition.name})',
+      'Nick style: ${_settings.nickDisplayFormat.name}',
+      'Notifications: ${_settings.notificationsEnabled}',
+      'Battery exemption: $_hasBatteryExemption',
+      'History retention/tab: ${_settings.historyRetentionPerTab}',
+    ].join('\n');
+    await Clipboard.setData(ClipboardData(text: diagnostics));
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Diagnostics copied to clipboard.')),
+    );
+  }
+
+  Future<void> _requestBatteryExemption() async {
+    final result = await _permissions.requestIgnoreBatteryOptimizations();
+    if (!mounted) {
+      return;
+    }
+    if (result == AppPermissionResult.granted) {
+      setState(() => _hasBatteryExemption = true);
+      return;
+    }
+    if (result == AppPermissionResult.permanentlyDenied) {
+      await _permissions.openSettingsPage();
     }
   }
 

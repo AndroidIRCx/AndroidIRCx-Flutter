@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:androidircx/app/app.dart';
 import 'package:androidircx/core/models/app_settings.dart';
@@ -33,6 +32,7 @@ import 'package:androidircx/irc/services/irc_service.dart';
 import 'package:androidircx/irc/services/irc_transport.dart';
 import 'package:androidircx/media/services/media_download_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -1582,6 +1582,54 @@ void main() {
 
     expect(find.text('Accept'), findsNothing);
     expect(find.text('Close'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('switches tabs with hardware keyboard shortcuts', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+    final transport = _FakeTransport();
+    final controller = ChatSessionController(
+      network: network,
+      ircService: IrcService(transportConnector: (_) async => transport),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: controller)),
+    );
+    await tester.pump();
+    await controller.joinChannel(const JoinChannelRequest(channel: '#room'));
+    await tester.pump();
+
+    // Joining focuses the channel tab; the server tab is the other one.
+    final startTab = controller.activeTab.name;
+    expect(startTab, '#room');
+
+    // Focus the composer so key events land inside the shortcut scope.
+    await tester.tap(find.byType(TextField).first);
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+
+    expect(controller.activeTab.name, isNot('#room'));
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+    await tester.pump();
+
+    expect(controller.activeTab.name, '#room');
 
     controller.dispose();
   });
