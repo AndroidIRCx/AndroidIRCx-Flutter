@@ -4,8 +4,8 @@ import 'package:androidircx/app/app.dart';
 import 'package:androidircx/core/diagnostics/crash_reporter.dart';
 import 'package:androidircx/core/firebase/firebase_service.dart';
 import 'package:androidircx/monetization/monetization_config.dart';
+import 'package:androidircx/monetization/mobile_ads_bootstrap.dart';
 import 'package:flutter/widgets.dart';
-import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,7 +19,7 @@ Future<void> main() async {
     // Continue without Firebase if initialization fails.
   }
   if (MonetizationConfig.mobileAdsRuntimeSupported) {
-    unawaited(MobileAds.instance.initialize());
+    unawaited(MobileAdsBootstrap.ensureInitialized().catchError((_) {}));
   }
   runApp(const AndroidIrcxApp());
 }
