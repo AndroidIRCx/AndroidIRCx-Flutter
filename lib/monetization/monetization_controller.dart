@@ -57,10 +57,16 @@ class MonetizationController extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool shouldShowBanner({required bool onboardingCompleted}) {
+  bool shouldShowBanner({
+    required bool onboardingCompleted,
+    bool? mobileAdsRuntimeSupported,
+  }) {
+    final adsSupported =
+        mobileAdsRuntimeSupported ??
+        MonetizationConfig.mobileAdsRuntimeSupported;
     return _initialized &&
         onboardingCompleted &&
-        MonetizationConfig.mobileAdsRuntimeSupported &&
+        adsSupported &&
         !hasNoAds &&
         !hasTemporaryAdFreeTime;
   }

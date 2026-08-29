@@ -77,4 +77,53 @@ void main() {
 
     controller.dispose();
   });
+
+  test(
+    'shows banner only for initialized free users after onboarding',
+    () async {
+      final controller = MonetizationController();
+      await controller.initialize();
+
+      expect(
+        controller.shouldShowBanner(
+          onboardingCompleted: true,
+          mobileAdsRuntimeSupported: true,
+        ),
+        isTrue,
+      );
+      expect(
+        controller.shouldShowBanner(
+          onboardingCompleted: false,
+          mobileAdsRuntimeSupported: true,
+        ),
+        isFalse,
+      );
+
+      await controller.grantTemporaryAdFreeTime(const Duration(minutes: 1));
+
+      expect(
+        controller.shouldShowBanner(
+          onboardingCompleted: true,
+          mobileAdsRuntimeSupported: true,
+        ),
+        isFalse,
+      );
+
+      await controller.resetTemporaryAdFreeTime();
+      await controller.processPurchase(
+        MonetizationConfig.productRemoveAds,
+        'token-1',
+      );
+
+      expect(
+        controller.shouldShowBanner(
+          onboardingCompleted: true,
+          mobileAdsRuntimeSupported: true,
+        ),
+        isFalse,
+      );
+
+      controller.dispose();
+    },
+  );
 }

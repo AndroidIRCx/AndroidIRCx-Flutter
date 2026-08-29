@@ -492,6 +492,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ),
                       ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.cloud_download_outlined),
+                        title: const Text('Auto-download media'),
+                        subtitle: Text(
+                          _subtitleForMediaAutoDownloadMode(
+                            _settings.mediaAutoDownloadMode,
+                          ),
+                        ),
+                        trailing: DropdownButton<MediaAutoDownloadMode>(
+                          key: const Key('settings-media-auto-download'),
+                          value: _settings.mediaAutoDownloadMode,
+                          onChanged: (value) async {
+                            if (value == null) {
+                              return;
+                            }
+                            await _saveMediaAutoDownloadMode(value);
+                          },
+                          items: MediaAutoDownloadMode.values
+                              .map(
+                                (mode) => DropdownMenuItem(
+                                  value: mode,
+                                  child: Text(
+                                    _labelForMediaAutoDownloadMode(mode),
+                                  ),
+                                ),
+                              )
+                              .toList(growable: false),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -1289,6 +1319,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _saveMediaAutoDownloadMode(MediaAutoDownloadMode mode) {
+    return _saveSettings(_settings.copyWith(mediaAutoDownloadMode: mode));
+  }
+
   Future<void> _saveCustomThemeJson(String value) {
     return _saveSettings(_settings.copyWith(customThemeJson: value.trim()));
   }
@@ -1495,6 +1529,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
       NoticeRoutingMode.active => 'Active tab',
       NoticeRoutingMode.notice => 'Notice tab',
       NoticeRoutingMode.private => 'Private query',
+    };
+  }
+
+  String _labelForMediaAutoDownloadMode(MediaAutoDownloadMode mode) {
+    return switch (mode) {
+      MediaAutoDownloadMode.never => 'Never',
+      MediaAutoDownloadMode.wifiOnly => 'Wi-Fi only',
+      MediaAutoDownloadMode.always => 'Any network',
+    };
+  }
+
+  String _subtitleForMediaAutoDownloadMode(MediaAutoDownloadMode mode) {
+    return switch (mode) {
+      MediaAutoDownloadMode.never => 'Keep media downloads manual.',
+      MediaAutoDownloadMode.wifiOnly =>
+        'Save new incoming media on Wi-Fi or Ethernet.',
+      MediaAutoDownloadMode.always =>
+        'Save new incoming media on any active connection.',
     };
   }
 }

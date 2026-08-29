@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:androidircx/monetization/monetization_config.dart';
 import 'package:androidircx/monetization/monetization_controller.dart';
+import 'package:androidircx/monetization/mobile_ads_bootstrap.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
@@ -84,6 +85,7 @@ class RewardedAdService extends ChangeNotifier {
     _lastError = null;
     notifyListeners();
     try {
+      await MobileAdsBootstrap.ensureInitialized();
       await RewardedAd.load(
         adUnitId: MonetizationConfig.rewardedAdUnitId,
         request: const AdRequest(nonPersonalizedAds: true),
