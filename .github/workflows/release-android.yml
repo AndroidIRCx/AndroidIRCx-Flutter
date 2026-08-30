@@ -46,6 +46,13 @@ jobs:
           keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
           EOF
 
+      - name: Write Firebase config
+        shell: bash
+        run: |
+          cat > android/app/google-services.json <<'EOF'
+          ${{ secrets.GOOGLE_SERVICES_JSON }}
+          EOF
+
       - name: Build release APK
         run: flutter build apk --release
 
