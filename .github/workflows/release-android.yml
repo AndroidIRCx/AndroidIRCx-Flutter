@@ -1,6 +1,9 @@
 name: Release Android
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -8,7 +11,7 @@ permissions:
 
 jobs:
   build-android:
-    name: Build Android APK
+    name: Build Android APK and AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -32,24 +35,42 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Configure release signing
+        shell: bash
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.jks
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Prepare APK artifact
+      - name: Build release AAB
+        run: flutter build appbundle --release
+
+      - name: Prepare release assets
         shell: bash
         run: |
           mkdir -p release-assets
           cp build/app/outputs/flutter-apk/app-release.apk release-assets/AndroidIRCx-Flutter-android.apk
+          cp build/app/outputs/bundle/release/app-release.aab release-assets/AndroidIRCx-Flutter-android.aab
 
-      - name: Upload workflow artifact
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: android-release-apk
-          path: release-assets/AndroidIRCx-Flutter-android.apk
+          name: android-release
+          path: release-assets/
 
-      - name: Attach APK to GitHub release
+      - name: Attach APK and AAB to GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: release-assets/AndroidIRCx-Flutter-android.apk
+          generate_release_notes: true
+          files: |
+            release-assets/AndroidIRCx-Flutter-android.apk
+            release-assets/AndroidIRCx-Flutter-android.aab
