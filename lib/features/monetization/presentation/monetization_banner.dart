@@ -109,7 +109,9 @@ class _MonetizationBannerState extends State<MonetizationBanner> {
     }
     final ad = BannerAd(
       adUnitId: MonetizationConfig.bannerAdUnitId,
-      request: const AdRequest(nonPersonalizedAds: true),
+      // Personalization is governed by the UMP consent flow; forcing
+      // non-personalized requests here would tank fill for consented users.
+      request: const AdRequest(),
       size: AdSize.banner,
       listener: BannerAdListener(
         onAdLoaded: (ad) {
