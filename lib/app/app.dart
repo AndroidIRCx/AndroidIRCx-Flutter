@@ -20,6 +20,7 @@ import 'package:androidircx/monetization/monetization_controller.dart';
 import 'package:androidircx/monetization/monetization_scope.dart';
 import 'package:androidircx/monetization/rewarded_ad_service.dart';
 import 'package:androidircx/monetization/store_purchase_service.dart';
+import 'package:androidircx/monetization/ump_consent_service.dart';
 import 'package:flutter/material.dart';
 
 class AndroidIrcxApp extends StatefulWidget {
@@ -34,6 +35,7 @@ class AndroidIrcxApp extends StatefulWidget {
     this.rewardedAdService,
     this.purchaseService,
     this.soundService,
+    this.umpConsentService,
   });
 
   final NetworkRepository? networkRepository;
@@ -47,6 +49,9 @@ class AndroidIrcxApp extends StatefulWidget {
   /// Overridable for tests; defaults to the audioplayers-backed service.
   final SoundService? soundService;
 
+  /// Overridable for tests; defaults to the UMP-backed consent flow.
+  final UmpConsentService? umpConsentService;
+
   @override
   State<AndroidIrcxApp> createState() => _AndroidIrcxAppState();
 }
@@ -57,6 +62,7 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
   late final RewardedAdService _rewardedAdService;
   late final StorePurchaseService _purchaseService;
   late final SoundService _soundService;
+  late final UmpConsentService _umpConsentService;
   late final bool _ownsMonetizationController;
   late final bool _ownsRewardedAdService;
   late final bool _ownsPurchaseService;
@@ -89,9 +95,18 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
     if (MonetizationConfig.storeRuntimeSupported) {
       unawaited(_purchaseService.initialize());
     }
+    _umpConsentService = widget.umpConsentService ?? UmpConsentService();
     if (MonetizationConfig.mobileAdsRuntimeSupported) {
+      // Consent must be gathered from a visible activity, so wait for the
+      // first frame; ads (and the rewarded preload) follow once allowed.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _rewardedAdService.loadAd();
+        unawaited(
+          _umpConsentService.gatherConsentAndInitAds().then((_) {
+            if (mounted) {
+              _rewardedAdService.loadAd();
+            }
+          }),
+        );
       });
     }
   }

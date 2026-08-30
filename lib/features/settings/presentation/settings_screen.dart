@@ -23,6 +23,7 @@ import 'package:androidircx/features/settings/presentation/theme_editor_screen.d
 import 'package:androidircx/monetization/monetization_config.dart';
 import 'package:androidircx/monetization/monetization_controller.dart';
 import 'package:androidircx/monetization/monetization_scope.dart';
+import 'package:androidircx/monetization/ump_consent_service.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -49,6 +50,7 @@ class SettingsScreen extends StatefulWidget {
     this.presetService,
     this.appLockAuthenticator,
     this.permissions,
+    this.umpConsentService,
   });
 
   final SettingsRepository? repository;
@@ -66,6 +68,9 @@ class SettingsScreen extends StatefulWidget {
   /// Runtime OS permissions. Overridable for tests;
   /// defaults to the `permission_handler` backed implementation.
   final AppPermissions? permissions;
+
+  /// Overridable for tests; defaults to the UMP-backed consent flow.
+  final UmpConsentService? umpConsentService;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -85,6 +90,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   bool _didResolveController = false;
   bool _hasBatteryExemption = false;
+  bool _adPrivacyOptionsRequired = false;
+  late final UmpConsentService _umpConsentService;
 
   AppPermissions get _permissions =>
       widget.permissions ?? const PermissionHandlerAppPermissions();
@@ -93,6 +100,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _repository = widget.repository ?? SharedPrefsSettingsRepository();
+    _umpConsentService = widget.umpConsentService ?? UmpConsentService();
+    unawaited(
+      _umpConsentService.isPrivacyOptionsRequired().then((required) {
+        if (mounted && required != _adPrivacyOptionsRequired) {
+          setState(() => _adPrivacyOptionsRequired = required);
+        }
+      }),
+    );
   }
 
   @override
@@ -692,6 +707,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ? null
                             : () => unawaited(_requestBatteryExemption()),
                       ),
+                      if (_adPrivacyOptionsRequired) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          key: const Key('settings-ad-privacy-options'),
+                          leading: const Icon(Icons.ads_click_outlined),
+                          title: const Text('Ad privacy options'),
+                          subtitle: const Text(
+                            'Review or change your ad consent choices.',
+                          ),
+                          onTap: () => unawaited(
+                            _umpConsentService.showPrivacyOptionsForm(),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 12),

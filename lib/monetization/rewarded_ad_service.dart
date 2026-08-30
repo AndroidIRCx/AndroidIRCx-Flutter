@@ -88,7 +88,8 @@ class RewardedAdService extends ChangeNotifier {
       await MobileAdsBootstrap.ensureInitialized();
       await RewardedAd.load(
         adUnitId: MonetizationConfig.rewardedAdUnitId,
-        request: const AdRequest(nonPersonalizedAds: true),
+        // Personalization is governed by the UMP consent flow.
+        request: const AdRequest(),
         rewardedAdLoadCallback: RewardedAdLoadCallback(
           onAdLoaded: (ad) {
             _rewardedAd = ad;

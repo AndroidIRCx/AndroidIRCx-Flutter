@@ -3,8 +3,6 @@ import 'dart:async';
 import 'package:androidircx/app/app.dart';
 import 'package:androidircx/core/diagnostics/crash_reporter.dart';
 import 'package:androidircx/core/firebase/firebase_service.dart';
-import 'package:androidircx/monetization/monetization_config.dart';
-import 'package:androidircx/monetization/mobile_ads_bootstrap.dart';
 import 'package:flutter/widgets.dart';
 
 Future<void> main() async {
@@ -18,8 +16,7 @@ Future<void> main() async {
   } catch (_) {
     // Continue without Firebase if initialization fails.
   }
-  if (MonetizationConfig.mobileAdsRuntimeSupported) {
-    unawaited(MobileAdsBootstrap.ensureInitialized().catchError((_) {}));
-  }
+  // Mobile Ads initialization is consent-gated: AndroidIrcxApp gathers UMP
+  // consent after the first frame and initializes the SDK once allowed.
   runApp(const AndroidIrcxApp());
 }
