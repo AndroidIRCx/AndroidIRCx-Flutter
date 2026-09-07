@@ -1,0 +1,5 @@
+What's new in v1.0.16:
+- The connection status card now stays in the server (status) window only, so channel and private tabs are no longer covered by it.
+- You can dismiss the connection card at any time, connected or not, and it stays hidden.
+- Removed the empty gap between the ad banner and the screen below it.
+- The app now asks for notification permission when you connect, so the ongoing "connected" notification (with Disconnect all) actually appears.

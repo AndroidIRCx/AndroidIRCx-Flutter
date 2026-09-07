@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:androidircx/core/platform/app_permissions.dart';
 import 'package:androidircx/core/platform/foreground_connection_service.dart';
 import 'package:androidircx/core/review/review_prompt_service.dart';
 import 'package:androidircx/core/security/history_encryption_key_manager.dart';
@@ -37,10 +38,15 @@ class BootstrapScreen extends StatefulWidget {
         const MethodChannelForegroundConnectionService(),
     this.historyRepositoryLoader,
     this.soundService,
+    this.permissions = const PermissionHandlerAppPermissions(),
   });
 
   final NetworkRepository? networkRepository;
   final ForegroundConnectionService foregroundConnectionService;
+
+  /// Overridable for tests; used to request POST_NOTIFICATIONS the first time a
+  /// connection starts so the ongoing foreground-service notification is visible.
+  final AppPermissions permissions;
 
   /// Overridable for tests; defaults to the audioplayers-backed service.
   final SoundService? soundService;
@@ -74,6 +80,7 @@ class _BootstrapScreenState extends State<BootstrapScreen>
     unawaited(_soundService.load());
     _sessionRegistry = SessionRegistry(
       foregroundService: _foregroundConnectionService,
+      onForegroundServiceWillStart: _ensureNotificationPermission,
       sessionFactory: (network) => ChatSessionController(
         network: network,
         historyRepository: _historyRepository,
@@ -89,6 +96,17 @@ class _BootstrapScreenState extends State<BootstrapScreen>
           ),
     );
     _bootstrap();
+  }
+
+  /// Requests POST_NOTIFICATIONS the first time a connection starts the
+  /// foreground service, so the ongoing "connected" notification (with its
+  /// Disconnect-all action) is actually shown. Without the permission Android
+  /// 13+ keeps the service running but hides its notification.
+  Future<void> _ensureNotificationPermission() async {
+    if (await widget.permissions.hasNotifications()) {
+      return;
+    }
+    await widget.permissions.requestNotifications();
   }
 
   Future<void> _loadHistoryRepository() async {

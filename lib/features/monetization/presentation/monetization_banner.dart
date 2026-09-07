@@ -239,7 +239,8 @@ class _MonetizationBannerState extends State<MonetizationBanner> {
 
   @override
   Widget build(BuildContext context) {
-    final banner = _shouldShowBanner
+    final showBanner = _shouldShowBanner;
+    final banner = showBanner
         ? _BannerSlot(
             child: _loaded && _bannerAd != null
                 ? Center(
@@ -255,10 +256,21 @@ class _MonetizationBannerState extends State<MonetizationBanner> {
           )
         : const SizedBox.shrink();
 
+    // The banner's SafeArea already consumes the top (status-bar) inset, so
+    // strip it from the content below — otherwise the screen's AppBar re-adds
+    // the same inset and leaves an empty gap under the banner.
+    final content = showBanner
+        ? MediaQuery.removePadding(
+            context: context,
+            removeTop: true,
+            child: widget.child,
+          )
+        : widget.child;
+
     return Column(
       children: [
         banner,
-        Expanded(child: widget.child),
+        Expanded(child: content),
       ],
     );
   }

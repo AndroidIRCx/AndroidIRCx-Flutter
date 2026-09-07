@@ -138,6 +138,42 @@ void main() {
     registry.dispose();
   });
 
+  test('requests the notification permission once before the service starts', () async {
+    final transport = _FakeTransport();
+    final foregroundService = _RecordingForegroundConnectionService();
+    var permissionRequests = 0;
+    final registry = SessionRegistry(
+      foregroundService: foregroundService,
+      onForegroundServiceWillStart: () async => permissionRequests += 1,
+      sessionFactory: (network) => ChatSessionController(
+        network: network,
+        ircService: IrcService(transportConnector: (_) async => transport),
+        reconnectJitterFactor: 0,
+      ),
+    );
+    const network = NetworkConfig(
+      id: 'dbase',
+      name: 'DBase',
+      host: 'irc.dbase.in.rs',
+      port: 6697,
+      nickname: 'AndroidIRCX',
+      altNickname: 'AndroidIRCX_',
+    );
+
+    final session = registry.obtainSession(network);
+    await session.start();
+    transport.emit(':server 001 AndroidIRCX :Welcome');
+    await Future<void>.delayed(Duration.zero);
+    await registry.syncForegroundConnectionService();
+    await registry.syncForegroundConnectionService();
+
+    expect(permissionRequests, 1);
+    expect(foregroundService.ensureReadyCount, greaterThanOrEqualTo(1));
+
+    await registry.closeSession(network.id);
+    registry.dispose();
+  });
+
   test('syncs foreground service from connected sessions', () async {
     final transport = _FakeTransport();
     final foregroundService = _RecordingForegroundConnectionService();

@@ -15,7 +15,9 @@ class SessionRegistry extends ChangeNotifier {
     ForegroundConnectionService foregroundService =
         const NoopForegroundConnectionService(),
     ChatSessionControllerFactory? sessionFactory,
+    Future<void> Function()? onForegroundServiceWillStart,
   }) : _foregroundService = foregroundService,
+       _onForegroundServiceWillStart = onForegroundServiceWillStart,
        _sessionFactory =
            sessionFactory ??
            ((network) => ChatSessionController(network: network));
@@ -26,6 +28,12 @@ class SessionRegistry extends ChangeNotifier {
   _notificationSubscriptions = {};
   final ForegroundConnectionService _foregroundService;
   final ChatSessionControllerFactory _sessionFactory;
+
+  /// Invoked once, just before the foreground service is first started, so the
+  /// UI can request the POST_NOTIFICATIONS permission the ongoing notification
+  /// needs to be visible. Failures are swallowed and never block the service.
+  final Future<void> Function()? _onForegroundServiceWillStart;
+  bool _ensuredForegroundPermission = false;
   bool _isAppInForeground = true;
 
   List<ChatSessionController> get sessions =>
@@ -139,6 +147,18 @@ class SessionRegistry extends ChangeNotifier {
     if (!snapshot.shouldRunForegroundService) {
       await _foregroundService.stop();
       return;
+    }
+
+    if (!_ensuredForegroundPermission) {
+      _ensuredForegroundPermission = true;
+      final ensure = _onForegroundServiceWillStart;
+      if (ensure != null) {
+        try {
+          await ensure();
+        } catch (_) {
+          // Permission prompt failures must not block the connection service.
+        }
+      }
     }
 
     await _foregroundService.ensureReady();

@@ -149,19 +149,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _handleControllerChanged() {
-    _syncConnectionBannerDismissal();
     _queueMediaAutoDownloads();
-  }
-
-  void _syncConnectionBannerDismissal() {
-    final snapshot = _controller.connection;
-    final stableConnected =
-        snapshot.phase == ConnectionPhase.connected &&
-        _controller.pendingReconnectDelay == null;
-    if (stableConnected || !_connectedBannerDismissed) {
-      return;
-    }
-    setState(() => _connectedBannerDismissed = false);
   }
 
   void _rememberExistingAutoDownloadAttachments() {
@@ -472,15 +460,20 @@ class _ChatScreenState extends State<ChatScreen> {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                _ConnectionBanner(
-                                  controller: _controller,
-                                  network: _controller.network,
-                                  connectedBannerDismissed:
-                                      _connectedBannerDismissed,
-                                  onDismissConnectedBanner: () => setState(
-                                    () => _connectedBannerDismissed = true,
+                                // The connection banner belongs to the server
+                                // (status) window only; channel/query tabs stay
+                                // clean.
+                                if (_controller.activeTab.type ==
+                                    ChatTabType.server)
+                                  _ConnectionBanner(
+                                    controller: _controller,
+                                    network: _controller.network,
+                                    connectedBannerDismissed:
+                                        _connectedBannerDismissed,
+                                    onDismissConnectedBanner: () => setState(
+                                      () => _connectedBannerDismissed = true,
+                                    ),
                                   ),
-                                ),
                                 if (_messageSearchVisible)
                                   _InlineMessageSearchBar(
                                     controller: _messageSearchController,
@@ -4317,12 +4310,17 @@ class _ConnectionBanner extends StatelessWidget {
     final stableConnected =
         snapshot.phase == ConnectionPhase.connected && reconnectDelay == null;
 
-    if (stableConnected &&
-        (snapshot.message == null || connectedBannerDismissed)) {
+    // The user can dismiss the banner in any phase; once dismissed it stays
+    // hidden for the session so it doesn't reappear on every reconnect.
+    if (connectedBannerDismissed) {
+      return const SizedBox.shrink();
+    }
+    // Nothing useful to show when stably connected with no server message.
+    if (stableConnected && (snapshot.message ?? '').isEmpty) {
       return const SizedBox.shrink();
     }
 
-    final canDismiss = stableConnected && (snapshot.message ?? '').isNotEmpty;
+    const canDismiss = true;
 
     return Container(
       width: double.infinity,
