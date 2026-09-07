@@ -12,6 +12,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Build
 import android.os.IBinder
+import java.util.UUID
 
 class AndroidIrcxForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
@@ -84,6 +85,7 @@ class AndroidIrcxForegroundService : Service() {
             REQUEST_STOP,
             Intent(this, MainActivity::class.java)
                 .setAction(ACTION_DISCONNECT_ALL)
+                .putExtra(EXTRA_ACTION_TOKEN, actionToken(this))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             pendingIntentFlags(),
         )
@@ -165,6 +167,23 @@ class AndroidIrcxForegroundService : Service() {
         const val CHANNEL_MEDIA_TRANSFERS = "irc_media_transfers"
         const val CHANNEL_ERRORS = "irc_errors"
         const val ACTION_DISCONNECT_ALL = "com.androidircx.flutter.action.DISCONNECT_ALL"
+        const val EXTRA_ACTION_TOKEN = "com.androidircx.flutter.extra.ACTION_TOKEN"
+
+        private const val INTERNAL_PREFS = "androidircx_internal"
+        private const val ACTION_TOKEN_KEY = "notification_action_token"
+
+        // Stable app-private token proving a notification action came from our
+        // own PendingIntent rather than a third-party app spoofing the public
+        // ACTION_DISCONNECT_ALL. Stored in a MODE_PRIVATE prefs file (not
+        // readable by other apps) and never leaked outside the PendingIntent.
+        fun actionToken(context: Context): String {
+            val prefs = context.applicationContext
+                .getSharedPreferences(INTERNAL_PREFS, Context.MODE_PRIVATE)
+            prefs.getString(ACTION_TOKEN_KEY, null)?.let { return it }
+            val token = UUID.randomUUID().toString()
+            prefs.edit().putString(ACTION_TOKEN_KEY, token).apply()
+            return token
+        }
 
         private const val ACTION_STOP = "com.androidircx.flutter.action.STOP_FOREGROUND"
         private const val ACTION_UPDATE = "com.androidircx.flutter.action.UPDATE_FOREGROUND"

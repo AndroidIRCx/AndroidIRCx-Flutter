@@ -10,8 +10,9 @@ import 'package:path_provider/path_provider.dart';
 /// Opens the on-device history database (native sqlite via `sqlite3_flutter_libs`).
 ///
 /// Message bodies are encrypted at the application layer via
-/// [AesGcmHistoryPayloadCodec]; the sqlite file itself only holds ciphertext for
-/// content plus non-sensitive metadata columns.
+/// [AesGcmHistoryPayloadCodec]. The sqlite file itself is NOT encrypted: only
+/// the payload column holds ciphertext, while metadata columns (network, tab/
+/// channel name, timestamp) are stored in cleartext.
 Future<HistoryDatabase> openHistoryDatabase() async {
   final directory = await getApplicationSupportDirectory();
   final file = File(p.join(directory.path, 'history.db'));

@@ -56,7 +56,8 @@ class AndroidIrcxApp extends StatefulWidget {
   State<AndroidIrcxApp> createState() => _AndroidIrcxAppState();
 }
 
-class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
+class _AndroidIrcxAppState extends State<AndroidIrcxApp>
+    with WidgetsBindingObserver {
   late final AppSettingsController _settingsController;
   late final MonetizationController _monetizationController;
   late final RewardedAdService _rewardedAdService;
@@ -72,6 +73,7 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _settingsController = AppSettingsController(
       repository: widget.settingsRepository,
     );
@@ -126,7 +128,22 @@ class _AndroidIrcxAppState extends State<AndroidIrcxApp> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // FLAG_SECURE binds to the current Activity window; an Activity recreation
+    // resets it to non-secure. Re-assert on resume so screenshot protection
+    // can't silently lapse.
+    if (state == AppLifecycleState.resumed && !_settingsController.isLoading) {
+      unawaited(
+        const ScreenSecurity().setSecure(
+          _settingsController.settings.screenshotProtection,
+        ),
+      );
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _settingsController.removeListener(_applySettingsSideEffects);
     _settingsController.dispose();
     if (_ownsPurchaseService) {

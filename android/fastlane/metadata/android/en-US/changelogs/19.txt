@@ -1,0 +1,7 @@
+What's new in v1.0.15:
+- New adaptive app icon that fills the launcher cleanly, like other apps.
+- Battery optimization shortcut in Settings now opens correctly on Android 12+.
+- Fixed the DCC "send file" picker failing to open on newer Android.
+- Hardened notification actions and screenshot protection.
+- Banner ads now respect your privacy-consent choice.
+- Dependency updates and stability fixes.

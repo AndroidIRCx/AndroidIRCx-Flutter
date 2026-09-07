@@ -15,8 +15,8 @@ abstract class HistoryUnlockAuthenticator {
 /// A [HistoryUnlockAuthenticator] that never prompts and always allows access.
 ///
 /// Only for platforms/builds without a biometric/credential gate configured;
-/// production Android must use the real biometric+PIN implementation so a stolen
-/// database cannot be opened.
+/// production Android must use the real biometric+PIN implementation so message
+/// bodies cannot be decrypted without authenticating.
 class AllowAllHistoryUnlockAuthenticator implements HistoryUnlockAuthenticator {
   const AllowAllHistoryUnlockAuthenticator();
 
@@ -24,12 +24,19 @@ class AllowAllHistoryUnlockAuthenticator implements HistoryUnlockAuthenticator {
   Future<bool> authenticate({required String reason}) async => true;
 }
 
-/// Owns the lifecycle of the SQLCipher database key.
+/// Owns the lifecycle of the history message-payload encryption key.
 ///
 /// The key is a random 256-bit value persisted in [SecretStorage] (Android
-/// Keystore-backed at rest). It is only ever returned after the user passes the
-/// biometric/PIN [HistoryUnlockAuthenticator], so extracting the database file
-/// alone — or having it without authenticating — does not reveal chat history.
+/// Keystore-backed at rest) and used for app-layer AES-256-GCM encryption of
+/// message bodies. It is only released after the user passes the biometric/PIN
+/// [HistoryUnlockAuthenticator].
+///
+/// Scope of protection (do not overstate): the sqlite file itself is NOT
+/// encrypted (SQLCipher is not used) — message *bodies* are ciphertext, but
+/// metadata columns (network, tab/channel name, timestamp) remain cleartext,
+/// and the key lives in secure storage rather than being hardware-bound to the
+/// authentication. So the gate protects message contents, not the conversation
+/// metadata graph, and not against a rooted device with the store unlocked.
 class HistoryEncryptionKeyManager {
   HistoryEncryptionKeyManager({
     required SecretStorage storage,

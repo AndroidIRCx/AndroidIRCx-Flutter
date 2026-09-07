@@ -9,6 +9,7 @@ import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 typedef BannerAdLoader = Future<void> Function(BannerAd ad);
 typedef MobileAdsInitializer = Future<void> Function();
+typedef CanRequestAdsCheck = Future<bool> Function();
 
 class MonetizationBanner extends StatefulWidget {
   const MonetizationBanner({
@@ -19,6 +20,7 @@ class MonetizationBanner extends StatefulWidget {
     this.mobileAdsRuntimeSupported,
     this.initializeMobileAds,
     this.loadBannerAd,
+    this.canRequestAds,
   });
 
   final MonetizationController controller;
@@ -30,6 +32,8 @@ class MonetizationBanner extends StatefulWidget {
   final MobileAdsInitializer? initializeMobileAds;
   @visibleForTesting
   final BannerAdLoader? loadBannerAd;
+  @visibleForTesting
+  final CanRequestAdsCheck? canRequestAds;
 
   @override
   State<MonetizationBanner> createState() => _MonetizationBannerState();
@@ -52,6 +56,22 @@ class _MonetizationBannerState extends State<MonetizationBanner> {
     onboardingCompleted: widget.onboardingCompleted,
     mobileAdsRuntimeSupported: _mobileAdsRuntimeSupported,
   );
+
+  /// Whether UMP consent currently permits ad requests. For EEA/UK users this
+  /// is false until they accept the consent form, so the banner must not fire a
+  /// request before then (AdMob/UMP policy). Non-consent regions report true.
+  Future<bool> _canRequestAds() async {
+    final check = widget.canRequestAds;
+    if (check != null) {
+      return check();
+    }
+    try {
+      return await ConsentInformation.instance.canRequestAds();
+    } catch (_) {
+      // If the consent state can't be read, do not request ads.
+      return false;
+    }
+  }
 
   @override
   void initState() {
@@ -153,6 +173,21 @@ class _MonetizationBannerState extends State<MonetizationBanner> {
           _loading = false;
         }
         _disposeAd(ad);
+        return;
+      }
+      if (!await _canRequestAds()) {
+        // Consent does not (yet) permit ad requests; drop this attempt and
+        // retry so the banner appears once consent is granted.
+        if (identical(_bannerAd, ad)) {
+          _bannerAd = null;
+          _loaded = false;
+          _loading = false;
+        }
+        _disposeAd(ad);
+        if (mounted) {
+          setState(() {});
+        }
+        _scheduleRetry();
         return;
       }
       await (widget.loadBannerAd ?? (ad) => ad.load()).call(ad);

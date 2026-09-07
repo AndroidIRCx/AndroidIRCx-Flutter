@@ -76,7 +76,8 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends State<SettingsScreen>
+    with WidgetsBindingObserver {
   final _dccDownloadDirectoryController = TextEditingController();
   final _mediaDownloadDirectoryController = TextEditingController();
   final _customThemeController = TextEditingController();
@@ -99,6 +100,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _repository = widget.repository ?? SharedPrefsSettingsRepository();
     _umpConsentService = widget.umpConsentService ?? UmpConsentService();
     unawaited(
@@ -131,7 +133,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Returning from the system battery-optimization list (or any settings
+    // page) may have changed the exemption; reconcile the displayed status.
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshPermissionStatuses());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _settingsController?.removeListener(_syncFromController);
     _monetizationController?.removeListener(_handleMonetizationChanged);
     _dccDownloadDirectoryController.dispose();
@@ -1258,17 +1270,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _requestBatteryExemption() async {
-    final result = await _permissions.requestIgnoreBatteryOptimizations();
-    if (!mounted) {
+    // Play-safe: open the system battery-optimization list rather than the
+    // restricted REQUEST_IGNORE_BATTERY_OPTIMIZATIONS dialog. The exemption
+    // status is reconciled on resume via didChangeAppLifecycleState. Fall back
+    // to the app-settings page if the list could not be opened.
+    final opened = await _permissions.openBatteryOptimizationSettings();
+    if (!mounted || opened) {
       return;
     }
-    if (result == AppPermissionResult.granted) {
-      setState(() => _hasBatteryExemption = true);
-      return;
-    }
-    if (result == AppPermissionResult.permanentlyDenied) {
-      await _permissions.openSettingsPage();
-    }
+    await _permissions.openSettingsPage();
   }
 
   Future<void> _toggleNotifications(bool value) async {

@@ -9,11 +9,17 @@ class StorePurchaseService extends ChangeNotifier {
   StorePurchaseService({
     required MonetizationController monetizationController,
     InAppPurchase? store,
+    bool? storeRuntimeSupported,
   }) : _monetizationController = monetizationController,
-       _store = store;
+       _store = store,
+       _storeRuntimeSupported = storeRuntimeSupported;
 
   final MonetizationController _monetizationController;
   final InAppPurchase? _store;
+  final bool? _storeRuntimeSupported;
+
+  bool get _runtimeSupported =>
+      _storeRuntimeSupported ?? MonetizationConfig.storeRuntimeSupported;
   StreamSubscription<List<PurchaseDetails>>? _purchaseSubscription;
 
   bool _initialized = false;
@@ -42,7 +48,7 @@ class StorePurchaseService extends ChangeNotifier {
     await _monetizationController.initialize();
     _initialized = true;
 
-    if (!MonetizationConfig.storeRuntimeSupported) {
+    if (!_runtimeSupported) {
       _storeAvailable = false;
       _statusMessage = 'Purchases are available only in mobile store builds.';
       notifyListeners();

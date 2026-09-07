@@ -24,8 +24,7 @@ class _FakePermissions implements AppPermissions {
   Future<bool> hasIgnoreBatteryOptimizations() async => false;
 
   @override
-  Future<AppPermissionResult> requestIgnoreBatteryOptimizations() async =>
-      AppPermissionResult.granted;
+  Future<bool> openBatteryOptimizationSettings() async => true;
 
   @override
   Future<void> openSettingsPage() async {}

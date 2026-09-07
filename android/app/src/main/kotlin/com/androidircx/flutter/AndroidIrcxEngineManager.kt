@@ -3,9 +3,11 @@ package com.androidircx.flutter
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import io.flutter.embedding.engine.FlutterEngine
@@ -91,8 +93,14 @@ object AndroidIrcxEngineManager {
         }
     }
 
-    fun captureNotificationAction(intent: Intent?) {
-        if (intent?.action == AndroidIrcxForegroundService.ACTION_DISCONNECT_ALL) {
+    fun captureNotificationAction(context: Context, intent: Intent?) {
+        // Honor the action only when it carries our app-private token, so a
+        // third-party app cannot spoof ACTION_DISCONNECT_ALL to disconnect the
+        // user's networks (the exported MainActivity would otherwise trust it).
+        if (intent?.action == AndroidIrcxForegroundService.ACTION_DISCONNECT_ALL &&
+            intent.getStringExtra(AndroidIrcxForegroundService.EXTRA_ACTION_TOKEN) ==
+                AndroidIrcxForegroundService.actionToken(context)
+        ) {
             pendingNotificationAction = "disconnectAll"
         }
     }
@@ -213,13 +221,30 @@ object AndroidIrcxEngineManager {
     }
 
     private fun openBatteryOptimizationSettings(context: Context): Boolean {
-        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (intent.resolveActivity(context.packageManager) == null) {
-            return false
+        // Android 11+ package-visibility rules make resolveActivity() return null
+        // for system settings even when the screen exists, so start the intent
+        // directly and fall back to the app-details screen on failure.
+        val batteryListIntent =
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (startActivitySafely(context, batteryListIntent)) {
+            return true
         }
-        context.startActivity(intent)
-        return true
+        val appDetailsIntent =
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return startActivitySafely(context, appDetailsIntent)
+    }
+
+    private fun startActivitySafely(context: Context, intent: Intent): Boolean {
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (error: ActivityNotFoundException) {
+            false
+        }
     }
 
     private fun Map<*, *>.intValue(key: String): Int {

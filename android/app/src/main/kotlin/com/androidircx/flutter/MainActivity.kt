@@ -1,6 +1,7 @@
 package com.androidircx.flutter
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -97,7 +98,7 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private fun captureNotificationAction(intent: Intent?) {
-        AndroidIrcxEngineManager.captureNotificationAction(intent)
+        AndroidIrcxEngineManager.captureNotificationAction(this, intent)
     }
 
     private fun openDccFilePicker(result: MethodChannel.Result) {
@@ -109,13 +110,17 @@ class MainActivity : FlutterFragmentActivity() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE)
             .setType("*/*")
-        if (intent.resolveActivity(packageManager) == null) {
-            result.success(null)
-            return
-        }
-
+        // Android 11+ package-visibility can make resolveActivity() return null
+        // even when the system document picker exists; start the intent directly
+        // and treat a genuinely missing picker as a cancellation (mirrors
+        // AndroidIrcxEngineManager.openBatteryOptimizationSettings).
         pendingDccFilePickerResult = result
-        startActivityForResult(intent, DCC_FILE_PICKER_REQUEST_CODE)
+        try {
+            startActivityForResult(intent, DCC_FILE_PICKER_REQUEST_CODE)
+        } catch (error: ActivityNotFoundException) {
+            pendingDccFilePickerResult = null
+            result.success(null)
+        }
     }
 
     private fun copyDccSendFileToCache(uri: Uri): String {

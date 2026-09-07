@@ -44,9 +44,12 @@ class FirebaseService {
     final priorFlutterHandler = FlutterError.onError;
     FlutterError.onError = (details) {
       priorFlutterHandler?.call(details);
+      // Framework errors are non-fatal: recording them as fatal would wrongly
+      // deflate the crash-free-users metric. Truly uncaught async errors are
+      // still reported as fatal via PlatformDispatcher.onError below.
       // No-op unless Crashlytics collection is enabled (consent given).
       unawaited(
-        FirebaseCrashlytics.instance.recordFlutterError(details, fatal: true),
+        FirebaseCrashlytics.instance.recordFlutterError(details, fatal: false),
       );
     };
 

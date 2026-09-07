@@ -24,6 +24,7 @@ void main() {
     MonetizationController controller, {
     required bool onboardingCompleted,
     BannerAdLoader? loadBannerAd,
+    CanRequestAdsCheck? canRequestAds,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -33,6 +34,7 @@ void main() {
           mobileAdsRuntimeSupported: true,
           initializeMobileAds: () async {},
           loadBannerAd: loadBannerAd ?? (_) async {},
+          canRequestAds: canRequestAds ?? () async => true,
           child: const SizedBox.expand(key: _bodyKey),
         ),
       ),
@@ -86,6 +88,30 @@ void main() {
 
     expect(find.byKey(_slotKey), findsNothing);
     expect(tester.getTopLeft(find.byKey(_bodyKey)).dy, 0);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  });
+
+  testWidgets('does not request an ad until UMP consent allows it', (
+    tester,
+  ) async {
+    final controller = await initializedController();
+    var loadCalls = 0;
+
+    await pumpBanner(
+      tester,
+      controller,
+      onboardingCompleted: true,
+      loadBannerAd: (_) async => loadCalls++,
+      canRequestAds: () async => false,
+    );
+    await tester.pump();
+
+    // The slot is still reserved for a free user, but no ad request is fired
+    // while consent disallows it.
+    expect(loadCalls, 0);
+    expect(find.byKey(_slotKey), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     controller.dispose();

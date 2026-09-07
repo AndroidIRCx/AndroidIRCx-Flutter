@@ -1,0 +1,4 @@
+# Play service-account key. Kept in the gitignored secrets/ folder so it is
+# never committed. Path is relative to this android/ directory.
+json_key_file("../../secrets/play-service-account.json")
+package_name("com.androidircx.flutter")

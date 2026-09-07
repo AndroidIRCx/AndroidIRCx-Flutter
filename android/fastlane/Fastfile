@@ -1,0 +1,42 @@
+default_platform(:android)
+
+# Path to the release AAB Flutter produces, relative to this android/ dir.
+AAB_PATH = "../build/app/outputs/bundle/release/app-release.aab"
+
+platform :android do
+  desc "Build the release AAB with Flutter"
+  lane :build do
+    sh("cd .. && flutter build appbundle --release")
+  end
+
+  desc "Upload the already-built release AAB to the Play internal track"
+  lane :internal do
+    upload_to_play_store(
+      track: "internal",
+      aab: AAB_PATH,
+      skip_upload_apk: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      # Release notes come from fastlane/metadata/.../changelogs/<versionCode>.txt
+      skip_upload_metadata: false,
+    )
+  end
+
+  desc "Build then upload to the Play internal track"
+  lane :build_internal do
+    build
+    internal
+  end
+
+  desc "Promote the current build to production (staged rollout starts in Play Console)"
+  lane :production do
+    upload_to_play_store(
+      track: "production",
+      aab: AAB_PATH,
+      skip_upload_apk: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_metadata: false,
+    )
+  end
+end
