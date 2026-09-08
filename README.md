@@ -18,6 +18,29 @@ existing React Native application.
 [![Last Commit](https://img.shields.io/github/last-commit/AndroidIRCx/AndroidIRCx-Flutter/main)](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/commits/main)
 
 
+## ⬇️ Download
+
+<a href="https://play.google.com/store/apps/details?id=com.androidircx.flutter">
+  <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_us_badge_web_generic.png" alt="Get it on Google Play" height="64">
+</a>
+
+Prefer a direct build? Every [release](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases)
+ships the packages below. The links always point at the **latest** release:
+
+| Platform | Format | Architecture | Download |
+|----------|--------|--------------|----------|
+| 🤖 Android | Google Play | universal | [Play Store](https://play.google.com/store/apps/details?id=com.androidircx.flutter) |
+| 🤖 Android | APK | universal (arm64-v8a, armeabi-v7a, x86_64) | [.apk](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases/latest/download/AndroidIRCx-Flutter-android.apk) |
+| 🪟 Windows | Installer (setup) | x64 | [.exe](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases/latest/download/AndroidIRCx-Flutter-windows-setup.exe) |
+| 🪟 Windows | Portable | x64 | [.zip](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases/latest/download/AndroidIRCx-Flutter-windows-portable.zip) |
+| 🐧 Linux | AppImage (runs on any distro) | x86_64 | [.AppImage](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases/latest/download/AndroidIRCx-Flutter-linux-x86_64.AppImage) |
+| 🐧 Linux | Debian / Ubuntu | amd64 | [.deb](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases/latest/download/AndroidIRCx-Flutter-linux-amd64.deb) |
+| 🐧 Linux | Portable | x86_64 | [.tar.gz](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases/latest/download/AndroidIRCx-Flutter-linux-x86_64.tar.gz) |
+
+> After downloading the Linux **AppImage**, make it executable and run it:
+> `chmod +x AndroidIRCx-Flutter-linux-x86_64.AppImage && ./AndroidIRCx-Flutter-linux-x86_64.AppImage`
+
+
 ## Current Status
 
 This repository is an active Flutter rewrite in release hardening.
