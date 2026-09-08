@@ -20,9 +20,7 @@ existing React Native application.
 
 ## ⬇️ Download
 
-<a href="https://play.google.com/store/apps/details?id=com.androidircx.flutter">
-  <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_us_badge_web_generic.png" alt="Get it on Google Play" height="64">
-</a>
+[![Get it on Google Play](https://img.shields.io/badge/Google_Play-Download-414141?style=for-the-badge&logo=googleplay&logoColor=white)](https://play.google.com/store/apps/details?id=com.androidircx.flutter)
 
 Prefer a direct build? Every [release](https://github.com/AndroidIRCx/AndroidIRCx-Flutter/releases)
 ships the packages below. The links always point at the **latest** release:
