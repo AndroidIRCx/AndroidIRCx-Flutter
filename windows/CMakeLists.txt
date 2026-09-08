@@ -32,6 +32,14 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# Newer MSVC toolchains (VS 2022 17.x / VS 18) treat the legacy
+# <experimental/coroutine> header as a hard error. C++/WinRT pulls that header
+# in when a target compiles as C++17 (e.g. local_auth_windows,
+# permission_handler_windows). Silence it globally so plugin targets build.
+# This propagates to all subdirectories added after this point, including the
+# plugins pulled in via flutter/generated_plugins.cmake.
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by

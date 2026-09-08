@@ -1,7 +1,15 @@
 name: Release Windows
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach assets to (e.g. v1.0.16). Leave empty to derive from pubspec.yaml."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -32,27 +40,58 @@ jobs:
       - name: Build Windows release
         run: flutter build windows --release
 
-      - name: Package Windows release
+      - name: Resolve version and release tag
+        id: meta
+        shell: pwsh
+        run: |
+          $verLine = (Get-Content pubspec.yaml | Select-String '^version:' | Select-Object -First 1).Line
+          $version = ($verLine -replace 'version:\s*', '').Split('+')[0].Trim()
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $tag = $env:GITHUB_REF_NAME
+          } elseif (-not [string]::IsNullOrWhiteSpace('${{ github.event.inputs.tag }}')) {
+            $tag = '${{ github.event.inputs.tag }}'
+          } else {
+            $tag = "v$version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version  Tag: $tag"
+
+      - name: Package portable ZIP
         shell: pwsh
         run: |
           $artifactDir = "release-assets"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
           $source = "build/windows/x64/runner/Release"
-          $zipPath = Join-Path $artifactDir "AndroidIRCx-Flutter-windows.zip"
-          if (Test-Path $zipPath) {
-            Remove-Item $zipPath -Force
-          }
+          $zipPath = Join-Path $artifactDir "AndroidIRCx-Flutter-windows-portable.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
           Compress-Archive -Path "$source/*" -DestinationPath $zipPath
 
-      - name: Upload workflow artifact
+      - name: Build setup installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          $source = (Resolve-Path "build/windows/x64/runner/Release").Path
+          $outDir = (Resolve-Path "release-assets").Path
+          & $iscc "/DAppVersion=${{ steps.meta.outputs.version }}" "/DSourceDir=$source" "/O$outDir" "windows/installer/androidircx.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed with exit code $LASTEXITCODE" }
+
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-release-zip
-          path: release-assets/AndroidIRCx-Flutter-windows.zip
+          name: windows-release
+          path: |
+            release-assets/AndroidIRCx-Flutter-windows-portable.zip
+            release-assets/AndroidIRCx-Flutter-windows-setup.exe
 
-      - name: Attach Windows package to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Attach Windows packages to GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          files: release-assets/AndroidIRCx-Flutter-windows.zip
+          tag_name: ${{ steps.meta.outputs.tag }}
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/AndroidIRCx-Flutter-windows-portable.zip
+            release-assets/AndroidIRCx-Flutter-windows-setup.exe
