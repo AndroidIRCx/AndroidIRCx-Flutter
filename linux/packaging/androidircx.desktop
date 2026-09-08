@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AndroidIRCx
+GenericName=IRC Client
+Comment=A powerful and feature-rich IRC client
+Exec=androidircx
+Icon=com.androidircx.flutter
+Terminal=false
+Categories=Network;InstantMessaging;IRCClient;
+Keywords=IRC;Chat;Messaging;
