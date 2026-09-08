@@ -1,4 +1,5 @@
 # Play service-account key. Kept in the gitignored secrets/ folder so it is
-# never committed. Path is relative to this android/ directory.
-json_key_file("../../secrets/play-service-account.json")
+# never committed. Path is relative to the android/ directory that fastlane is
+# run from (android/../secrets == the repo's secrets/ folder).
+json_key_file("../secrets/play-service-account.json")
 package_name("com.androidircx.flutter")
