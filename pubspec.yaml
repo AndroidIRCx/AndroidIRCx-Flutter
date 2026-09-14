@@ -39,7 +39,7 @@ dependencies:
   shared_preferences: ^2.5.5
   web_socket_channel: ^3.0.3
   url_launcher: ^6.3.2
-  flutter_secure_storage: 11.0.0
+  flutter_secure_storage: 11.1.1
   drift: ^2.34.3
   path_provider: ^2.1.6
   path: ^1.9.1
